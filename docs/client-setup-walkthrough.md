@@ -70,9 +70,8 @@ its webhook stage.
 ### 2026-10-02: first rehearsal (ADR-0006)
 
 Empty Cloudflare account → working Sync, webhook and Correction path, in the
-one set of demo accounts. It rebuilt the `self` deployment in place. The live
-Worker today is that deployment, deployed from the `EH_Webhook-rehearsal`
-folder. Its findings became #55, #57, #60–#70.
+one set of demo accounts. It rebuilt the `self` deployment in place, from a
+separate `EH_Webhook-rehearsal` folder (the project's name until ADR-0008). Its findings became #55, #57, #60–#70.
 
 ### 2026-10-03: re-run, stages 1–10
 
