@@ -33,14 +33,14 @@ describe("GitHubRestIssues", () => {
       expect(url).toContain("/repos/acme/repo/issues?state=open&labels=eh-relay");
       return {
         body: [
-          { number: 2, title: "[eh-webhook] system alert — acme / user 5", state: "open", body: "", html_url: "u2" },
+          { number: 2, title: "[eh-payroll-sync] system alert — acme / user 5", state: "open", body: "", html_url: "u2" },
           { number: 1, title: "something else", state: "open", body: "", html_url: "u1" },
         ],
       };
     });
-    const hit = await new GitHubRestIssues(cfg(fn)).findOpenByTitle("[eh-webhook] system alert — acme / user 5");
+    const hit = await new GitHubRestIssues(cfg(fn)).findOpenByTitle("[eh-payroll-sync] system alert — acme / user 5");
     expect(hit?.number).toBe(2);
-    const miss = await new GitHubRestIssues(cfg(fn)).findOpenByTitle("[eh-webhook] system alert — acme / user 9");
+    const miss = await new GitHubRestIssues(cfg(fn)).findOpenByTitle("[eh-payroll-sync] system alert — acme / user 9");
     expect(miss).toBeNull();
     expect(calls).toHaveLength(2);
   });

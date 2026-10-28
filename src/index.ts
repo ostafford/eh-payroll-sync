@@ -20,7 +20,7 @@ import {
 import { redact } from "./redact.js";
 
 /** Dead-letter queue name (see `dead_letter_queue` in wrangler.jsonc). */
-const DLQ_NAME = "eh-webhook-dlq";
+const DLQ_NAME = "eh-payroll-sync-dlq";
 
 const app = new Hono<{ Bindings: Env }>();
 

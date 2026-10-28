@@ -35,7 +35,7 @@ export default {
     const { pathname } = new URL(req.url);
 
     if (req.method === "GET" && pathname === "/health") {
-      return json(200, { ok: true, service: "eh-webhook-integrator-relay" });
+      return json(200, { ok: true, service: "eh-payroll-sync-relay" });
     }
     if (req.method !== "POST") {
       return json(405, { error: "POST only" });

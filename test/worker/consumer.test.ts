@@ -15,7 +15,7 @@ import { syntheticUser } from "../fixtures/connecteam-user.js";
 
 const fieldMap = loadFieldMap("_example");
 
-const DLQ = "eh-webhook-dlq";
+const DLQ = "eh-payroll-sync-dlq";
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -254,7 +254,7 @@ describe("queue consumer (in workerd, real D1)", () => {
   it("acks a good message and retries an outage through a real MessageBatch", async () => {
     // First message syncs fine; craft a second world where EH is down.
     const good = world();
-    const batch = createMessageBatch("eh-webhook-sync", [qMsg(job({ ctUserId: 17760356 }), "ok-1")]);
+    const batch = createMessageBatch("eh-payroll-sync-queue", [qMsg(job({ ctUserId: 17760356 }), "ok-1")]);
     const ctx = createExecutionContext();
     await dispatchBatch(batch, good.deps, DLQ);
     const res = await getQueueResult(batch, ctx);
@@ -263,7 +263,7 @@ describe("queue consumer (in workerd, real D1)", () => {
 
   it("retries an outage with a backoff delay through a real MessageBatch (issue #90)", async () => {
     const w = world({ ctDown: true });
-    const batch = createMessageBatch("eh-webhook-sync", [qMsg(job(), "down-1", 4)]);
+    const batch = createMessageBatch("eh-payroll-sync-queue", [qMsg(job(), "down-1", 4)]);
     const ctx = createExecutionContext();
     // The pool's test MessageBatch drops retry() options from its result
     // (vitest-pool-workers 0.22), so read the delay off the call itself.

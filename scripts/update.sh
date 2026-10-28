@@ -9,8 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-grep -q '"name": "eh-webhook"' package.json 2>/dev/null \
-  || { echo "run this from the EH_Webhook repo root" >&2; exit 1; }
+grep -q '"name": "eh-payroll-sync"' package.json 2>/dev/null \
+  || { echo "run this from the eh-payroll-sync repo root" >&2; exit 1; }
 
 echo "▸ pulling latest code"
 git pull --ff-only
@@ -28,7 +28,7 @@ echo "▸ building the deploy config and checking it against the live Worker"
 npm run --silent deploy:config -- --check-live
 
 echo "▸ applying new D1 migrations (remote)"
-npx --yes wrangler d1 migrations apply eh-webhook --remote --config wrangler.deploy.json
+npx --yes wrangler d1 migrations apply eh-payroll-sync --remote --config wrangler.deploy.json
 
 echo "▸ deploying"
 deploy_out=$(npx --yes wrangler deploy --config wrangler.deploy.json 2>&1)

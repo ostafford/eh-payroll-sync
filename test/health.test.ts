@@ -26,7 +26,7 @@ describe("buildHealth", () => {
     const h = await buildHealth(baseEnv());
     expect(h).toMatchObject({
       ok: true,
-      service: "eh-webhook",
+      service: "eh-payroll-sync",
       d1: "ok",
       fieldMap: "ok",
       config: { fieldMapClient: "_example", businessConfigured: false },

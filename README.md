@@ -1,4 +1,4 @@
-# EH_Webhook
+# eh-payroll-sync
 
 Syncs employee details entered in **Connecteam** into **Employment Hero Payroll**,
 so staff enter their information once instead of twice.

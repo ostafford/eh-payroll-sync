@@ -1,4 +1,4 @@
-# EH_Webhook
+# eh-payroll-sync
 
 A reusable integration **template** that syncs employee-entered details (personal, contact, and payroll-sensitive: TFN, bank, super) from Connecteam into Employment Hero Payroll, so staff enter their details once (in Connecteam) rather than twice. Deployed once per client — each client gets an isolated Cloudflare Worker, D1, domain, and credential set; all client-specific values (IDs, field map) are external config, never code.
 

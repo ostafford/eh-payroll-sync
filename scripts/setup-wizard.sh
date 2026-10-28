@@ -388,11 +388,11 @@ fi
 for _c in node npm npx git curl; do
   command -v "$_c" >/dev/null 2>&1 || { printf 'missing required tool: %s\n' "$_c" >&2; exit 1; }
 done
-grep -q '"name": "eh-webhook"' package.json 2>/dev/null \
-  || { printf 'run this from the EH_Webhook repo root\n' >&2; exit 1; }
+grep -q '"name": "eh-payroll-sync"' package.json 2>/dev/null \
+  || { printf 'run this from the eh-payroll-sync repo root\n' >&2; exit 1; }
 [[ -d node_modules ]] || { printf 'installing dependencies...\n'; npm install; }
 
-banner "EH_Webhook - client deployment"
+banner "eh-payroll-sync - client deployment"
 
 # ─────────────────────────────────────────────────────────────────────────
 stage "Cloudflare account"
@@ -611,7 +611,7 @@ printf '\n'
 
 # The database. "Already exists" means this is a re-run on a live integration.
 db_fresh=""
-if wr_quiet d1 create eh-webhook; then
+if wr_quiet d1 create eh-payroll-sync; then
   db_fresh=1
   ok "Database created."
 elif [[ "$WR_OUT" == *"already exists"* ]]; then
@@ -621,7 +621,7 @@ else
 fi
 db_id=$(printf '%s' "$WR_OUT" | grep -oiE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1 || true)
 if [[ -z "$db_id" ]] && wr_quiet d1 list --json; then
-  db_id=$(printf '%s' "$WR_OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s.slice(s.indexOf("[")));const m=d.find(x=>x.name==="eh-webhook");console.log(m?m.uuid||m.database_id||"":"")}catch(e){console.log("")}})')
+  db_id=$(printf '%s' "$WR_OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const d=JSON.parse(s.slice(s.indexOf("[")));const m=d.find(x=>x.name==="eh-payroll-sync");console.log(m?m.uuid||m.database_id||"":"")}catch(e){console.log("")}})')
 fi
 if [[ -n "$db_id" ]]; then
   write_env D1_DATABASE_ID "$db_id" >/dev/null
@@ -641,7 +641,7 @@ fi
 # them pending, a live one usually none. wr_quiet answers wrangler's
 # "may not be available during the migration, continue?" with its fallback,
 # yes - the only sensible answer for a brand-new, empty database.
-wr_quiet d1 migrations list eh-webhook --remote --config wrangler.deploy.json || { fail "Couldn't read the database's setup steps:"; show_wr_tail; exit 1; }
+wr_quiet d1 migrations list eh-payroll-sync --remote --config wrangler.deploy.json || { fail "Couldn't read the database's setup steps:"; show_wr_tail; exit 1; }
 pending=$(printf '%s\n' "$WR_OUT" | { grep -oE '[0-9]{4}_[A-Za-z0-9_]+\.sql' || true; } | sort -u | wc -l | tr -d ' ')
 if [[ "$WR_OUT" == *"No migrations to apply"* || "$pending" -eq 0 ]]; then
   ok "Database is up to date."
@@ -652,7 +652,7 @@ else
     warn "pause syncing for a few seconds."
     confirm "Update the storage now" || { warn "Stopped here - the new version needs this update before it can be deployed."; exit 1; }
   fi
-  if wr_quiet d1 migrations apply eh-webhook --remote --config wrangler.deploy.json; then
+  if wr_quiet d1 migrations apply eh-payroll-sync --remote --config wrangler.deploy.json; then
     ok "Database set up ($pending step(s))."
   else
     fail "Couldn't set up the database:"; show_wr_tail; exit 1
@@ -660,9 +660,9 @@ else
 fi
 
 # The queues. "Already exists" is fine; then confirm both are there.
-wr_quiet queues create eh-webhook-sync || true
-wr_quiet queues create eh-webhook-dlq || true
-if wr_quiet queues list && [[ "$WR_OUT" =~ [[:space:]]eh-webhook-sync[[:space:]] && "$WR_OUT" =~ [[:space:]]eh-webhook-dlq[[:space:]] ]]; then
+wr_quiet queues create eh-payroll-sync-queue || true
+wr_quiet queues create eh-payroll-sync-dlq || true
+if wr_quiet queues list && [[ "$WR_OUT" =~ [[:space:]]eh-payroll-sync-queue[[:space:]] && "$WR_OUT" =~ [[:space:]]eh-payroll-sync-dlq[[:space:]] ]]; then
   ok "Queues ready (the in-tray and the problem tray)."
 else
   fail "Couldn't confirm both queues exist:"; show_wr_tail; exit 1

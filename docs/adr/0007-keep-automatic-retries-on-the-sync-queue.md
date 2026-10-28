@@ -6,7 +6,7 @@ accepted
 
 ## Context
 
-`wrangler.jsonc` gives the `eh-webhook-sync` consumer `max_retries: 5`, with a
+`wrangler.jsonc` gives the `eh-payroll-sync-queue` consumer `max_retries: 5`, with a
 dead-letter queue that raises a **System alert**. The integration playbook
 (`../CLAUDE.md`, "Never auto-retry a non-idempotent write") says a consumer that
 writes third-party data should use `max_retries: 0` and tell a human instead:
@@ -49,7 +49,7 @@ counter.
 
 ## Decision
 
-**Keep `max_retries: 5` on `eh-webhook-sync`.** This is a documented exception
+**Keep `max_retries: 5` on `eh-payroll-sync-queue`.** This is a documented exception
 to the playbook's "never auto-retry" rule. The rule exists to prevent
 duplicated third-party writes, and this consumer has none:
 

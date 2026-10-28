@@ -45,7 +45,7 @@ describe("integrator telemetry (in workerd, real D1)", () => {
   it("POSTs one system_alert to the relay per dead-letter, deduped by user", async () => {
     const run = async (id: string) => {
       const ctx = createExecutionContext();
-      await worker.queue(createMessageBatch("eh-webhook-dlq", [qMsg(dlqJob(500), id)]), env, ctx);
+      await worker.queue(createMessageBatch("eh-payroll-sync-dlq", [qMsg(dlqJob(500), id)]), env, ctx);
     };
 
     await run("d1");
@@ -60,7 +60,7 @@ describe("integrator telemetry (in workerd, real D1)", () => {
   it("sends nothing to the relay when INTEGRATOR_ALERT_URL is unset", async () => {
     delete (env as Record<string, unknown>).INTEGRATOR_ALERT_URL;
     const ctx = createExecutionContext();
-    await worker.queue(createMessageBatch("eh-webhook-dlq", [qMsg(dlqJob(501), "d3")]), env, ctx);
+    await worker.queue(createMessageBatch("eh-payroll-sync-dlq", [qMsg(dlqJob(501), "d3")]), env, ctx);
     expect(integratorPosts).toHaveLength(0);
   });
 });

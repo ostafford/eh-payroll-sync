@@ -81,8 +81,8 @@ few seconds and asks first.
 ## 1. Get the code
 
 ```bash
-git clone <this-repo> eh-webhook
-cd eh-webhook
+git clone <this-repo> eh-payroll-sync
+cd eh-payroll-sync
 npm install
 ```
 
@@ -284,17 +284,17 @@ npx wrangler login
 npx wrangler whoami          # confirm it's the right account
 
 # Provision (one D1 database, two queues)
-npx wrangler d1 create eh-webhook
+npx wrangler d1 create eh-payroll-sync
 #   → add the returned id to .dev.vars as  D1_DATABASE_ID=<id>
-npx wrangler queues create eh-webhook-sync
-npx wrangler queues create eh-webhook-dlq
+npx wrangler queues create eh-payroll-sync-queue
+npx wrangler queues create eh-payroll-sync-dlq
 
 # Vars - in .dev.vars (git-ignored), NOT in wrangler.jsonc:
 #   EH_BUSINESS_ID, CT_ONBOARDING_PACK_ID, CT_CUSTOM_PUBLISHER_ID,
 #   ADMIN_CONNECTEAM_CHANNEL_ID; optional STATUS_DIGEST_DAY (blank = Monday),
 #   INTEGRATOR_ALERT_URL, INTEGRATOR_CLIENT_ID. Then build the deploy config:
 npm run deploy:config -- --check-live
-npx wrangler d1 migrations apply eh-webhook --remote --config wrangler.deploy.json
+npx wrangler d1 migrations apply eh-payroll-sync --remote --config wrangler.deploy.json
 
 # Secrets
 npx wrangler secret put CT_API_KEY --config wrangler.deploy.json
@@ -637,7 +637,7 @@ deduplicated and does nothing).
 > meant to exist there.
 
 ### Replaying a dead-lettered job
-A message on `eh-webhook-dlq` has already raised a System alert. Before it got
+A message on `eh-payroll-sync-dlq` has already raised a System alert. Before it got
 there, the sync tried it 6 times over about 15.5 minutes (retries after 30 s,
 1 min, 2 min, 4 min, 8 min; ADR-0007). So the cause outlasted a short blip:
 check Employment Hero and Connecteam status, and the Worker logs for
@@ -686,7 +686,7 @@ this unaided.
 
 ## Tearing down / starting over
 
-> **Deleting the Worker alone is not a reset.** Deleting `eh-webhook` (in the
+> **Deleting the Worker alone is not a reset.** Deleting `eh-payroll-sync` (in the
 > dashboard or with `wrangler delete`) leaves its D1 database and both queues
 > behind. A wizard re-run then says "Database already exists - reusing it", and
 > the old `employee_map`, onboarding state and audit log carry over into what
@@ -703,7 +703,7 @@ Employment Hero accounts) is steps 1–7. **Removing for good** adds step 8.
    only, never employee values, but it's the only history of who synced when:
 
    ```bash
-   npm run deploy:config && npx wrangler d1 export eh-webhook --remote --output=eh-webhook-backup.sql --config wrangler.deploy.json
+   npm run deploy:config && npx wrangler d1 export eh-payroll-sync --remote --output=eh-payroll-sync-backup.sql --config wrangler.deploy.json
    ```
 
 2. **Delete the Connecteam webhook first**, so Connecteam stops posting to a
@@ -726,14 +726,14 @@ Employment Hero accounts) is steps 1–7. **Removing for good** adds step 8.
    and queues, 2026-10-04):
    - the Worker: "Cannot delete this Worker as it is a consumer for a Queue
      [code: 10064]"
-   - the dead-letter queue: "Cannot delete queue 'eh-webhook-dlq' that serves
+   - the dead-letter queue: "Cannot delete queue 'eh-payroll-sync-dlq' that serves
      as dead letter queue for consumers [code: 11005]"
 
    So detach it first:
 
    ```bash
-   npx wrangler queues consumer remove eh-webhook-sync eh-webhook
-   npx wrangler queues consumer remove eh-webhook-dlq eh-webhook
+   npx wrangler queues consumer remove eh-payroll-sync-queue eh-payroll-sync
+   npx wrangler queues consumer remove eh-payroll-sync-dlq eh-payroll-sync
    ```
 
    Until step 4, the cron can still add messages to the sync queue with
@@ -743,22 +743,22 @@ Employment Hero accounts) is steps 1–7. **Removing for good** adds step 8.
    `--dry-run` first shows what it would do:
 
    ```bash
-   npx wrangler delete eh-webhook --dry-run
-   npx wrangler delete eh-webhook
+   npx wrangler delete eh-payroll-sync --dry-run
+   npx wrangler delete eh-payroll-sync
    ```
 
 5. **Delete both queues:**
 
    ```bash
-   npx wrangler queues delete eh-webhook-sync
-   npx wrangler queues delete eh-webhook-dlq
+   npx wrangler queues delete eh-payroll-sync-queue
+   npx wrangler queues delete eh-payroll-sync-dlq
    ```
 
 6. **Delete the D1 database.** This is the step that makes it a real reset,
    and it **cannot be undone**:
 
    ```bash
-   npx wrangler d1 delete eh-webhook
+   npx wrangler d1 delete eh-payroll-sync
    ```
 
    A wizard re-run creates a fresh database and writes its id into

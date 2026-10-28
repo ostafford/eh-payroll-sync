@@ -6,7 +6,7 @@
 #    if the values they need are absent.
 
 # --- Cloudflare ---
-# This deployment's D1 database id (`npx wrangler d1 list`, the eh-webhook row).
+# This deployment's D1 database id (`npx wrangler d1 list`, the eh-payroll-sync row).
 D1_DATABASE_ID=
 
 # --- Employment Hero Payroll (issue #2) ---

@@ -39,7 +39,7 @@ export async function handleTelemetry(rawBody: unknown, deps: RelayDeps): Promis
 
 async function handleSystemAlert(t: SystemAlert, deps: RelayDeps): Promise<RelayResult> {
   const client = clientSlug(t.client);
-  const title = `[eh-webhook] system alert — ${client} / user ${t.ctUserId}`;
+  const title = `[eh-payroll-sync] system alert — ${client} / user ${t.ctUserId}`;
   const existing = await deps.gh.findOpenByTitle(title);
 
   if (existing) {
@@ -59,7 +59,7 @@ async function handleSystemAlert(t: SystemAlert, deps: RelayDeps): Promise<Relay
 
 async function handleHealth(t: HealthPush, deps: RelayDeps): Promise<RelayResult> {
   const client = clientSlug(t.client);
-  const title = `[eh-webhook] health — ${client}`;
+  const title = `[eh-payroll-sync] health — ${client}`;
   const existing = await deps.gh.findOpenByTitle(title);
 
   if (!t.ok) {

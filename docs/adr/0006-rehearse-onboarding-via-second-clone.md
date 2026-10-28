@@ -26,7 +26,7 @@ repository.
 
 Rehearse onboarding using a **second local clone of the same repo/remote** (no
 new GitHub repo, no long-lived branch), deployed as its own Cloudflare
-Worker/D1/queues (`eh-webhook-rehearsal`) against brand-new Connecteam and
+Worker/D1/queues (`eh-payroll-sync-rehearsal`) against brand-new Connecteam and
 Employment Hero accounts. That clone's `.dev.vars`, `wrangler.jsonc` IDs, and
 `clients/self/field-map.json` tuning stay local and uncommitted — mirroring
 the fill-locally-never-commit pattern `self`'s own deploys already use. Real

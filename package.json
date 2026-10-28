@@ -1,5 +1,5 @@
 {
-  "name": "eh-webhook",
+  "name": "eh-payroll-sync",
   "version": "0.1.0",
   "private": true,
   "type": "module",

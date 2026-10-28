@@ -60,7 +60,7 @@ describe("handleTelemetry — system_alert", () => {
     expect(r.status).toBe(202);
     expect(r.body).toMatchObject({ ok: true, deduped: false });
     expect(world.issues).toHaveLength(1);
-    expect(world.issues[0]!.title).toBe("[eh-webhook] system alert — acme / user 500");
+    expect(world.issues[0]!.title).toBe("[eh-payroll-sync] system alert — acme / user 500");
     expect(world.issues[0]!.body).toContain("retries exhausted");
     expect(emails).toHaveLength(1);
   });
@@ -78,8 +78,8 @@ describe("handleTelemetry — system_alert", () => {
     await handleTelemetry(alert({ ctUserId: 500 }), deps);
     await handleTelemetry(alert({ ctUserId: 777 }), deps);
     expect(world.issues.map((i) => i.title)).toEqual([
-      "[eh-webhook] system alert — acme / user 500",
-      "[eh-webhook] system alert — acme / user 777",
+      "[eh-payroll-sync] system alert — acme / user 500",
+      "[eh-payroll-sync] system alert — acme / user 777",
     ]);
   });
 
@@ -133,7 +133,7 @@ describe("handleTelemetry — health", () => {
     const r = await handleTelemetry(health({ ok: false, d1: "error" }), deps);
     expect(r.body).toMatchObject({ updated: false });
     expect(world.issues).toHaveLength(1);
-    expect(world.issues[0]!.title).toBe("[eh-webhook] health — acme");
+    expect(world.issues[0]!.title).toBe("[eh-payroll-sync] health — acme");
     expect(world.issues[0]!.body).toContain('"d1": "error"');
   });
 

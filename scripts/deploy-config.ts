@@ -63,7 +63,7 @@ function json<T>(text: string): T {
   return JSON.parse(text.slice(start)) as T;
 }
 
-const template = readText("wrangler.jsonc", "✗ wrangler.jsonc not found - run this from the EH_Webhook repo root.");
+const template = readText("wrangler.jsonc", "✗ wrangler.jsonc not found - run this from the eh-payroll-sync repo root.");
 const devVars = parseDevVars(
   readText(".dev.vars", "✗ .dev.vars not found. The setup wizard creates it; or copy .dev.vars.example and fill it in."),
 );
@@ -73,7 +73,7 @@ if (!rendered.ok) {
   stop(
     "✗ .dev.vars is missing values this deployment needs:",
     ...rendered.missing.map((k) => `    ${k}`),
-    `  Add each as KEY=value. ${DATABASE_ID_KEY} is the id \`npx wrangler d1 list\` shows for eh-webhook.`,
+    `  Add each as KEY=value. ${DATABASE_ID_KEY} is the id \`npx wrangler d1 list\` shows for eh-payroll-sync.`,
   );
 }
 writeFileSync(DEPLOY_CONFIG_PATH, `${JSON.stringify(rendered.config, null, 2)}\n`);

@@ -47,7 +47,7 @@ last-write-wins on Connecteam `eventTimestamp` vs D1 `last_synced_ts`; EH match 
 ## 3. Repo scaffold
 
 ```
-EH_Webhook/
+eh-payroll-sync/
 ├── CONTEXT.md
 ├── README.md                     # dev setup
 ├── wrangler.jsonc                # bindings, vars, cron, queue, D1
@@ -87,14 +87,14 @@ Tracked as GitHub issues (dependency order, `ready-for-agent`):
 
 | Issue | Milestone | Blocked by |
 |---|---|---|
-| [#2](https://github.com/ostafford/EH_Webhook/issues/2) EH Payroll client | M2 | — |
-| [#3](https://github.com/ostafford/EH_Webhook/issues/3) Connecteam client | M3 | — |
-| [#4](https://github.com/ostafford/EH_Webhook/issues/4) Bundle & load client field-map | M5 (split) | — |
-| [#5](https://github.com/ostafford/EH_Webhook/issues/5) Sync decision, messages & cycles | M4 | #2 |
-| [#6](https://github.com/ostafford/EH_Webhook/issues/6) Queue consumer end-to-end | M5 | #2 #3 #4 #5 |
-| [#7](https://github.com/ostafford/EH_Webhook/issues/7) Cron approval sweep | M6 | #6 #3 |
-| [#8](https://github.com/ostafford/EH_Webhook/issues/8) Inbound webhook | M7 | #6 #3 |
-| [#9](https://github.com/ostafford/EH_Webhook/issues/9) Hardening & handover | M8 | #7 #8 |
+| [#2](https://github.com/ostafford/eh-payroll-sync/issues/2) EH Payroll client | M2 | — |
+| [#3](https://github.com/ostafford/eh-payroll-sync/issues/3) Connecteam client | M3 | — |
+| [#4](https://github.com/ostafford/eh-payroll-sync/issues/4) Bundle & load client field-map | M5 (split) | — |
+| [#5](https://github.com/ostafford/eh-payroll-sync/issues/5) Sync decision, messages & cycles | M4 | #2 |
+| [#6](https://github.com/ostafford/eh-payroll-sync/issues/6) Queue consumer end-to-end | M5 | #2 #3 #4 #5 |
+| [#7](https://github.com/ostafford/eh-payroll-sync/issues/7) Cron approval sweep | M6 | #6 #3 |
+| [#8](https://github.com/ostafford/eh-payroll-sync/issues/8) Inbound webhook | M7 | #6 #3 |
+| [#9](https://github.com/ostafford/eh-payroll-sync/issues/9) Hardening & handover | M8 | #7 #8 |
 
 
 ### M0 — Skeleton & CI (0.5 day)  ✅
