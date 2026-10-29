@@ -451,7 +451,9 @@ single notice.
 > Correction ("set that answer to No"), not a follow-up.
 
 **Go live:** existing approved employees flow in over the next few minutes via the
-sweep, throttled (~20/minute). Watch `/health` and the alerts channel.
+sweep, throttled (~20/minute). Watch `/health` and the alerts channel. If
+anything looks wrong, pause it with the **Emergency stop** (Day-to-day
+operations, below) before investigating.
 
 ---
 
@@ -494,6 +496,47 @@ ops, at }` — and is passed through `src/redact.ts` regardless. Leave
 ---
 
 ## Day-to-day operations
+
+### Emergency stop
+
+Use this when the sync is doing something wrong and must stop **now**: the wrong
+person's record being written, bad values landing in EH, a flood of messages.
+One command, run from the repo folder, logged in to the **client's** Cloudflare
+account (check with `npx wrangler whoami` first; with access to several
+accounts, wrangler asks which one):
+
+```sh
+npx wrangler queues pause-delivery eh-payroll-sync-queue
+```
+
+**What stops:** every EH write and every message the sync sends (Correction,
+success, Manual-follow-up, System alert), within seconds. They all happen in
+the queue consumer, and a paused queue delivers nothing to it.
+
+**What keeps running, safely:** Connecteam webhooks and the approval sweep keep
+adding jobs to the queue. Cloudflare holds them; nothing is lost while paused.
+The daily recheck and the weekly digest still post to the alerts channel; both
+only read EH. `/health` keeps answering, and `ops.queueBacklog` climbs as jobs
+wait: that's expected while paused.
+
+**Resume** once the cause is fixed. The held jobs then run in order:
+
+```sh
+npx wrangler queues resume-delivery eh-payroll-sync-queue
+```
+
+`ops.queueBacklog` on `/health` should fall back to `0` within a minute or two.
+
+> **Resume within 4 days.** A held job still expires at the queue's message
+> retention period, Cloudflare's default of 4 days. A profile edit that expired
+> is caught up by the employee's next edit. A first-time **approval** that
+> expired is not: the sweep recorded it when it queued the job and won't queue
+> it again, so re-sync that employee by hand ("Re-syncing an employee" below).
+> Never purge the queue (`wrangler queues purge`): it deletes the held jobs on
+> the spot.
+
+Verified on the demo deployment 2026-10-29 (pause and resume both took
+effect). Holding and expiry are from Cloudflare's Queues docs.
 
 ### Monitoring — `GET /health`
 
