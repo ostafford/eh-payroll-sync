@@ -757,9 +757,9 @@ describe("dispatchBatch", () => {
   it("delays a retry by the backoff for its attempt number (issue #90)", async () => {
     const msg = mkMsg(job({ ctUserId: 2 }), 3);
     await dispatchBatch(
-      { queue: "eh-webhook-sync", messages: [msg] },
+      { queue: "eh-payroll-sync-queue", messages: [msg] },
       deps({ ct: fakeCt(null, "retryable") as never }),
-      "eh-webhook-dlq",
+      "eh-payroll-sync-dlq",
     );
     expect(msg.calls).toEqual(["retry"]);
     expect(msg.retryDelays).toEqual([retryDelaySeconds(3)]);
@@ -771,7 +771,7 @@ describe("dispatchBatch", () => {
       throw new Error("D1 unavailable");
     };
     const msg = mkMsg(job(), 1);
-    await dispatchBatch({ queue: "eh-webhook-sync", messages: [msg] }, deps({ store }), "eh-webhook-dlq");
+    await dispatchBatch({ queue: "eh-payroll-sync-queue", messages: [msg] }, deps({ store }), "eh-payroll-sync-dlq");
     expect(msg.retryDelays).toEqual([retryDelaySeconds(1)]);
   });
 
@@ -792,7 +792,7 @@ describe("dispatchBatch", () => {
       } as never,
     });
 
-    await dispatchBatch({ queue: "eh-webhook-sync", messages: [good, bad] }, d, "eh-webhook-dlq");
+    await dispatchBatch({ queue: "eh-payroll-sync-queue", messages: [good, bad] }, d, "eh-payroll-sync-dlq");
 
     expect(good.calls).toEqual(["ack"]);
     expect(bad.calls).toEqual(["retry"]);
@@ -806,9 +806,9 @@ describe("dispatchBatch", () => {
     const newest = mkMsg(job({ ctUserId: 17760356, eventTimestamp: 2000 }));
 
     await dispatchBatch(
-      { queue: "eh-webhook-sync", messages: [older1, newest, older2] },
+      { queue: "eh-payroll-sync-queue", messages: [older1, newest, older2] },
       deps({ store, eh }),
-      "eh-webhook-dlq",
+      "eh-payroll-sync-dlq",
     );
 
     expect(eh.upserts).toHaveLength(1);
@@ -828,9 +828,9 @@ describe("dispatchBatch", () => {
     const b = mkMsg(job({ ctUserId: 2, eventTimestamp: 1000 }));
 
     await dispatchBatch(
-      { queue: "eh-webhook-sync", messages: [a, b] },
+      { queue: "eh-payroll-sync-queue", messages: [a, b] },
       deps({ store, ct: fakeCt(cloneUser()) as never }),
-      "eh-webhook-dlq",
+      "eh-payroll-sync-dlq",
     );
 
     expect(a.calls).toEqual(["ack"]);
@@ -843,9 +843,9 @@ describe("dispatchBatch", () => {
     const store = fakeGateway();
     const msg = mkMsg(job());
     await dispatchBatch(
-      { queue: "eh-webhook-dlq", messages: [msg] },
+      { queue: "eh-payroll-sync-dlq", messages: [msg] },
       deps({ ct: ct as never, store }),
-      "eh-webhook-dlq",
+      "eh-payroll-sync-dlq",
     );
     expect(msg.calls).toEqual(["ack"]);
     expect(ct.channels[0]!.text).toMatch(/could not be retried/i);
@@ -1092,8 +1092,8 @@ describe("retry backoff (issue #90)", () => {
   // silently stretch the retry window past the notice claims.
   const maxRetries = (() => {
     const cfg = readFileSync(fileURLToPath(new URL("../wrangler.jsonc", import.meta.url)), "utf8");
-    const m = /"queue":\s*"eh-webhook-sync",[^}]*?"max_retries":\s*(\d+)/.exec(cfg);
-    if (!m) throw new Error("max_retries for eh-webhook-sync not found in wrangler.jsonc");
+    const m = /"queue":\s*"eh-payroll-sync-queue",[^}]*?"max_retries":\s*(\d+)/.exec(cfg);
+    if (!m) throw new Error("max_retries for eh-payroll-sync-queue not found in wrangler.jsonc");
     return Number(m[1]);
   })();
   // Delivery n (attempts = n) failing waits retryDelaySeconds(n) before n+1.

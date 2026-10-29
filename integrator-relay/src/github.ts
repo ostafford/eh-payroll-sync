@@ -33,7 +33,7 @@ export class GitHubRestIssues implements GitHubIssues {
       authorization: `Bearer ${cfg.token}`,
       accept: "application/vnd.github+json",
       "x-github-api-version": "2022-11-28",
-      "user-agent": "eh-webhook-integrator-relay",
+      "user-agent": "eh-payroll-sync-relay",
     };
     this.#fetch = cfg.fetchImpl ?? fetch;
   }

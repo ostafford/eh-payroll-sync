@@ -15,7 +15,7 @@ export interface HealthEnv {
 
 export interface Health {
   ok: boolean;
-  service: "eh-webhook";
+  service: "eh-payroll-sync";
   time: string;
   d1: "ok" | "error";
   /** "ok", or the reason the client's field-map failed to load. */
@@ -62,7 +62,7 @@ export async function buildHealth(env: HealthEnv): Promise<Health> {
 
   return {
     ok: d1 === "ok" && fieldMap === "ok",
-    service: "eh-webhook",
+    service: "eh-payroll-sync",
     time: new Date().toISOString(),
     d1,
     fieldMap,

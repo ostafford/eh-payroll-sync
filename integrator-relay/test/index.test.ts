@@ -23,7 +23,7 @@ describe("relay fetch handler", () => {
   it("GET /health is public", async () => {
     const res = await worker.fetch(new Request("https://relay.test/health"), env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, service: "eh-webhook-integrator-relay" });
+    expect(await res.json()).toMatchObject({ ok: true, service: "eh-payroll-sync-relay" });
   });
 
   it("rejects a POST with no secret header", async () => {

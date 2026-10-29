@@ -1,9 +1,9 @@
 {
-  "name": "eh-webhook-integrator-relay",
+  "name": "eh-payroll-sync-relay",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Standalone receiver for EH_Webhook client telemetry (issue #23) — turns system_alert / health pushes into GitHub issues the integrator gets notified about.",
+  "description": "Standalone receiver for eh-payroll-sync client telemetry (issue #23) — turns system_alert / health pushes into GitHub issues the integrator gets notified about.",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",

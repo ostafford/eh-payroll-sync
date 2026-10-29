@@ -1,4 +1,4 @@
-# EH_Webhook — integrator telemetry relay
+# eh-payroll-sync — integrator telemetry relay
 
 A tiny standalone Cloudflare Worker the **integrator** hosts **once** (issue #23).
 It is **not** part of any client deployment.
@@ -19,10 +19,10 @@ living in a client deployment.
 
 | Push | What the relay does |
 |---|---|
-| `system_alert` (first for a `client` + `ctUserId`) | opens issue `[eh-webhook] system alert — <client> / user <id>`, labels `eh-relay` + `system-alert` |
+| `system_alert` (first for a `client` + `ctUserId`) | opens issue `[eh-payroll-sync] system alert — <client> / user <id>`, labels `eh-relay` + `system-alert` |
 | `system_alert` (repeat, same client + user, issue still open) | adds a comment — **one issue, not many** |
 | `system_alert` after that issue was closed | opens a fresh one |
-| `health` `ok:false` | opens/updates `[eh-webhook] health — <client>` with the snapshot |
+| `health` `ok:false` | opens/updates `[eh-payroll-sync] health — <client>` with the snapshot |
 | `health` `ok:true` while that issue is open | comments "recovered" and **closes** it |
 | `health` `ok:true` with nothing open | no-op (no perpetual "all good" issue) |
 
@@ -45,7 +45,7 @@ npx wrangler secret put GITHUB_TOKEN
 npx wrangler secret put RELAY_SECRET
 
 # 3. Set the target repo (and optional email webhook) in wrangler.jsonc `vars`:
-#      "GITHUB_REPO": "ostafford/EH_Webhook"
+#      "GITHUB_REPO": "ostafford/eh-payroll-sync"
 #      "EMAIL_WEBHOOK_URL": ""
 
 npx wrangler deploy

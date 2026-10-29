@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "eh-webhook-integrator-relay",
+  "name": "eh-payroll-sync-relay",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-15",
   "observability": { "enabled": true },
@@ -12,7 +12,7 @@
   //                    repo below (nothing else). Lives ONLY here.
   "vars": {
     // owner/name of the repo that receives the alert issues.
-    "GITHUB_REPO": "ostafford/EH_Webhook",
+    "GITHUB_REPO": "ostafford/eh-payroll-sync",
     // Optional: also POST a compact alert to this URL (Zapier / Make / an SMTP
     // bridge) for instant email. Blank = GitHub-issue notifications only.
     "EMAIL_WEBHOOK_URL": ""

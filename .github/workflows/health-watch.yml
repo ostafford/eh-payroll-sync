@@ -17,7 +17,7 @@ jobs:
       - name: Fetch /health
         id: fetch
         run: |
-          url="${{ vars.HEALTH_URL || 'https://eh-webhook.okky-mstafford.workers.dev/health' }}"
+          url="${{ vars.HEALTH_URL || 'https://eh-payroll-sync.okky-mstafford.workers.dev/health' }}"
           http_code=$(curl -sS -o body.json -w "%{http_code}" --max-time 15 "$url") || {
             echo "request to $url failed outright (network/DNS/timeout)"; exit 1;
           }

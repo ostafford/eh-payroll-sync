@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "eh-webhook",
+  "name": "eh-payroll-sync",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
@@ -36,25 +36,25 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "eh-webhook",
+      "database_name": "eh-payroll-sync",
       "database_id": "set-D1_DATABASE_ID-in-.dev.vars",
       "migrations_dir": "migrations"
     }
   ],
 
   "queues": {
-    "producers": [{ "binding": "SYNC_QUEUE", "queue": "eh-webhook-sync" }],
+    "producers": [{ "binding": "SYNC_QUEUE", "queue": "eh-payroll-sync-queue" }],
     "consumers": [
       {
-        "queue": "eh-webhook-sync",
+        "queue": "eh-payroll-sync-queue",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "max_retries": 5,
-        "dead_letter_queue": "eh-webhook-dlq"
+        "dead_letter_queue": "eh-payroll-sync-dlq"
       },
       {
         // Retry-exhausted jobs land here; the consumer posts a System alert and acks.
-        "queue": "eh-webhook-dlq",
+        "queue": "eh-payroll-sync-dlq",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "max_retries": 3
