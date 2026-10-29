@@ -21,6 +21,23 @@ The client needs, ready to sign in to:
 
 The integrator needs the repo cloned and `npm` working.
 
+**If the client's staff are already in Employment Hero,** run the preflight
+before the deploy stage (it needs only the Connecteam and EH keys, the pack ID
+and the business ID in `.dev.vars`):
+
+```sh
+npm run preflight
+```
+
+It's read-only. The first approval check syncs every approved pack at once, and
+the sync finds an existing EH employee by Connecteam ID only, then EH matches by
+TFN. So a hand-made EH record with a different TFN, an exemption code
+(`111111111` and the like), or a TFN shared with another record gets a
+**duplicate** or lands on the **wrong person**. The preflight lists each approved
+person as already linked, new, merge, or something to fix, plus EH records that
+already share a TFN or an email. Fix everything it flags, re-run until it says
+"Safe to deploy", then deploy.
+
 **Allow about 30 minutes:** ~10 for stages 1–10, a few for deploy and
 webhook, and up to 15 for Cloudflare to start the first approval check
 (the wizard can wait for it).
