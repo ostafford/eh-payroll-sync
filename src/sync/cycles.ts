@@ -13,7 +13,14 @@
  */
 import type { SyncDecision } from "./decide.js";
 
-/** Connecteam custom field carrying the Direct manager's Connecteam userId. */
+/**
+ * Connecteam custom-field type carrying the Direct manager's Connecteam userId.
+ * Matched by type, not id: custom-field ids are per account (verified live on
+ * the demo account 2026-10-29: every user custom field carries `type`).
+ */
+export const DIRECT_MANAGER_FIELD_TYPE = "directManager";
+
+/** The demo account's Direct manager field id - a fallback for a value with no `type`. */
 export const DIRECT_MANAGER_FIELD_ID = 25145114;
 
 /** Cycle at which the Direct manager is also messaged. */
@@ -71,9 +78,11 @@ export async function advanceCycle(
 
 /** The Direct manager's Connecteam userId, or null if not set / unparseable. */
 export function directManagerUserId(
-  customFields: ReadonlyArray<{ customFieldId: number; value: unknown }>,
+  customFields: ReadonlyArray<{ customFieldId: number; type?: string; value: unknown }>,
 ): number | null {
-  const cf = customFields.find((f) => f.customFieldId === DIRECT_MANAGER_FIELD_ID);
+  const cf =
+    customFields.find((f) => f.type === DIRECT_MANAGER_FIELD_TYPE) ??
+    customFields.find((f) => f.customFieldId === DIRECT_MANAGER_FIELD_ID);
   return toUserId(cf?.value);
 }
 

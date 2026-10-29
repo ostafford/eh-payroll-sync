@@ -108,6 +108,16 @@ describe("directManagerUserId", () => {
     expect(directManagerUserId(wrap({ value: "17760357" }))).toBe(17760357);
   });
 
+  it("finds the field by its directManager type, whatever its id", () => {
+    // Custom-field ids are per Connecteam account; the type is the same everywhere.
+    expect(
+      directManagerUserId([
+        { customFieldId: 51234567, type: "str", value: 111 },
+        { customFieldId: 51234568, type: "directManager", value: 17760357 },
+      ]),
+    ).toBe(17760357);
+  });
+
   it("returns null when the field is absent, blank, zero or non-numeric", () => {
     expect(directManagerUserId([])).toBeNull();
     expect(directManagerUserId(wrap(""))).toBeNull();

@@ -428,6 +428,22 @@ describe("runSyncJob - correction path", () => {
     expect(store.rows.get(17760356)!.failureCycleCount).toBe(3);
   });
 
+  it("finds the direct manager on a client account, where the field has its own id", async () => {
+    // Custom-field ids are per Connecteam account; only the demo has 25145114.
+    const user = cloneUser();
+    user.customFields.push({ customFieldId: 51234567, type: "directManager", name: "Direct manager", value: 999001 });
+    const store = fakeGateway({ ctUserId: 17760356, failureCycleCount: 2 });
+    const ct = fakeCt(user);
+    const eh = fakeEh({
+      write: { outcome: "validation", status: 400, issues: [{ field: "taxFileNumber", reason: "invalid" }] },
+    });
+
+    const out = await runSyncJob(job(), deps({ store, eh, ct: ct as never }));
+
+    expect(out.managerNotified).toBe(true);
+    expect(ct.dms.map((d) => d.userId).sort()).toEqual([17760356, 999001]);
+  });
+
   it("a clean sync after failures resets the failure count", async () => {
     const store = fakeGateway({ ctUserId: 17760356, failureCycleCount: 2 });
     const out = await runSyncJob(job(), deps({ store, ct: fakeCt(cloneUser()) as never }));
