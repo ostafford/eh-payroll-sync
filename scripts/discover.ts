@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { parseFieldMap } from "../src/mapping/schema.js";
 import { listCustomFieldDefinitions } from "./lib/connecteam-custom-fields.js";
 import { buildFieldMapDraft } from "./lib/discover-draft.js";
+import { fieldPicksPath, loadFieldPicks } from "./lib/field-picks.js";
 import { chooseFieldMapWrite, diffFieldMaps } from "./lib/field-map-diff.js";
 
 // --- env -----------------------------------------------------------------
@@ -97,6 +98,7 @@ async function main(): Promise<void> {
   const paySchedules = businessId ? await ehGet(`/business/${businessId}/payschedule`).catch(() => []) : [];
   const locations = businessId ? await ehGet(`/business/${businessId}/location`).catch(() => []) : [];
 
+  const outDir = arg("out") ?? dirname(fieldPicksPath(client));
   const { draft, mappedCount, ruleFedCount, unmapped, notSynced } = buildFieldMapDraft({
     client,
     packId,
@@ -104,9 +106,9 @@ async function main(): Promise<void> {
     payScheduleId: String(paySchedules[0]?.id ?? ""),
     locationId: String(locations[0]?.id ?? ""),
     fields,
+    picks: loadFieldPicks(join(outDir, "field-picks.json")),
   });
 
-  const outDir = arg("out") ?? join(dirname(fileURLToPath(import.meta.url)), "..", "clients", client);
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
   const mapFile = join(outDir, "field-map.json");
   let existing: unknown;

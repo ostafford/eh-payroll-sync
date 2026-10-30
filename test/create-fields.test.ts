@@ -68,6 +68,27 @@ describe("planMissingFields", () => {
     expect(missing.map((m) => m.spec.name)).not.toContain("TFN");
   });
 
+  it("doesn't create a duplicate of a picked field the name pattern misses", () => {
+    const fields = [{ customFieldId: 9, name: "Claim Tax Free Threshold?", type: "dropdown" }];
+    const plan = planMissingFields(fields, CATEGORIES, { "Claim tax-free threshold?": { id: 9 } });
+    expect(plan.missing.map((m) => m.spec.name)).not.toContain("Claim tax-free threshold?");
+    expect(plan.found.find((f) => f.spec.name === "Claim tax-free threshold?")?.field.customFieldId).toBe(9);
+  });
+
+  it("creates nothing for an ambiguous match or a deleted pick: a human decides first", () => {
+    const fields = [
+      { customFieldId: 8, name: "TFN", type: "str" },
+      { customFieldId: 9, name: "Tax File Number", type: "str" },
+    ];
+    const plan = planMissingFields(fields, CATEGORIES, { BSB: { id: 99 } });
+    expect(plan.missing.map((m) => m.spec.name)).not.toContain("TFN");
+    expect(plan.missing.map((m) => m.spec.name)).not.toContain("BSB");
+    expect(plan.undecided.map((u) => [u.spec.name, u.reason])).toEqual([
+      ["TFN", "ambiguous"],
+      ["BSB", "stalePick"],
+    ]);
+  });
+
   it("files a field under the first category when its own doesn't exist, and says so", () => {
     const { missing } = planMissingFields([], [{ id: 77, name: "General" }]);
     const tfn = missing.find((m) => m.spec.name === "TFN")!;

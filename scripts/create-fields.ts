@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { listCustomFieldDefinitions } from "./lib/connecteam-custom-fields.js";
 import { planMissingFields } from "./lib/create-fields.js";
+import { fieldPicksPath, loadFieldPicks } from "./lib/field-picks.js";
 
 // --- env -----------------------------------------------------------------
 
@@ -77,9 +78,15 @@ async function main(): Promise<void> {
     listCustomFieldDefinitions(ctGet),
     ctGet("/users/v1/custom-field-categories").then((b) => (b?.data?.categories ?? []) as Array<{ id: number; name: string }>),
   ]);
-  const { found, missing } = planMissingFields(fields, categories);
+  const { found, missing, undecided } = planMissingFields(fields, categories, loadFieldPicks(fieldPicksPath("self")));
 
-  console.log(`Connecteam already has ${found.length} of the ${found.length + missing.length} custom fields the sync needs.`);
+  console.log(
+    `Connecteam already has ${found.length} of the ${found.length + missing.length + undecided.length} custom fields the sync needs.`,
+  );
+  for (const { spec, reason } of undecided) {
+    const why = reason === "ambiguous" ? "more than one of your fields could be it" : "the field picked for it was deleted";
+    console.log(`  ? ${spec.name.padEnd(38)} not created: ${why} (see the field check)`);
+  }
   if (missing.length === 0) {
     console.log("Nothing to create.");
     return;

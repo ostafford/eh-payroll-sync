@@ -4,6 +4,7 @@
  * correctly (issue #55).
  */
 import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
+import { resolveField, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC, type FieldSpec } from "./field-spec.js";
 
 export interface CreateBody {
@@ -22,17 +23,25 @@ export interface CreateBody {
 export interface FieldPlan {
   found: Array<{ spec: FieldSpec; field: CustomFieldDefinition }>;
   missing: Array<{ spec: FieldSpec; body: CreateBody; categoryNote?: string }>;
+  /** More than one candidate, or a picked field since deleted: never created until a human picks. */
+  undecided: Array<{ spec: FieldSpec; reason: "ambiguous" | "stalePick" }>;
 }
 
 export function planMissingFields(
   existing: CustomFieldDefinition[],
   categories: Array<{ id: number; name: string }>,
+  picks: FieldPicks = {},
 ): FieldPlan {
-  const plan: FieldPlan = { found: [], missing: [] };
+  const plan: FieldPlan = { found: [], missing: [], undecided: [] };
+  const defs = existing.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type }));
   for (const spec of FIELD_SPEC.filter((s) => s.create)) {
-    const field = existing.find((f) => spec.match.test(f.name));
-    if (field) {
-      plan.found.push({ spec, field });
+    const resolved = resolveField(spec, defs, picks);
+    if (resolved.status === "matched") {
+      plan.found.push({ spec, field: existing.find((f) => f.customFieldId === resolved.field.id)! });
+      continue;
+    }
+    if (resolved.status !== "none") {
+      plan.undecided.push({ spec, reason: resolved.status });
       continue;
     }
 

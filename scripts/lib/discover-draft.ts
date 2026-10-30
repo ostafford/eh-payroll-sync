@@ -1,23 +1,21 @@
 /**
  * Builds discover's DRAFT field map from Connecteam custom-field definitions,
- * matching each by name against the shared field spec (./field-spec.ts).
+ * resolving each field the sync needs (./field-spec.ts) from the human's picks,
+ * then by name (./field-resolve.ts).
  */
 import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
-import { FIELD_SPEC, type Target } from "./field-spec.js";
+import { resolveField, type FieldPicks } from "./field-resolve.js";
+import { FIELD_SPEC, type FieldSpec } from "./field-spec.js";
 
-type FieldTarget = Extract<Target, { kind: "field" }>;
-
-const KNOWN = FIELD_SPEC.flatMap((s) => (s.target.kind === "field" ? [{ match: s.match, ...s.target }] : []));
-const TAX_DECLARATION = FIELD_SPEC.flatMap((s) => (s.target.kind === "taxDeclaration" ? [{ match: s.match, key: s.target.key }] : []));
-const SUPER = FIELD_SPEC.flatMap((s) => (s.target.kind === "super" ? [{ match: s.match, key: s.target.key }] : []));
+/** Read by the sync but not sent to EH (Direct manager): resolved like any spec field. */
+const SPEC_NOT_SYNCED = "read by the sync, not sent to EH";
 
 /**
- * Connecteam fields the sync deliberately doesn't map (docs/field-mapping.md),
+ * Other Connecteam fields the sync deliberately doesn't map (docs/field-mapping.md),
  * so discover can say so instead of listing them "for review" (#66).
  */
 const NOT_SYNCED: Array<{ match: RegExp; reason: string }> = [
   { match: /^eh pay rate template$/i, reason: "award classification - mapped in the Pay-run settings stage" },
-  ...FIELD_SPEC.filter((s) => s.target.kind === "none").map((s) => ({ match: s.match, reason: "read by the sync, not sent to EH" })),
   { match: /^pay type$/i, reason: "superseded by each employee's Connecteam pay rate" },
   { match: /^employee type$/i, reason: "informational only" },
   { match: /^payment method$/i, reason: "every account is paid electronically" },
@@ -31,6 +29,8 @@ export interface DraftInput {
   payScheduleId: string;
   locationId: string;
   fields: CustomFieldDefinition[];
+  /** The human's choices (clients/<client>/field-picks.json); name matching fills the rest. */
+  picks?: FieldPicks;
 }
 
 export interface DraftResult {
@@ -58,45 +58,37 @@ export interface DraftResult {
 
 export function buildFieldMapDraft(input: DraftInput): DraftResult {
   const { fields } = input;
+  const defs = fields.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type }));
+  // An ambiguous match or a deleted pick maps nothing: its fields stay for review.
+  const idOf = (spec: FieldSpec): number | undefined => {
+    const r = resolveField(spec, defs, input.picks);
+    return r.status === "matched" ? r.field.id : undefined;
+  };
 
   const mapped: DraftResult["draft"]["fields"] = [];
-  const usedEh = new Set<string>();
-  const notInFields: Array<{ id: number; label: string }> = [];
-  for (const f of fields) {
-    const k = KNOWN.find((x) => x.match.test(f.name));
-    // Account-wide definitions can hold a second field with a matching name
-    // (an old, renamed or unused one) - map each EH field once, review the rest.
-    if (!k || usedEh.has(k.eh)) {
-      notInFields.push({ id: f.customFieldId, label: `${f.customFieldId}  ${f.name} (${f.type})` });
-      continue;
-    }
-    usedEh.add(k.eh);
-    const rule: DraftResult["draft"]["fields"][number] = { eh: k.eh, from: { customFieldId: f.customFieldId }, transform: k.transform };
-    const t: FieldTarget = k;
-    if (t.required) rule.required = true;
-    if (t.sensitive) rule.sensitive = true;
-    if (t.map) rule.map = t.map;
-    if (t.default !== undefined) rule.default = t.default;
-    mapped.push(rule);
-  }
-
+  const taxDeclaration: DraftResult["draft"]["rules"]["taxDeclaration"] = {};
+  const superFields: DraftResult["draft"]["rules"]["super"] = {};
   const ruleConsumed = new Set<number>();
-  const taxDeclaration = Object.fromEntries(
-    TAX_DECLARATION.flatMap(({ match, key }) => {
-      const f = fields.find((x) => match.test(x.name));
-      if (!f) return [];
-      ruleConsumed.add(f.customFieldId);
-      return [[key, { customFieldId: f.customFieldId }]];
-    }),
-  );
-
-  const superFields = Object.fromEntries(
-    SUPER.map(({ match, key }) => {
-      const f = fields.find((x) => match.test(x.name));
-      if (f) ruleConsumed.add(f.customFieldId);
-      return [key, f ? f.customFieldId : ("TODO" as const)];
-    }),
-  );
+  const specNotSynced = new Set<number>();
+  for (const spec of FIELD_SPEC) {
+    const id = idOf(spec);
+    const t = spec.target;
+    if (t.kind === "super") superFields[t.key] = id ?? "TODO";
+    if (id === undefined) continue;
+    if (t.kind === "field") {
+      const rule: DraftResult["draft"]["fields"][number] = { eh: t.eh, from: { customFieldId: id }, transform: t.transform };
+      if (t.required) rule.required = true;
+      if (t.sensitive) rule.sensitive = true;
+      if (t.map) rule.map = t.map;
+      if (t.default !== undefined) rule.default = t.default;
+      mapped.push(rule);
+    } else if (t.kind === "taxDeclaration") {
+      taxDeclaration[t.key] = { customFieldId: id };
+      ruleConsumed.add(id);
+    } else if (t.kind === "super") ruleConsumed.add(id);
+    else specNotSynced.add(id);
+  }
+  const used = new Set([...mapped.map((r) => r.from.customFieldId as number), ...ruleConsumed, ...specNotSynced]);
 
   const draft: DraftResult["draft"] = {
     client: input.client,
@@ -123,17 +115,18 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
     draft,
     mappedCount: mapped.length,
     ruleFedCount: ruleConsumed.size,
-    // Truly-unmapped = not in `fields`, not consumed by a rule, and not a
-    // field the sync deliberately leaves alone.
-    unmapped: notInFields.filter((f) => !ruleConsumed.has(f.id) && !notSyncedReason(fields, f.id)),
+    // Truly-unmapped = not resolved to any spec field, and not a field the
+    // sync deliberately leaves alone.
+    unmapped: fields
+      .filter((f) => !used.has(f.customFieldId) && !notSyncedReason(f))
+      .map((f) => ({ id: f.customFieldId, label: `${f.customFieldId}  ${f.name} (${f.type})` })),
     notSynced: fields.flatMap((f) => {
-      const reason = notSyncedReason(fields, f.customFieldId);
-      return reason && !ruleConsumed.has(f.customFieldId) ? [{ id: f.customFieldId, name: f.name, reason }] : [];
+      const reason = specNotSynced.has(f.customFieldId) ? SPEC_NOT_SYNCED : used.has(f.customFieldId) ? undefined : notSyncedReason(f);
+      return reason ? [{ id: f.customFieldId, name: f.name, reason }] : [];
     }),
   };
 }
 
-function notSyncedReason(fields: CustomFieldDefinition[], id: number): string | undefined {
-  const f = fields.find((x) => x.customFieldId === id);
-  return f ? NOT_SYNCED.find((n) => n.match.test(f.name.trim()))?.reason : undefined;
+function notSyncedReason(f: CustomFieldDefinition): string | undefined {
+  return NOT_SYNCED.find((n) => n.match.test(f.name.trim()))?.reason;
 }

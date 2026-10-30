@@ -124,6 +124,43 @@ describe("buildFieldMapDraft", () => {
     expect(notSynced.find((n) => n.name === "EH Pay Rate Template")!.reason).toMatch(/Pay-run settings/);
   });
 
+  it("drafts from the picked field IDs, whatever the fields are named (#112)", () => {
+    const { draft, unmapped, notSynced } = buildFieldMapDraft({
+      ...base,
+      fields: [
+        { customFieldId: 30, name: "Postal Code", type: "str" },
+        { customFieldId: 31, name: "Higher Education Loan Program (HELP), Student Startup Loan (SSL), Trade Support Loan?", type: "dropdown" },
+        { customFieldId: 32, name: "Fund identifier", type: "str" },
+        { customFieldId: 33, name: "Reports to", type: "directManager" },
+      ],
+      picks: {
+        Postcode: { id: 30 },
+        "Have a HELP/STSL study debt?": { id: 31 },
+        "Super Fund USI": { id: 32 },
+        "Direct manager": { id: 33 },
+      },
+    });
+
+    expect(draft.fields).toContainEqual({ eh: "residentialPostCode", from: { customFieldId: 30 }, transform: "zeroPad4" });
+    expect(draft.rules.taxDeclaration.hasHelpOrStslDebt).toEqual({ customFieldId: 31 });
+    expect(draft.rules.super.usiField).toBe(32);
+    expect(notSynced.map((n) => n.id)).toEqual([33]);
+    expect(unmapped).toEqual([]);
+  });
+
+  it("maps neither of two ambiguous fields, leaving both for review", () => {
+    const { draft, unmapped } = buildFieldMapDraft({
+      ...base,
+      fields: [
+        { customFieldId: 40, name: "TFN", type: "str" },
+        { customFieldId: 41, name: "Tax file number", type: "str" },
+      ],
+    });
+
+    expect(draft.fields.filter((f) => f.eh === "taxFileNumber")).toEqual([]);
+    expect(unmapped.map((u) => u.id)).toEqual([40, 41]);
+  });
+
   it("lists unrecognised fields for review", () => {
     const { unmapped } = buildFieldMapDraft({
       ...base,

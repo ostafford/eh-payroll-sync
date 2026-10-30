@@ -77,6 +77,36 @@ describe("checkFields", () => {
     expect(out.replace(/\n {8}(?![\[WF])/g, " ")).toContain('"Birthday" is a text field; the sync needs a birthday field');
   });
 
+  it("checks the new field, not an '(OLD)' one of the wrong type listed first (first client's setup)", () => {
+    const old = { id: 1, name: "Emergency Contact Number (OLD)", type: "phone", isEditableForUsers: true, dropdownOptions: [] };
+    const rows = checkFields([old, ...demoRaw()]);
+    expect(row(rows, "Emergency Contact Number")).toMatchObject({ field: { id: 42708537 }, result: { status: "found" } });
+  });
+
+  it("asks when two current fields match, and blocks if the field is required", () => {
+    const second = { id: 7, name: "Tax File Number", type: "str", isEditableForUsers: true, dropdownOptions: [] };
+    const rows = checkFields([...demoRaw(), second]);
+    expect(row(rows, "TFN")).toMatchObject({
+      blocking: true,
+      result: { status: "ambiguous", candidates: [{ id: 42923222, name: "TFN" }, { id: 7, name: "Tax File Number" }] },
+    });
+    expect(row(rows, "TFN").field).toBeUndefined();
+  });
+
+  it("reads a picked field the name pattern misses (first client's HELP question)", () => {
+    const help = "Higher Education Loan Program (HELP), Student Startup Loan (SSL), Trade Support Loan?";
+    const raw = replace("Have a HELP/STSL study debt?", { name: help });
+    expect(row(checkFields(raw), "Have a HELP/STSL study debt?").result.status).toBe("missing");
+
+    const rows = checkFields(raw, { "Have a HELP/STSL study debt?": { id: 42923316 } });
+    expect(row(rows, "Have a HELP/STSL study debt?")).toMatchObject({ field: { id: 42923316, name: help }, result: { status: "found" } });
+  });
+
+  it("reports a picked field that was since deleted, and blocks if required", () => {
+    const rows = checkFields(demoRaw(), { TFN: { id: 99 } });
+    expect(row(rows, "TFN")).toMatchObject({ blocking: true, result: { status: "stalePick", id: 99 } });
+  });
+
   it("warns when employees can edit the award field", () => {
     const rows = checkFields(replace("EH Pay Rate Template", { isEditableForUsers: true }));
     expect(row(rows, "EH Pay Rate Template")).toMatchObject({ level: "admin", blocking: false, result: { status: "userEditable" } });
