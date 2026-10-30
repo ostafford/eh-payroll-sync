@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parseFieldMap } from "../src/mapping/schema.js";
 import { listCustomFieldDefinitions } from "./lib/connecteam-custom-fields.js";
+import { applyOptionMaps } from "./lib/apply-option-maps.js";
 import { buildFieldMapDraft } from "./lib/discover-draft.js";
 import { fieldPicksPath, loadFieldPicks } from "./lib/field-picks.js";
 import { chooseFieldMapWrite, diffFieldMaps } from "./lib/field-map-diff.js";
@@ -99,6 +100,7 @@ async function main(): Promise<void> {
   const locations = businessId ? await ehGet(`/business/${businessId}/location`).catch(() => []) : [];
 
   const outDir = arg("out") ?? dirname(fieldPicksPath(client));
+  const picks = loadFieldPicks(join(outDir, "field-picks.json"));
   const { draft, mappedCount, ruleFedCount, unmapped, notSynced } = buildFieldMapDraft({
     client,
     packId,
@@ -106,7 +108,7 @@ async function main(): Promise<void> {
     payScheduleId: String(paySchedules[0]?.id ?? ""),
     locationId: String(locations[0]?.id ?? ""),
     fields,
-    picks: loadFieldPicks(join(outDir, "field-picks.json")),
+    picks,
   });
 
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
@@ -125,6 +127,14 @@ async function main(): Promise<void> {
   writeFileSync(outFile, JSON.stringify(draft, null, 2) + "\n");
   // A draft left by an earlier run would no longer describe the map.
   if (write.action !== "draft") rmSync(draftFile, { force: true });
+  // A kept map still takes the option mappings chosen in the field picker (#112).
+  if (write.action === "draft" && existing) {
+    const { map, changed } = applyOptionMaps(existing, picks);
+    if (changed.length) {
+      writeFileSync(mapFile, JSON.stringify(map, null, 2) + "\n");
+      console.log(`\nUpdated the dropdown option mappings in ${mapFile} for: ${changed.join(", ")}.`);
+    }
+  }
 
   let schema = "valid against the field-map schema";
   try {

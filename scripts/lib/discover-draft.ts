@@ -4,7 +4,7 @@
  * then by name (./field-resolve.ts).
  */
 import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
-import { resolveField, type FieldPicks } from "./field-resolve.js";
+import { optionsOf, resolveField, syncedOptions, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC, type FieldSpec } from "./field-spec.js";
 
 /** Read by the sync but not sent to EH (Direct manager): resolved like any spec field. */
@@ -41,7 +41,7 @@ export interface DraftResult {
     identity: { externalIdFrom: string; emailFallbackFrom: string };
     fields: Array<{ eh: string; from: Record<string, unknown>; transform: string; [k: string]: unknown }>;
     rules: {
-      taxDeclaration: Record<string, { customFieldId: number }>;
+      taxDeclaration: Record<string, { customFieldId: number; options?: Record<string, string> }>;
       super: Record<string, number | "TODO">;
       constants: Record<string, unknown>;
     };
@@ -73,17 +73,21 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
   for (const spec of FIELD_SPEC) {
     const id = idOf(spec);
     const t = spec.target;
+    const picked = optionsOf(input.picks?.[spec.name]);
+    const options = picked && syncedOptions(picked);
     if (t.kind === "super") superFields[t.key] = id ?? "TODO";
     if (id === undefined) continue;
     if (t.kind === "field") {
       const rule: DraftResult["draft"]["fields"][number] = { eh: t.eh, from: { customFieldId: id }, transform: t.transform };
       if (t.required) rule.required = true;
       if (t.sensitive) rule.sensitive = true;
-      if (t.map) rule.map = t.map;
+      // The client's own options, as mapped in the picker, replace the demo's.
+      if (options) rule.map = options;
+      else if (t.map) rule.map = t.map;
       if (t.default !== undefined) rule.default = t.default;
       mapped.push(rule);
     } else if (t.kind === "taxDeclaration") {
-      taxDeclaration[t.key] = { customFieldId: id };
+      taxDeclaration[t.key] = { customFieldId: id, ...(options ? { options } : {}) };
       ruleConsumed.add(id);
     } else if (t.kind === "super") ruleConsumed.add(id);
     else specNotSynced.add(id);

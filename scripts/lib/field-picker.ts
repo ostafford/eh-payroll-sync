@@ -2,7 +2,8 @@
  * The wizard's field picker (issue #112): for each field the sync needs, what
  * the human can choose from, and how a choice is saved to field-picks.json.
  */
-import { compatibleType, resolveField, type FieldDef, type FieldPick, type FieldPicks } from "./field-resolve.js";
+import { compatibleType, resolveField, type FieldDef, type FieldPick, type FieldPicks, type OptionMap } from "./field-resolve.js";
+import { liveOptions } from "./field-check.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec } from "./field-spec.js";
 
 export type Choice = { kind: "use"; field: FieldDef } | { kind: "create" } | { kind: "skip" };
@@ -73,7 +74,62 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
   }
 
   for (const { spec, why } of undecided) out = applyChoice(out, spec, await askOne(spec, why, fields, io));
+
+  // Then each picked dropdown whose options aren't all values EH takes.
+  for (const spec of FIELD_SPEC.filter((s) => s.create && s.ct.options)) {
+    const pick = out[spec.name];
+    if (!pick || !("id" in pick)) continue;
+    const options = await mapOptions(spec, liveOptions(raw.find((x) => x?.id === pick.id)), pick.options ?? {}, io);
+    if (options) out = { ...out, [spec.name]: { id: pick.id, options } };
+  }
   return out;
+}
+
+const NOT_SYNCED = "Not synced: the employee gets a Correction message";
+
+/** What the sync can send for this field: EH's values, or Yes/No for a tax question. */
+function ehValues(spec: FieldSpec): Array<{ value: string; label: string }> {
+  const t = spec.target;
+  if (t.kind === "taxDeclaration") return [{ value: "yes", label: "Yes" }, { value: "no", label: "No" }];
+  const values = t.kind === "field" && t.map ? [...new Set(Object.values(t.map))] : (spec.ct.options ?? []);
+  // EH stores only Male / Female and leaves any other gender blank (docs/field-mapping.md).
+  return values.map((value) => ({ value, label: value === "Indeterminate" ? "Indeterminate (EH leaves it blank)" : value }));
+}
+
+/** An option that already is one of EH's values (or the demo's own wording) needs no question. */
+function autoOption(spec: FieldSpec, option: string): string | undefined {
+  const t = spec.target;
+  if (t.kind === "taxDeclaration") return ["yes", "no"].find((v) => v === option.trim().toLowerCase());
+  if (t.kind === "field" && t.map) return t.map[option];
+  return spec.ct.options?.includes(option) ? option : undefined;
+}
+
+/**
+ * Asks about each live option not yet decided. Returns the full option map to
+ * save, or undefined when nothing needed asking (the default mapping holds).
+ */
+async function mapOptions(spec: FieldSpec, live: string[], known: OptionMap, io: PickerIo): Promise<OptionMap | undefined> {
+  const todo = live.filter((o) => !(o in known) && autoOption(spec, o) === undefined);
+  if (!todo.length) return undefined;
+
+  const values = ehValues(spec);
+  const options: OptionMap = { ...known };
+  for (const o of live) if (!(o in options) && !todo.includes(o)) options[o] = autoOption(spec, o)!;
+
+  io.print("", `${spec.name}: some of your options aren't values Employment Hero takes. Choose what each one sends:`);
+  values.forEach((v, i) => io.print(`  ${String(i + 1).padStart(2)}) ${v.label}`));
+  io.print(`  ${String(values.length + 1).padStart(2)}) ${NOT_SYNCED}`);
+  for (const o of todo) {
+    for (;;) {
+      const n = Number((await io.ask(`${spec.name}: "${o}" -> `)).trim());
+      if (Number.isInteger(n) && n >= 1 && n <= values.length + 1) {
+        options[o] = n <= values.length ? values[n - 1]!.value : null;
+        break;
+      }
+      io.print(`  Type a number from 1 to ${values.length + 1}.`);
+    }
+  }
+  return options;
 }
 
 /** `suggested` (the automatic match) is listed first. */

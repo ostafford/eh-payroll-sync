@@ -111,4 +111,53 @@ describe("runFieldPicker (scripted answers)", () => {
     expect(oneByOne.asked).toHaveLength(n + 1);
     expect(oneByOne.result).toEqual(all.result);
   });
+
+  describe("dropdown options (#112: the first client's options)", () => {
+    const opts = (...values: string[]) => values.map((value) => ({ value, isDeleted: false }));
+    const client = () =>
+      demo().map((f) =>
+        f.name === "Employee Status"
+          ? { ...f, dropdownOptions: opts("Full-time", "Part-time", "Casual", "PBV", "Contractor") }
+          : f.name === "Claim tax-free threshold?"
+            ? { ...f, dropdownOptions: opts("Yes, claim tax free threshold", "No", "N/A", "TBC") }
+            : f,
+      );
+
+    it("asks about each option that isn't an EH value; exact matches map themselves", async () => {
+      // Employee Status: 1 FullTime, 2 PartTime, 3 Casual, 4 LabourHire, 5 not synced.
+      // Tax question:    1 Yes, 2 No, 3 not synced.
+      const { result, asked, out } = await run(client(), {}, ["y", "1", "2", "5", "5", "1", "3", "3"]);
+      expect(asked.slice(1)).toEqual([
+        'Employee Status: "Full-time" -> ',
+        'Employee Status: "Part-time" -> ',
+        'Employee Status: "PBV" -> ',
+        'Employee Status: "Contractor" -> ',
+        'Claim tax-free threshold?: "Yes, claim tax free threshold" -> ',
+        'Claim tax-free threshold?: "N/A" -> ',
+        'Claim tax-free threshold?: "TBC" -> ',
+      ]);
+      expect(out).toContain("Not synced: the employee gets a Correction message");
+      expect(result["Employee Status"]).toEqual({
+        id: 42920839,
+        options: { "Full-time": "FullTime", "Part-time": "PartTime", Casual: "Casual", PBV: null, Contractor: null },
+      });
+      expect(result["Claim tax-free threshold?"]).toEqual({
+        id: 42923276,
+        options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": null, TBC: null },
+      });
+
+      expect((await run(client(), result, [])).asked).toEqual([]);
+    });
+
+    it("asks only about an option added since the last run", async () => {
+      const picks: FieldPicks = {
+        ...(await run(demo(), {}, ["y"])).result,
+        "Employee Status": { id: 42920839, options: { "Full-time": "FullTime", "Part-time": "PartTime", Casual: "Casual", PBV: null } },
+        "Claim tax-free threshold?": { id: 42923276, options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": null, TBC: null } },
+      };
+      const { result, asked } = await run(client(), picks, ["4"]);
+      expect(asked).toEqual(['Employee Status: "Contractor" -> ']);
+      expect(result["Employee Status"]).toMatchObject({ options: { Contractor: "LabourHire", PBV: null } });
+    });
+  });
 });

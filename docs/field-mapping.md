@@ -60,6 +60,13 @@ fills them in but nothing reads them.
 | Claim tax-free threshold? | 42923276 | `claimTaxFreeThreshold` | Yes → true |
 | Australian resident for tax purposes? | 42923315 | `australianResident` | Yes → true; No → false + manual follow-up (EH has no `isNonResident`; tax scale / WHM is a payroll decision) |
 | Have a HELP/STSL study debt? | 42923316 | `helpDebt` **and** `stslDebt` | one combined Yes/No → both flags (over-report is harmless, under-report under-withholds) |
+
+A client whose tax questions use their own wording (e.g. `Yes, claim tax free
+threshold | No | N/A | TBC`) gets an `options` map on that `rules.taxDeclaration`
+entry (#112): `{ "customFieldId": 61, "options": { "Yes, claim tax free threshold": "yes", "No": "no" } }`.
+With `options`, only the listed answers count; any other answer (`N/A`, `TBC`,
+even a plain `Yes`) is held for a Correction message. The wizard's field picker
+writes it.
 | Name on Bank Account | 42921173 | `bankAccount1_AccountName` | |
 | BSB | 42923223 | `bankAccount1_BSB` | string; zero-pad to 6 |
 | Account Number | 42921172 | `bankAccount1_AccountNumber` | |

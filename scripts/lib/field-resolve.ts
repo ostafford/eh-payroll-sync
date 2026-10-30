@@ -40,7 +40,21 @@ const prefer = (fields: FieldDef[], keep: (f: FieldDef) => boolean): FieldDef[] 
  * One field's choice: a Connecteam field ID, not used at all, or to be made by
  * create-fields (which then saves the new field's ID in its place).
  */
-export type FieldPick = { id: number } | { skip: true } | { create: true };
+export type FieldPick = { id: number; options?: OptionMap } | { skip: true } | { create: true };
+
+/**
+ * A dropdown's options, as the client named them, to what the sync sends (#112):
+ * an EH value, "yes"/"no" for a tax question, or null for "not synced: the
+ * employee gets a Correction message".
+ */
+export type OptionMap = Record<string, string | null>;
+
+/** The options the sync sends on: "not synced" ones are left out, so the sync raises a Correction. */
+export const syncedOptions = (options: OptionMap): Record<string, string> =>
+  Object.fromEntries(Object.entries(options).filter((e): e is [string, string] => e[1] !== null));
+
+/** A pick's option map, if it has one. */
+export const optionsOf = (pick: FieldPick | undefined): OptionMap | undefined => (pick && "id" in pick ? pick.options : undefined);
 
 /** The human's choices, by FieldSpec name (clients/<client>/field-picks.json). */
 export type FieldPicks = Record<string, FieldPick>;
