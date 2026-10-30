@@ -25,6 +25,8 @@ export interface FieldPlan {
   missing: Array<{ spec: FieldSpec; body: CreateBody; categoryNote?: string }>;
   /** More than one candidate, or a picked field since deleted: never created until a human picks. */
   undecided: Array<{ spec: FieldSpec; reason: "ambiguous" | "stalePick" }>;
+  /** The human chose not to use these: never created. */
+  skipped: FieldSpec[];
 }
 
 export function planMissingFields(
@@ -32,12 +34,16 @@ export function planMissingFields(
   categories: Array<{ id: number; name: string }>,
   picks: FieldPicks = {},
 ): FieldPlan {
-  const plan: FieldPlan = { found: [], missing: [], undecided: [] };
+  const plan: FieldPlan = { found: [], missing: [], undecided: [], skipped: [] };
   const defs = existing.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type }));
   for (const spec of FIELD_SPEC.filter((s) => s.create)) {
     const resolved = resolveField(spec, defs, picks);
     if (resolved.status === "matched") {
       plan.found.push({ spec, field: existing.find((f) => f.customFieldId === resolved.field.id)! });
+      continue;
+    }
+    if (resolved.status === "skipped") {
+      plan.skipped.push(spec);
       continue;
     }
     if (resolved.status !== "none") {

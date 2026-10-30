@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { listCustomFieldDefinitions } from "./lib/connecteam-custom-fields.js";
 import { planMissingFields } from "./lib/create-fields.js";
-import { fieldPicksPath, loadFieldPicks } from "./lib/field-picks.js";
+import { fieldPicksPath, loadFieldPicks, saveFieldPicks } from "./lib/field-picks.js";
 
 // --- env -----------------------------------------------------------------
 
@@ -78,10 +78,13 @@ async function main(): Promise<void> {
     listCustomFieldDefinitions(ctGet),
     ctGet("/users/v1/custom-field-categories").then((b) => (b?.data?.categories ?? []) as Array<{ id: number; name: string }>),
   ]);
-  const { found, missing, undecided } = planMissingFields(fields, categories, loadFieldPicks(fieldPicksPath("self")));
+  const picksPath = fieldPicksPath("self");
+  const picks = loadFieldPicks(picksPath);
+  const { found, missing, undecided, skipped } = planMissingFields(fields, categories, picks);
 
   console.log(
-    `Connecteam already has ${found.length} of the ${found.length + missing.length + undecided.length} custom fields the sync needs.`,
+    `Connecteam already has ${found.length} of the ${found.length + missing.length + undecided.length} custom fields the sync needs` +
+      (skipped.length ? ` (${skipped.length} skipped: ${skipped.map((s) => s.name).join(", ")}).` : "."),
   );
   for (const { spec, reason } of undecided) {
     const why = reason === "ambiguous" ? "more than one of your fields could be it" : "the field picked for it was deleted";
@@ -108,8 +111,14 @@ async function main(): Promise<void> {
   for (const { spec, body } of missing) {
     try {
       const res = await ctPost("/users/v1/custom-fields", { customFields: [body] });
-      console.log(`  + created "${spec.name}" (id ${res?.data?.customFields?.[0]?.id ?? "?"})`);
+      const id = res?.data?.customFields?.[0]?.id;
+      console.log(`  + created "${spec.name}" (id ${id ?? "?"})`);
       created.push(spec.name);
+      // Picked as "create": point the pick at the new field, so it's found by ID from now on.
+      if (spec.name in picks && Number.isInteger(id)) {
+        picks[spec.name] = { id };
+        saveFieldPicks(picksPath, picks);
+      }
     } catch (err) {
       console.error(`  ! could not create "${spec.name}": ${err instanceof Error ? err.message : String(err)}`);
     }

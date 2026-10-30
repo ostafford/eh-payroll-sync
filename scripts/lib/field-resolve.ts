@@ -17,7 +17,9 @@ export type Resolution =
   /** More than one field could be it: a human picks (never the first by API order). */
   | { status: "ambiguous"; candidates: FieldDef[] }
   /** The picked field no longer exists (deleted): a human picks again. */
-  | { status: "stalePick"; id: number };
+  | { status: "stalePick"; id: number }
+  /** The human chose not to use this field (recommended and not-synced fields only). */
+  | { status: "skipped" };
 
 /** Types that carry the same value shape (both arrive as "DD/MM/YYYY"). */
 export const COMPATIBLE: Record<string, string[]> = { birthday: ["birthday", "date"], date: ["date", "birthday"] };
@@ -34,11 +36,20 @@ const prefer = (fields: FieldDef[], keep: (f: FieldDef) => boolean): FieldDef[] 
   return kept.length ? kept : fields;
 };
 
+/**
+ * One field's choice: a Connecteam field ID, not used at all, or to be made by
+ * create-fields (which then saves the new field's ID in its place).
+ */
+export type FieldPick = { id: number } | { skip: true } | { create: true };
+
 /** The human's choices, by FieldSpec name (clients/<client>/field-picks.json). */
-export type FieldPicks = Record<string, { id: number }>;
+export type FieldPicks = Record<string, FieldPick>;
 
 export function resolveField(spec: FieldSpec, fields: FieldDef[], picks: FieldPicks = {}): Resolution {
   const pick = picks[spec.name];
+  if (pick && "skip" in pick) return { status: "skipped" };
+  // Not made yet: no name match stands in for it, so create-fields makes it.
+  if (pick && "create" in pick) return { status: "none" };
   if (pick) {
     const field = fields.find((f) => f.id === pick.id);
     return field ? { status: "matched", field, picked: true } : { status: "stalePick", id: pick.id };
