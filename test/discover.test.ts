@@ -161,6 +161,17 @@ describe("buildFieldMapDraft", () => {
     expect(unmapped.map((u) => u.id)).toEqual([40, 41]);
   });
 
+  it("maps nothing from a skipped field, even one whose name matches", () => {
+    const { draft, unmapped } = buildFieldMapDraft({
+      ...base,
+      fields: [{ customFieldId: 50, name: "Title", type: "str" }],
+      picks: { Title: { skip: true } },
+    });
+
+    expect(draft.fields.filter((f) => f.eh === "jobTitle")).toEqual([]);
+    expect(unmapped.map((u) => u.id)).toEqual([50]);
+  });
+
   it("lists unrecognised fields for review", () => {
     const { unmapped } = buildFieldMapDraft({
       ...base,

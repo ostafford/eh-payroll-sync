@@ -52,6 +52,11 @@ describe("resolveField", () => {
     expect(resolveField(spec("TFN"), fields, { TFN: { id: 99 } })).toEqual({ status: "stalePick", id: 99 });
   });
 
+  it("a saved skip wins over a name match", () => {
+    const fields = [{ id: 1, name: "Suburb", type: "str" }];
+    expect(resolveField(spec("Suburb"), fields, { Suburb: { skip: true } })).toEqual({ status: "skipped" });
+  });
+
   it("finds nothing when no name matches", () => {
     expect(resolveField(spec("TFN"), [{ id: 1, name: "Suburb", type: "str" }])).toEqual({ status: "none" });
   });

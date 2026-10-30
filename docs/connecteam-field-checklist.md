@@ -110,8 +110,13 @@ One account only, set to 100% and paid electronically.
 
 The wizard's field check (`npm run field-check`, its "Connecteam field check"
 stage) reads the client's Connecteam fields and gives each one a result. A 🔴
-required field that is missing or the wrong type stops the wizard until it is
-fixed; everything else is a warning.
+required field that is missing, the wrong type or not yet picked stops the
+wizard until it is fixed; everything else is a warning.
+
+Just before it, the field picker (`npm run pick-fields`) shows which of the
+client's fields was matched to each one. A client's field can have any name: if
+the check didn't recognise it, pick it there. Choices are saved by field ID in
+`clients/self/field-picks.json`.
 
 | Result | Meaning | Why it matters | How to fix |
 |---|---|---|---|
@@ -119,6 +124,9 @@ fixed; everything else is a warning.
 | ❌ **Missing** | No matching field in Connecteam | 🔴 required: every employee gets a Correction message and isn't created in EH. 🟡 recommended: the EH record has a gap Create it with `npm run create-fields` (the wizard's Connecteam custom fields stage), then **add it to the onboarding pack** |
 | ❌ **Not in the pack** | The field exists but is excluded from the onboarding pack | Employees are never asked for it, so it's always blank | Open the onboarding pack's settings in Connecteam and include the field |
 | ⚠️ **Wrong type** | E.g. Birthday is a text field instead of a date | The value can't be converted, so the sync rejects it | Connecteam can't change a field's type, only rename or delete it. Create a new field of the right type, include it in the pack, and delete or rename the old one |
+| ❌ **More than one match** | Two of the client's fields could be it, e.g. a new one and an old one not renamed `(OLD)` | The sync won't guess which one employees fill in | Pick one with `npm run pick-fields` |
+| ❌ **Picked field deleted** | The field chosen earlier no longer exists | The sync can't read a deleted field | Pick another with `npm run pick-fields` |
+| ➖ **Skipped** | An optional field the person running the wizard chose not to use | The EH record has a gap a payroll admin fills in by hand | Nothing, or pick a field with `npm run pick-fields` (remove its entry from `field-picks.json` to be asked again) |
 | ⚠️ **Dropdown options don't match** | E.g. Employee Status has `Full time` instead of `FullTime` | EH rejects anything it doesn't recognise | Rename the options to the exact values above, or map them in the field map |
 | ⚠️ **Editable by employees** | The award field can be edited by the employee | An employee could pick their own pay classification | Set the field to admin-only |
 | ⚠️ **No answers yet** | The field exists, but nobody has filled it in | Not an error for new fields. Existing approved employees will sync with this gap | Ask existing employees to complete the field, then re-approve |

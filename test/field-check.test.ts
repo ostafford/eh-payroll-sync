@@ -29,14 +29,14 @@ describe("checkFields", () => {
   it("passes the demo account: everything found, nothing blocking", () => {
     const rows = checkFields(demoRaw());
     expect(rows.filter((r) => r.result.status !== "found")).toEqual([]);
-    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0 });
+    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 0 });
   });
 
   it("a missing required field blocks; a missing recommended one only warns", () => {
     const rows = checkFields(without("TFN").filter((f) => f.name !== "Suburb"));
     expect(row(rows, "TFN")).toMatchObject({ level: "required", blocking: true, result: { status: "missing" } });
     expect(row(rows, "Suburb")).toMatchObject({ level: "recommended", blocking: false, result: { status: "missing" } });
-    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1 });
+    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1, skipped: 0 });
   });
 
   it("flags a wrong type, and blocks when the field is required", () => {
@@ -105,6 +105,15 @@ describe("checkFields", () => {
   it("reports a picked field that was since deleted, and blocks if required", () => {
     const rows = checkFields(demoRaw(), { TFN: { id: 99 } });
     expect(row(rows, "TFN")).toMatchObject({ blocking: true, result: { status: "stalePick", id: 99 } });
+  });
+
+  it("a skipped recommended field is neither missing nor a warning", () => {
+    const rows = checkFields(without("Suburb"), { Suburb: { skip: true } });
+    expect(row(rows, "Suburb")).toMatchObject({ blocking: false, result: { status: "skipped" } });
+    expect(summarise(rows)).toEqual({ ok: 27, blocking: 0, warnings: 0, skipped: 1 });
+    expect(renderFieldCheck(rows, { color: false }).trim().split("\n").at(-1)).toBe(
+      "27 ok · 0 required missing or wrong · 0 warnings · 1 skipped",
+    );
   });
 
   it("warns when employees can edit the award field", () => {

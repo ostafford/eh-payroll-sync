@@ -14,6 +14,7 @@
     "pay-defaults": "tsx scripts/pay-defaults.ts",
     "create-fields": "tsx scripts/create-fields.ts",
     "field-check": "tsx scripts/field-check.ts",
+    "pick-fields": "tsx scripts/pick-fields.ts",
     "preflight": "tsx scripts/preflight.ts",
     "validate-field-map": "tsx scripts/validate-field-map.ts",
     "provision-classification-field": "tsx scripts/provision-award-classification-field.ts",

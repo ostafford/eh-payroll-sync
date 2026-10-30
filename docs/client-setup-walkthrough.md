@@ -53,7 +53,7 @@ webhook, and up to 15 for Cloudflare to start the first approval check
 | 5 | Connecteam: onboarding pack | Picks the pack from the list | A webhook secret is created (or kept, on a re-run) | 1 min |
 | 6 | Employment Hero: API key | Creates a key, pastes it (hidden) | — | 1–2 min |
 | 7 | Award classifications | Says whether they pay under an award; confirms it's installed in EH | The classifications imported into the "EH Pay Rate Template" dropdown (or "Nothing to do" on a re-run) | 1 min |
-| 8 | Connecteam field check | Reads the table; creates missing fields if offered; **attaches new fields to the onboarding pack** by hand | `28 ok · 0 required missing or wrong · 0 warnings` when everything is in place | 1–5 min |
+| 8 | Connecteam field check | Confirms the matched fields (one "y"), picks any it asks about; reads the table; creates missing fields if offered; **attaches new fields to the onboarding pack** by hand | `28 ok · 0 required missing or wrong · 0 warnings` when everything is in place | 1–5 min |
 | 9 | Field map | Nothing, unless their fields changed since a previous run | A new client: "Built your field map from your Connecteam fields". A re-run: "Nothing to change", or the differences to copy across | 1 min |
 | 10 | Pay-run settings | Picks pay schedule, location and primary pay category from their EH lists, then the pay rate source | "Saved to …", then the tests pass | 1–2 min |
 | 11 | Provision Cloudflare resources | Confirms (the only question in this stage) | ✓ Database created · ✓ Database set up (4 steps) · ✓ Queues ready | 1 min |

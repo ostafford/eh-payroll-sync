@@ -89,6 +89,17 @@ describe("planMissingFields", () => {
     ]);
   });
 
+  it("creates a field picked as 'create', even when a wrong-type field matches the name", () => {
+    const plan = planMissingFields([{ customFieldId: 8, name: "TFN", type: "number" }], CATEGORIES, { TFN: { create: true } });
+    expect(plan.missing.map((m) => m.spec.name)).toContain("TFN");
+  });
+
+  it("never creates a skipped field", () => {
+    const plan = planMissingFields([], CATEGORIES, { Suburb: { skip: true } });
+    expect(plan.missing.map((m) => m.spec.name)).not.toContain("Suburb");
+    expect(plan.skipped.map((s) => s.name)).toEqual(["Suburb"]);
+  });
+
   it("files a field under the first category when its own doesn't exist, and says so", () => {
     const { missing } = planMissingFields([], [{ id: 77, name: "General" }]);
     const tfn = missing.find((m) => m.spec.name === "TFN")!;
