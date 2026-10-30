@@ -9,6 +9,7 @@
  * mean reading employees' answers). The wizard reminds the human instead.
  */
 import { AWARD_FIELD_NAME, findAwardField } from "./award-field.js";
+import { compatibleType, resolveField, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC, type FieldSpec, type Group } from "./field-spec.js";
 
 export type Level = "required" | "recommended" | "admin" | "notSynced";
@@ -18,7 +19,11 @@ export type CheckResult =
   | { status: "missing" }
   | { status: "wrongType"; got: string; want: string }
   | { status: "options"; unknown: string[]; absent: string[] }
-  | { status: "userEditable" };
+  | { status: "userEditable" }
+  /** More than one of the client's fields could be it: the human picks. */
+  | { status: "ambiguous"; candidates: Array<{ id: number; name: string }> }
+  /** The field picked earlier no longer exists. */
+  | { status: "stalePick"; id: number };
 
 export interface CheckRow {
   group: Group | "Award";
@@ -27,14 +32,11 @@ export interface CheckRow {
   /** The client's field it matched, if any. */
   field?: { id: number; name: string };
   result: CheckResult;
-  /** A required field missing or of the wrong type: the wizard can't continue. */
+  /** A required field missing, of the wrong type, or not yet decided: the wizard can't continue. */
   blocking: boolean;
   /** Options the field should have (for the fix text). */
   options?: string[];
 }
-
-/** Types that carry the same value shape (both arrive as "DD/MM/YYYY"). */
-const COMPATIBLE: Record<string, string[]> = { birthday: ["birthday", "date"], date: ["date", "birthday"] };
 
 /** As docs/connecteam-field-checklist.md's key: only the award field is "admin". */
 const levelOf = (spec: FieldSpec): Level =>
@@ -45,7 +47,7 @@ const liveOptions = (f: any): string[] =>
 
 function checkOne(spec: FieldSpec, f: any): CheckResult {
   if (!f) return { status: "missing" };
-  if (!(COMPATIBLE[spec.ct.type] ?? [spec.ct.type]).includes(f.type)) return { status: "wrongType", got: f.type, want: spec.ct.type };
+  if (!compatibleType(spec, f.type)) return { status: "wrongType", got: f.type, want: spec.ct.type };
   if (spec.ct.options) {
     // As the sync reads them: Yes/No answers in any case, mapped values exactly.
     const key = spec.target.kind === "taxDeclaration" ? (o: string) => o.trim().toLowerCase() : (o: string) => o;
@@ -58,19 +60,29 @@ function checkOne(spec: FieldSpec, f: any): CheckResult {
   return { status: "found" };
 }
 
-/** `raw`: `GET /users/v1/custom-fields` rows (id, name, type, dropdownOptions, isEditableForUsers). */
-export function checkFields(raw: any[]): CheckRow[] {
+/**
+ * `raw`: `GET /users/v1/custom-fields` rows (id, name, type, dropdownOptions, isEditableForUsers).
+ * `picks`: the human's choices (./field-picks.ts), read before any name match.
+ */
+export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
+  const defs = raw.map((x) => ({ id: x?.id, name: String(x?.name ?? ""), type: String(x?.type ?? "") }));
   const rows: CheckRow[] = FIELD_SPEC.filter((s) => s.create).map((spec) => {
-    const f = raw.find((x) => spec.match.test(String(x?.name ?? "")));
+    const resolved = resolveField(spec, defs, picks);
+    const f = resolved.status === "matched" ? raw.find((x) => x?.id === resolved.field.id) : undefined;
     const level = levelOf(spec);
-    const result = checkOne(spec, f);
+    const result: CheckResult =
+      resolved.status === "ambiguous"
+        ? { status: "ambiguous", candidates: resolved.candidates.map(({ id, name }) => ({ id, name })) }
+        : resolved.status === "stalePick"
+          ? { status: "stalePick", id: resolved.id }
+          : checkOne(spec, f);
     return {
       group: spec.group,
       name: spec.name,
       level,
       ...(f ? { field: { id: f.id, name: String(f.name) } } : {}),
       result,
-      blocking: level === "required" && (result.status === "missing" || result.status === "wrongType"),
+      blocking: level === "required" && ["missing", "wrongType", "ambiguous", "stalePick"].includes(result.status),
       ...(spec.ct.options ? { options: spec.ct.options } : {}),
     };
   });
@@ -150,6 +162,16 @@ function explain(r: CheckRow): { why: string; fix: string } {
         fix: `In Connecteam, ${parts.join("; and ")}. (Or map them in the field map.)`,
       };
     }
+    case "ambiguous":
+      return {
+        why: `More than one of your fields could be it (${res.candidates.map((c) => `"${c.name}"`).join(", ")}), so the sync won't guess.`,
+        fix: `Record which one in clients/self/field-picks.json, e.g. { "${r.name}": { "id": ${res.candidates[0]?.id} } }.`,
+      };
+    case "stalePick":
+      return {
+        why: `The field picked for this earlier (id ${res.id}) no longer exists in Connecteam.`,
+        fix: `Pick another in clients/self/field-picks.json, or remove the "${r.name}" entry to match by name again.`,
+      };
     default:
       return { why: "", fix: "" };
   }
@@ -165,6 +187,8 @@ const LABEL: Record<CheckResult["status"], string> = {
   wrongType: "wrong type",
   options: "options don't match",
   userEditable: "editable by employees",
+  ambiguous: "more than one match",
+  stalePick: "picked field deleted",
 };
 const LEVEL: Record<Level, string> = { required: "required", recommended: "recommended", admin: "admin-only", notSynced: "not synced" };
 

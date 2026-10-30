@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { listRawCustomFields } from "./lib/connecteam-custom-fields.js";
 import { checkFields, renderFieldCheck, summarise } from "./lib/field-check.js";
+import { fieldPicksPath, loadFieldPicks } from "./lib/field-picks.js";
 
 // --- env -----------------------------------------------------------------
 
@@ -50,7 +51,7 @@ async function main(): Promise<void> {
   loadDevVars();
   if (!process.env.CT_API_KEY) throw new Error("CT_API_KEY must be set (in .dev.vars or the shell)");
 
-  const rows = checkFields(await listRawCustomFields(ctGet));
+  const rows = checkFields(await listRawCustomFields(ctGet), loadFieldPicks(fieldPicksPath("self")));
   const color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
   console.log(renderFieldCheck(rows, { color }));
   if (summarise(rows).blocking > 0) process.exitCode = 2;
