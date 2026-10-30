@@ -52,7 +52,17 @@ export const fieldRule = z
   })
   .strict();
 
-const yesNoSource = z.object({ customFieldId: z.number().int().positive() }).strict();
+const yesNoSource = z
+  .object({
+    customFieldId: z.number().int().positive(),
+    /**
+     * The client's own answer wording (#112), e.g. "Yes, claim tax free threshold" -> "yes".
+     * When set, only these answers count; any other (N/A, TBC) is held for a Correction.
+     * Absent: the answer must be Yes or No, in any case.
+     */
+    options: z.record(z.enum(["yes", "no"])).optional(),
+  })
+  .strict();
 
 export const rules = z
   .object({

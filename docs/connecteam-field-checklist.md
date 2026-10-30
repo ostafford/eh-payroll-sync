@@ -127,7 +127,7 @@ the check didn't recognise it, pick it there. Choices are saved by field ID in
 | ❌ **More than one match** | Two of the client's fields could be it, e.g. a new one and an old one not renamed `(OLD)` | The sync won't guess which one employees fill in | Pick one with `npm run pick-fields` |
 | ❌ **Picked field deleted** | The field chosen earlier no longer exists | The sync can't read a deleted field | Pick another with `npm run pick-fields` |
 | ➖ **Skipped** | An optional field the person running the wizard chose not to use | The EH record has a gap a payroll admin fills in by hand | Nothing, or pick a field with `npm run pick-fields` (remove its entry from `field-picks.json` to be asked again) |
-| ⚠️ **Dropdown options don't match** | E.g. Employee Status has `Full time` instead of `FullTime` | EH rejects anything it doesn't recognise | Rename the options to the exact values above, or map them in the field map |
+| ⚠️ **Dropdown options don't match** | E.g. Employee Status has `Full time` instead of `FullTime` | EH rejects anything it doesn't recognise. 🔴 Blocks on a required field (Employee Status) | Map each option to an EH value, or to "not synced" (the employee gets a Correction message), with `npm run pick-fields`. Or rename the options in Connecteam to the exact values above |
 | ⚠️ **Editable by employees** | The award field can be edited by the employee | An employee could pick their own pay classification | Set the field to admin-only |
 | ⚠️ **No answers yet** | The field exists, but nobody has filled it in | Not an error for new fields. Existing approved employees will sync with this gap | Ask existing employees to complete the field, then re-approve |
 

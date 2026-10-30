@@ -9,7 +9,7 @@
  * mean reading employees' answers). The wizard reminds the human instead.
  */
 import { AWARD_FIELD_NAME, findAwardField } from "./award-field.js";
-import { compatibleType, resolveField, type FieldPicks } from "./field-resolve.js";
+import { compatibleType, optionsOf, resolveField, type FieldPicks, type OptionMap } from "./field-resolve.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec, type Group } from "./field-spec.js";
 
 export type Level = "required" | "recommended" | "admin" | "notSynced";
@@ -44,13 +44,20 @@ export interface CheckRow {
 const levelOf = (spec: FieldSpec): Level =>
   spec.target.kind === "none" ? "notSynced" : requiredForSync(spec) ? "required" : "recommended";
 
-const liveOptions = (f: any): string[] =>
+export const liveOptions = (f: any): string[] =>
   (f?.dropdownOptions ?? []).filter((o: any) => !o.isDeleted).map((o: any) => String(o.value));
 
-function checkOne(spec: FieldSpec, f: any): CheckResult {
+function checkOne(spec: FieldSpec, f: any, optionMap?: OptionMap): CheckResult {
   if (!f) return { status: "missing" };
   if (!compatibleType(spec, f.type)) return { status: "wrongType", got: f.type, want: spec.ct.type };
-  if (spec.ct.options) {
+  if (spec.ct.options && optionMap) {
+    // Every live option decided in the picker; a Yes/No question still needs both answers reachable.
+    const have = liveOptions(f);
+    const unknown = have.filter((o) => !(o in optionMap));
+    const reached = have.map((o) => optionMap[o]?.toLowerCase());
+    const absent = spec.ct.allOptionsRequired ? spec.ct.options.filter((o) => !reached.includes(o.toLowerCase())) : [];
+    if (unknown.length || absent.length) return { status: "options", unknown, absent };
+  } else if (spec.ct.options) {
     // As the sync reads them: Yes/No answers in any case, mapped values exactly.
     const key = spec.target.kind === "taxDeclaration" ? (o: string) => o.trim().toLowerCase() : (o: string) => o;
     const want = spec.ct.options.map(key);
@@ -79,14 +86,15 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
           ? { status: "stalePick", id: resolved.id }
           : resolved.status === "skipped"
             ? { status: "skipped" }
-            : checkOne(spec, f);
+            : checkOne(spec, f, optionsOf(picks[spec.name]));
     return {
       group: spec.group,
       name: spec.name,
       level,
       ...(f ? { field: { id: f.id, name: String(f.name) } } : {}),
       result,
-      blocking: level === "required" && ["missing", "wrongType", "ambiguous", "stalePick"].includes(result.status),
+      // An unmapped option on a required field gets every employee who picks it a Correction (#112).
+      blocking: level === "required" && ["missing", "wrongType", "ambiguous", "stalePick", "options"].includes(result.status),
       ...(spec.ct.options ? { options: spec.ct.options } : {}),
     };
   });
@@ -164,7 +172,7 @@ function explain(r: CheckRow): { why: string; fix: string } {
       if (res.absent.length) parts.push(`add the option(s) ${res.absent.map((o) => `"${o}"`).join(", ")}`);
       return {
         why: "EH only accepts these exact values, so any other option gets the employee a Correction message.",
-        fix: `In Connecteam, ${parts.join("; and ")}. (Or map them in the field map.)`,
+        fix: `Map each option with npm run pick-fields (the wizard runs it before this check). Or in Connecteam, ${parts.join("; and ")}.`,
       };
     }
     case "ambiguous":

@@ -3,7 +3,8 @@
  * chose for each field the sync needs, by FieldSpec name and field ID (#112).
  * field-check, create-fields and discover read it before matching by name.
  *
- *   { "Claim tax-free threshold?": { "id": 43566219 }, "Title": { "skip": true }, "BSB": { "create": true } }
+ *   { "Claim tax-free threshold?": { "id": 43566219, "options": { "Yes, claim tax free threshold": "yes", "TBC": null } },
+ *     "Title": { "skip": true }, "BSB": { "create": true } }
  *
  * `create` is a choice still waiting on create-fields, which replaces it with
  * the new field's ID.
@@ -32,6 +33,12 @@ export function loadFieldPicks(path: string): FieldPicks {
     }
     const id = (pick as any)?.id;
     if (!Number.isInteger(id) || id <= 0) throw new Error(`${path}: "${name}" needs { "id": <Connecteam field id> }, { "skip": true } or { "create": true }`);
+    const options = (pick as any).options;
+    if (options === undefined) continue;
+    if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error(`${path}: "${name}".options must be an object`);
+    for (const [option, to] of Object.entries(options)) {
+      if (to !== null && typeof to !== "string") throw new Error(`${path}: "${name}" option "${option}" must map to a value or null (not synced)`);
+    }
   }
   return raw as FieldPicks;
 }

@@ -174,6 +174,12 @@ Picks are saved by Connecteam field ID, and `field-check`, `create-fields` and
 field. A field the client already has under their own name (e.g. "Tax File Number"
 for "TFN") is matched and left alone, so re-running never duplicates one. A
 re-run of the picker asks only about fields not yet decided.
+
+For a picked dropdown whose options aren't all values EH takes (e.g. Employee
+Status `Full-time | PBV`), the picker asks what each option sends: an EH value,
+or "not synced" (the employee gets a Correction message). Tax questions map to
+Yes / No the same way. The choices are saved with the pick, go into the draft
+field map, and `discover` writes them into a field map it kept.
 **Then attach each new field to the onboarding pack in the Connecteam UI** (no
 API for that); the script prints the exact list. A field not in the pack is
 never asked, so it is always blank.

@@ -33,7 +33,9 @@ Running several clients from one deployment instead? Add each under
 `FIELD_MAP_CLIENT=<slug>`.
 
 **`field-picks.json`** (#112) records which of the client's own Connecteam
-fields feeds each field the sync needs: `{ "id": 43566219 }`, `{ "skip": true }`
+fields feeds each field the sync needs: `{ "id": 43566219 }` (plus, for a
+dropdown, `"options": { "Full-time": "FullTime", "PBV": null }`, where `null`
+means not synced: a Correction message), `{ "skip": true }`
 (optional fields only), or `{ "create": true }` (waiting on `create-fields`,
 which swaps in the new field's ID). The wizard's picker (`npm run pick-fields`)
 writes it. The field check, `create-fields` and `discover` all read it before

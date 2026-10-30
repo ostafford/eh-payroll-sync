@@ -48,11 +48,11 @@ describe("checkFields", () => {
     expect(row(checkFields(replace("Birthday", { type: "date" })), "Birthday").result.status).toBe("found");
   });
 
-  it("flags dropdown options EH won't recognise", () => {
+  it("flags dropdown options EH won't recognise, blocking on a required field", () => {
     const rows = checkFields(
       replace("Employee Status", { dropdownOptions: ["Full time", "Casual"].map((value) => ({ value, isDeleted: false })) }),
     );
-    expect(row(rows, "Employee Status")).toMatchObject({ blocking: false, result: { status: "options", unknown: ["Full time"], absent: [] } });
+    expect(row(rows, "Employee Status")).toMatchObject({ blocking: true, result: { status: "options", unknown: ["Full time"], absent: [] } });
   });
 
   it("ignores deleted options", () => {
@@ -114,6 +114,31 @@ describe("checkFields", () => {
     expect(renderFieldCheck(rows, { color: false }).trim().split("\n").at(-1)).toBe(
       "27 ok · 0 required missing or wrong · 0 warnings · 1 skipped",
     );
+  });
+
+  describe("with the client's options mapped (#112)", () => {
+    const status = ["Full-time", "Part-time", "Casual", "PBV", "Contractor"];
+    const raw = replace("Employee Status", { dropdownOptions: status.map((value) => ({ value, isDeleted: false })) });
+    const mapped = { "Full-time": "FullTime", "Part-time": "PartTime", Casual: "Casual", PBV: null, Contractor: null };
+
+    it("every option mapped or marked not synced: found", () => {
+      const rows = checkFields(raw, { "Employee Status": { id: 42920839, options: mapped } });
+      expect(row(rows, "Employee Status").result.status).toBe("found");
+    });
+
+    it("an option left unmapped on a required field blocks", () => {
+      const { Contractor: _, ...partial } = mapped;
+      const rows = checkFields(raw, { "Employee Status": { id: 42920839, options: partial } });
+      expect(row(rows, "Employee Status")).toMatchObject({ blocking: true, result: { status: "options", unknown: ["Contractor"], absent: [] } });
+    });
+
+    it("a Yes/No question still needs an answer for both Yes and No", () => {
+      const opts = ["Yes, claim tax free threshold", "N/A", "TBC"].map((value) => ({ value, isDeleted: false }));
+      const rows = checkFields(replace("Claim tax-free threshold?", { dropdownOptions: opts }), {
+        "Claim tax-free threshold?": { id: 42923276, options: { "Yes, claim tax free threshold": "yes", "N/A": null, TBC: null } },
+      });
+      expect(row(rows, "Claim tax-free threshold?").result).toEqual({ status: "options", unknown: [], absent: ["No"] });
+    });
   });
 
   it("warns when employees can edit the award field", () => {
