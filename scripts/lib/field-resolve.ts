@@ -25,7 +25,7 @@ export type Resolution =
 export const COMPATIBLE: Record<string, string[]> = { birthday: ["birthday", "date"], date: ["date", "birthday"] };
 
 export const compatibleType = (spec: FieldSpec, type: string): boolean =>
-  (COMPATIBLE[spec.ct.type] ?? [spec.ct.type]).includes(type);
+  [...(COMPATIBLE[spec.ct.type] ?? [spec.ct.type]), ...(spec.ct.alsoAccepts ?? [])].includes(type);
 
 /** A field the client has retired but not deleted, e.g. "Postcode (OLD)". */
 const RETIRED = /\(old\)|\bold\b|deprecated/i;

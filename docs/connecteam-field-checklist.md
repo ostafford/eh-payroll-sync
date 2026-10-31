@@ -102,7 +102,13 @@ One account only, set to 100% and paid electronically.
 |---|---|
 | Direct manager | Gets a copy of the Correction message on an employee's 3rd failed attempt |
 
-**Total:** 28 custom fields (27 plus the award dropdown), plus email and phone from the profile. The wizard creates any of the 27 that are missing (`npm run create-fields`, #55) and the award dropdown in its own stage.
+## ⚪ Optional, only if the client has it
+
+| Connecteam field | Type | EH field | Notes |
+|---|---|---|---|
+| Standard hours per week (any name) | Text or number, admin-only | `hoursPerWeek` | Sent with the employee's pay settings, overriding the default hours. Never created: the field picker asks which field holds it, or Skip (#118) |
+
+**Total:** 28 custom fields (27 plus the award dropdown), plus email and phone from the profile, and the optional hours field. The wizard creates any of the 27 that are missing (`npm run create-fields`, #55) and the award dropdown in its own stage.
 
 ---
 

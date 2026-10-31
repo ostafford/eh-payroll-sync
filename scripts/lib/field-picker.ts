@@ -41,7 +41,7 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
 
   const auto: Array<{ spec: FieldSpec; field: FieldDef }> = [];
   const undecided: Array<{ spec: FieldSpec; why: string }> = [];
-  for (const spec of FIELD_SPEC.filter((s) => s.create)) {
+  for (const spec of FIELD_SPEC) {
     const r = resolveField(spec, fields, out);
     const pick = out[spec.name];
     if (r.status === "skipped" || (pick && "create" in pick)) continue;
@@ -170,6 +170,7 @@ async function askOne(spec: FieldSpec, why: string, fields: FieldDef[], io: Pick
   const isSuggested = (c: Choice) => c.kind === "use" && c.field.id === suggested?.id;
   const choices = [...all.filter(isSuggested), ...all.filter((c) => !isSuggested(c))];
   io.print("", `${spec.name} (${requiredForSync(spec) ? "required" : "optional"}): ${why}`);
+  if (spec.about) io.print(`  ${spec.about}`);
   choices.forEach((c, i) => io.print(`  ${String(i + 1).padStart(2)}) ${choiceLabel(spec, c)}`));
   for (;;) {
     const n = Number((await io.ask(`Pick 1-${choices.length} for ${spec.name}: `)).trim());
