@@ -9,8 +9,8 @@
  * mean reading employees' answers). The wizard reminds the human instead.
  */
 import { AWARD_FIELD_NAME, findAwardField } from "./award-field.js";
-import { compatibleType, resolveField, type FieldPicks } from "./field-resolve.js";
-import { FIELD_SPEC, type FieldSpec, type Group } from "./field-spec.js";
+import { compatibleType, optionsOf, resolveField, type FieldPicks, type OptionMap } from "./field-resolve.js";
+import { FIELD_SPEC, requiredForSync, type FieldSpec, type Group } from "./field-spec.js";
 
 export type Level = "required" | "recommended" | "admin" | "notSynced";
 
@@ -23,7 +23,9 @@ export type CheckResult =
   /** More than one of the client's fields could be it: the human picks. */
   | { status: "ambiguous"; candidates: Array<{ id: number; name: string }> }
   /** The field picked earlier no longer exists. */
-  | { status: "stalePick"; id: number };
+  | { status: "stalePick"; id: number }
+  /** The human chose not to use it (never a required field). */
+  | { status: "skipped" };
 
 export interface CheckRow {
   group: Group | "Award";
@@ -40,15 +42,22 @@ export interface CheckRow {
 
 /** As docs/connecteam-field-checklist.md's key: only the award field is "admin". */
 const levelOf = (spec: FieldSpec): Level =>
-  spec.target.kind === "none" ? "notSynced" : spec.target.kind === "field" && spec.target.required ? "required" : "recommended";
+  spec.target.kind === "none" ? "notSynced" : requiredForSync(spec) ? "required" : "recommended";
 
-const liveOptions = (f: any): string[] =>
+export const liveOptions = (f: any): string[] =>
   (f?.dropdownOptions ?? []).filter((o: any) => !o.isDeleted).map((o: any) => String(o.value));
 
-function checkOne(spec: FieldSpec, f: any): CheckResult {
+function checkOne(spec: FieldSpec, f: any, optionMap?: OptionMap): CheckResult {
   if (!f) return { status: "missing" };
   if (!compatibleType(spec, f.type)) return { status: "wrongType", got: f.type, want: spec.ct.type };
-  if (spec.ct.options) {
+  if (spec.ct.options && optionMap) {
+    // Every live option decided in the picker; a Yes/No question still needs both answers reachable.
+    const have = liveOptions(f);
+    const unknown = have.filter((o) => !(o in optionMap));
+    const reached = have.map((o) => optionMap[o]?.toLowerCase());
+    const absent = spec.ct.allOptionsRequired ? spec.ct.options.filter((o) => !reached.includes(o.toLowerCase())) : [];
+    if (unknown.length || absent.length) return { status: "options", unknown, absent };
+  } else if (spec.ct.options) {
     // As the sync reads them: Yes/No answers in any case, mapped values exactly.
     const key = spec.target.kind === "taxDeclaration" ? (o: string) => o.trim().toLowerCase() : (o: string) => o;
     const want = spec.ct.options.map(key);
@@ -75,14 +84,17 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
         ? { status: "ambiguous", candidates: resolved.candidates.map(({ id, name }) => ({ id, name })) }
         : resolved.status === "stalePick"
           ? { status: "stalePick", id: resolved.id }
-          : checkOne(spec, f);
+          : resolved.status === "skipped"
+            ? { status: "skipped" }
+            : checkOne(spec, f, optionsOf(picks[spec.name]));
     return {
       group: spec.group,
       name: spec.name,
       level,
       ...(f ? { field: { id: f.id, name: String(f.name) } } : {}),
       result,
-      blocking: level === "required" && ["missing", "wrongType", "ambiguous", "stalePick"].includes(result.status),
+      // An unmapped option on a required field gets every employee who picks it a Correction (#112).
+      blocking: level === "required" && ["missing", "wrongType", "ambiguous", "stalePick", "options"].includes(result.status),
       ...(spec.ct.options ? { options: spec.ct.options } : {}),
     };
   });
@@ -109,10 +121,11 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
   return rows;
 }
 
-export function summarise(rows: CheckRow[]): { ok: number; blocking: number; warnings: number } {
+export function summarise(rows: CheckRow[]): { ok: number; blocking: number; warnings: number; skipped: number } {
   const ok = rows.filter((r) => r.result.status === "found").length;
+  const skipped = rows.filter((r) => r.result.status === "skipped").length;
   const blocking = rows.filter((r) => r.blocking).length;
-  return { ok, blocking, warnings: rows.length - ok - blocking };
+  return { ok, blocking, warnings: rows.length - ok - skipped - blocking, skipped };
 }
 
 // --- rendering -------------------------------------------------------------
@@ -159,18 +172,18 @@ function explain(r: CheckRow): { why: string; fix: string } {
       if (res.absent.length) parts.push(`add the option(s) ${res.absent.map((o) => `"${o}"`).join(", ")}`);
       return {
         why: "EH only accepts these exact values, so any other option gets the employee a Correction message.",
-        fix: `In Connecteam, ${parts.join("; and ")}. (Or map them in the field map.)`,
+        fix: `Map each option with npm run pick-fields (the wizard runs it before this check). Or in Connecteam, ${parts.join("; and ")}.`,
       };
     }
     case "ambiguous":
       return {
         why: `More than one of your fields could be it (${res.candidates.map((c) => `"${c.name}"`).join(", ")}), so the sync won't guess.`,
-        fix: `Record which one in clients/self/field-picks.json, e.g. { "${r.name}": { "id": ${res.candidates[0]?.id} } }.`,
+        fix: "Pick which one with npm run pick-fields (the wizard runs it before this check).",
       };
     case "stalePick":
       return {
         why: `The field picked for this earlier (id ${res.id}) no longer exists in Connecteam.`,
-        fix: `Pick another in clients/self/field-picks.json, or remove the "${r.name}" entry to match by name again.`,
+        fix: "Pick another with npm run pick-fields (the wizard runs it before this check).",
       };
     default:
       return { why: "", fix: "" };
@@ -178,7 +191,7 @@ function explain(r: CheckRow): { why: string; fix: string } {
 }
 
 /** Connecteam's API type names, as its UI shows them. */
-const typeName = (t: string): string =>
+export const typeName = (t: string): string =>
   ({ str: "text", dropdown: "dropdown", date: "date", birthday: "birthday", location: "location", directManager: "direct manager", number: "number" })[t] ?? t;
 
 const LABEL: Record<CheckResult["status"], string> = {
@@ -189,6 +202,7 @@ const LABEL: Record<CheckResult["status"], string> = {
   userEditable: "editable by employees",
   ambiguous: "more than one match",
   stalePick: "picked field deleted",
+  skipped: "skipped",
 };
 const LEVEL: Record<Level, string> = { required: "required", recommended: "recommended", admin: "admin-only", notSynced: "not synced" };
 
@@ -207,10 +221,13 @@ function wrap(text: string, indent: string): string[] {
 
 export function renderFieldCheck(rows: CheckRow[], opts: { color: boolean }): string {
   const c = (code: string, s: string) => (opts.color ? `\u001b[${code}m${s}\u001b[0m` : s);
+  const quiet = (r: CheckRow) => r.result.status === "found" || r.result.status === "skipped";
   const mark = (r: CheckRow) =>
     r.result.status === "found"
       ? c("32", opts.color ? "✓" : "[ok]")
-      : r.blocking
+      : r.result.status === "skipped"
+        ? c("2", opts.color ? "–" : "[-]")
+        : r.blocking
         ? c("31", opts.color ? "✗" : "[x]")
         : c("33", opts.color ? "⚠" : "[!]");
 
@@ -222,9 +239,12 @@ export function renderFieldCheck(rows: CheckRow[], opts: { color: boolean }): st
       lines.push("", c("1", group));
     }
     const matched = r.field && r.field.name.trim() !== r.name ? c("2", ` (your field: "${r.field.name}")`) : "";
-    const status = r.result.status === "found" ? "" : `  ${r.blocking ? c("31", LABEL[r.result.status]) : c("33", LABEL[r.result.status])}`;
+    const status =
+      r.result.status === "found"
+        ? ""
+        : `  ${r.blocking ? c("31", LABEL[r.result.status]) : c(r.result.status === "skipped" ? "2" : "33", LABEL[r.result.status])}`;
     lines.push(`  ${mark(r)} ${r.name.padEnd(38)} ${c("2", LEVEL[r.level].padEnd(11))}${status}${matched}`);
-    if (r.result.status !== "found") {
+    if (!quiet(r)) {
       const { why, fix } = explain(r);
       lines.push(...wrap(`Why: ${why}`, "        "), ...wrap(`Fix: ${fix}`, "        "));
     }
@@ -234,7 +254,8 @@ export function renderFieldCheck(rows: CheckRow[], opts: { color: boolean }): st
   lines.push(
     "",
     `${c("32", `${s.ok} ok`)} · ${c(s.blocking ? "31" : "32", `${s.blocking} required missing or wrong`)} · ` +
-      c(s.warnings ? "33" : "32", `${s.warnings} warning${s.warnings === 1 ? "" : "s"}`),
+      c(s.warnings ? "33" : "32", `${s.warnings} warning${s.warnings === 1 ? "" : "s"}`) +
+      (s.skipped ? c("2", ` · ${s.skipped} skipped`) : ""),
   );
   return lines.map((l) => l.trimEnd()).join("\n");
 }

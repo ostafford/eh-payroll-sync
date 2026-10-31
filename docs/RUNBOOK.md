@@ -153,20 +153,46 @@ Connecteam when the webhook is registered (step 5). → **`CT_WEBHOOK_SECRET`**
 
 ### 2f. Custom fields
 The sync reads 27 custom fields (`docs/connecteam-field-checklist.md`; the award
-dropdown is §3). The wizard checks them, then creates any that are missing,
-with the right type, dropdown options and permissions:
+dropdown is §3). The wizard first shows which of the client's fields it matched
+to each one and lets you confirm, pick another, create one or skip (optional
+fields only). It then checks them and creates any that are missing, with the
+right type, dropdown options and permissions:
 
 ```bash
+npm run pick-fields                  # confirm or pick each field; saved to clients/self/field-picks.json
 npm run field-check                  # every field: found / missing / wrong type / options, with fixes
 npm run create-fields -- --dry-run   # list what's missing
 npm run create-fields
 ```
 
-`field-check` exits `2` when a required field is missing or the wrong type; the
+`field-check` exits `2` when a required field is missing, the wrong type, or
+not yet picked (more than one match, or the picked field was deleted); the
 wizard won't continue until it's fixed.
 
-A field the client already has under their own name (e.g. "Tax File Number"
-for "TFN") is matched and left alone, so re-running never duplicates one.
+Picks are saved by Connecteam field ID, and `field-check`, `create-fields` and
+`discover` all read them before matching by name, so all three use the same
+field. A field the client already has under their own name (e.g. "Tax File Number"
+for "TFN") is matched and left alone, so re-running never duplicates one. A
+re-run of the picker asks only about fields not yet decided.
+
+For a picked dropdown whose options aren't all values EH takes (e.g. Employee
+Status `Full-time | PBV`), the picker asks what each option sends: an EH value,
+or "not synced" (the employee gets a Correction message). Tax questions map to
+Yes / No the same way. The choices are saved with the pick, go into the draft
+field map, and `discover` writes them into a field map it kept.
+
+**Rehearse the picker without an account.** `--fields-file` reads saved field
+definitions instead of calling Connecteam, and keeps the choices in a scratch
+file in the system temp folder (never `clients/self`). The bundled file is the
+first client's setup (#112): `(OLD)` duplicates, renamed tax questions, and
+options EH doesn't take.
+
+```bash
+npm run pick-fields -- --fields-file test/fixtures/first-client-fields.json
+npm run field-check -- --fields-file test/fixtures/first-client-fields.json
+```
+
+Delete the scratch file the picker names to start over.
 **Then attach each new field to the onboarding pack in the Connecteam UI** (no
 API for that); the script prints the exact list. A field not in the pack is
 never asked, so it is always blank.

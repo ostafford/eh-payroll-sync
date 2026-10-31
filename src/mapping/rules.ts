@@ -7,7 +7,7 @@
  * AuUnstructuredEmployeeModel during M2 before relying on them.
  */
 import type { ConnecteamUser, MappingIssue, PayloadValue } from "./apply.js";
-import { yesNo, trimString, TransformError } from "./transforms.js";
+import { dropdownValue, yesNo, trimString, TransformError } from "./transforms.js";
 import type { Rules } from "./schema.js";
 
 /** Confirmed against the live EH unstructured model in issue #2. */
@@ -58,6 +58,8 @@ function blank(v: unknown): boolean {
   return v === undefined || v === null || (typeof v === "string" && v.trim() === "") || (Array.isArray(v) && v.length === 0);
 }
 
+type YesNoSource = NonNullable<NonNullable<Rules>["taxDeclaration"]>["claimTaxFreeThreshold"];
+
 export function applyTaxDeclaration(
   user: ConnecteamUser,
   td: NonNullable<Rules>["taxDeclaration"],
@@ -65,13 +67,21 @@ export function applyTaxDeclaration(
   const out: RuleOutput = { fields: {}, followUps: [], issues: [] };
   if (!td) return out;
 
-  const readBool = (ehField: string, customFieldId: number): boolean | undefined => {
-    const { value, label } = read(user, customFieldId);
+  const readBool = (ehField: string, source: YesNoSource): boolean | undefined => {
+    const { value, label } = read(user, source.customFieldId);
     if (blank(value)) {
       out.issues.push({ ehField, source: label, reason: "required Yes/No answer is missing" });
       return undefined;
     }
     try {
+      if (source.options) {
+        const answer = dropdownValue(value);
+        const mapped = source.options[answer];
+        if (mapped === undefined) {
+          throw new TransformError(`"${answer}" is not an answer the sync can read as Yes or No: ${Object.keys(source.options).join(", ")}`);
+        }
+        return mapped === "yes";
+      }
       return yesNo(value);
     } catch (err) {
       out.issues.push({ ehField, source: label, reason: err instanceof TransformError ? err.message : String(err) });
@@ -79,10 +89,10 @@ export function applyTaxDeclaration(
     }
   };
 
-  const tft = readBool(EH_FIELD.claimTaxFreeThreshold, td.claimTaxFreeThreshold.customFieldId);
+  const tft = readBool(EH_FIELD.claimTaxFreeThreshold, td.claimTaxFreeThreshold);
   if (tft !== undefined) out.fields[EH_FIELD.claimTaxFreeThreshold] = tft;
 
-  const resident = readBool(EH_FIELD.australianResident, td.australianResident.customFieldId);
+  const resident = readBool(EH_FIELD.australianResident, td.australianResident);
   if (resident !== undefined) {
     out.fields[EH_FIELD.australianResident] = resident;
     // EH has no isNonResident field - australianResident:false plus a manual
@@ -100,7 +110,7 @@ export function applyTaxDeclaration(
     });
   }
 
-  const help = readBool(EH_FIELD.helpDebt, td.hasHelpOrStslDebt.customFieldId);
+  const help = readBool(EH_FIELD.helpDebt, td.hasHelpOrStslDebt);
   if (help !== undefined) {
     out.fields[EH_FIELD.helpDebt] = help;
     out.fields[EH_FIELD.stslDebt] = help;

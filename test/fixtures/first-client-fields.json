@@ -1,0 +1,400 @@
+{
+  "about": "The first client's Connecteam custom-field DEFINITIONS as seen on their setup call (#112), recreated from the issue: no employee data, made-up IDs, API order kept where it mattered. For rehearsing the field picker: npm run pick-fields -- --fields-file test/fixtures/first-client-fields.json",
+  "customFields": [
+    {
+      "id": 910001,
+      "name": "Legal First Name",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910002,
+      "name": "Legal Surname",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910003,
+      "name": "Birthday",
+      "type": "birthday",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910004,
+      "name": "Gender",
+      "type": "dropdown",
+      "isEditableForUsers": true,
+      "dropdownOptions": [
+        {
+          "value": "Male",
+          "isDeleted": false
+        },
+        {
+          "value": "Female",
+          "isDeleted": false
+        },
+        {
+          "value": "Other",
+          "isDeleted": false
+        },
+        {
+          "value": "Non-Binary",
+          "isDeleted": false
+        },
+        {
+          "value": "Prefer not to answer",
+          "isDeleted": false
+        },
+        {
+          "value": "Gender Queer",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910005,
+      "name": "Street Address",
+      "type": "location",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910006,
+      "name": "Suburb",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910007,
+      "name": "Country",
+      "type": "location",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910008,
+      "name": "State",
+      "type": "dropdown",
+      "isEditableForUsers": false,
+      "dropdownOptions": [
+        {
+          "value": "QLD",
+          "isDeleted": false
+        },
+        {
+          "value": "NSW",
+          "isDeleted": false
+        },
+        {
+          "value": "VIC",
+          "isDeleted": false
+        },
+        {
+          "value": "ACT",
+          "isDeleted": false
+        },
+        {
+          "value": "TAS",
+          "isDeleted": false
+        },
+        {
+          "value": "SA",
+          "isDeleted": false
+        },
+        {
+          "value": "WA",
+          "isDeleted": false
+        },
+        {
+          "value": "NT",
+          "isDeleted": false
+        },
+        {
+          "value": "INTERNATIONAL",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910009,
+      "name": "Postcode",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910010,
+      "name": "Postcode (OLD)",
+      "type": "number",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910011,
+      "name": "Emergency Contact Name",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910012,
+      "name": "Emergency Contact Number (OLD)",
+      "type": "phone",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910013,
+      "name": "Emergency Contact Number",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910014,
+      "name": "Emergency Contact Relationship",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910015,
+      "name": "Employment Start Date",
+      "type": "date",
+      "isEditableForUsers": false,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910016,
+      "name": "Title",
+      "type": "str",
+      "isEditableForUsers": false,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910017,
+      "name": "Employee Status",
+      "type": "dropdown",
+      "isEditableForUsers": false,
+      "dropdownOptions": [
+        {
+          "value": "Full-time",
+          "isDeleted": false
+        },
+        {
+          "value": "Part-time",
+          "isDeleted": false
+        },
+        {
+          "value": "Casual",
+          "isDeleted": false
+        },
+        {
+          "value": "PBV",
+          "isDeleted": false
+        },
+        {
+          "value": "Contractor",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910018,
+      "name": "TFN",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910019,
+      "name": "TFN (OLD)",
+      "type": "number",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910020,
+      "name": "Claim Tax Free Threshold?",
+      "type": "dropdown",
+      "isEditableForUsers": true,
+      "dropdownOptions": [
+        {
+          "value": "Yes, claim tax free threshold",
+          "isDeleted": false
+        },
+        {
+          "value": "No",
+          "isDeleted": false
+        },
+        {
+          "value": "N/A",
+          "isDeleted": false
+        },
+        {
+          "value": "TBC",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910021,
+      "name": "Australian resident for tax purposes?",
+      "type": "dropdown",
+      "isEditableForUsers": true,
+      "dropdownOptions": [
+        {
+          "value": "Yes",
+          "isDeleted": false
+        },
+        {
+          "value": "No",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910022,
+      "name": "Higher Education Loan Program (HELP), Student Startup Loan (SSL), Trade Support Loan?",
+      "type": "dropdown",
+      "isEditableForUsers": true,
+      "dropdownOptions": [
+        {
+          "value": "Yes",
+          "isDeleted": false
+        },
+        {
+          "value": "No",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910023,
+      "name": "Name on Bank Account",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910024,
+      "name": "BSB",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910025,
+      "name": "Account Number",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910026,
+      "name": "Super Fund USI",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910027,
+      "name": "Super Fund ABN",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910028,
+      "name": "Super Fund Name",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910029,
+      "name": "Member Number",
+      "type": "str",
+      "isEditableForUsers": true,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910030,
+      "name": "Direct manager",
+      "type": "directManager",
+      "isEditableForUsers": false,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910031,
+      "name": "EH Pay Rate Template",
+      "type": "dropdown",
+      "isEditableForUsers": false,
+      "dropdownOptions": [
+        {
+          "value": "Retail Award Level 1",
+          "isDeleted": false
+        },
+        {
+          "value": "Retail Award Level 2",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910032,
+      "name": "Payment Method",
+      "type": "dropdown",
+      "isEditableForUsers": true,
+      "dropdownOptions": [
+        {
+          "value": "Bank Details",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910033,
+      "name": "Pay Type",
+      "type": "dropdown",
+      "isEditableForUsers": false,
+      "dropdownOptions": [
+        {
+          "value": "Hourly",
+          "isDeleted": false
+        },
+        {
+          "value": "Salaried",
+          "isDeleted": false
+        }
+      ]
+    },
+    {
+      "id": 910034,
+      "name": "Employee ID",
+      "type": "str",
+      "isEditableForUsers": false,
+      "dropdownOptions": []
+    },
+    {
+      "id": 910035,
+      "name": "Employee Type",
+      "type": "dropdown",
+      "isEditableForUsers": false,
+      "dropdownOptions": [
+        {
+          "value": "Employee",
+          "isDeleted": false
+        },
+        {
+          "value": "Contractor",
+          "isDeleted": false
+        }
+      ]
+    }
+  ]
+}

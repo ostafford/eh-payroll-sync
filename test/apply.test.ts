@@ -645,6 +645,39 @@ describe("applyFieldMap - rules engine", () => {
     expect(issues.every((i) => i.reason === "required Yes/No answer is missing")).toBe(true);
   });
 
+  describe("a tax-declaration option map (#112: a client's own answer wording)", () => {
+    const withOptions = parseFieldMap({
+      ...map,
+      rules: {
+        ...map.rules,
+        taxDeclaration: {
+          ...map.rules!.taxDeclaration,
+          claimTaxFreeThreshold: { customFieldId: 42923276, options: { "Yes, claim tax free threshold": "yes", No: "no" } },
+        },
+      },
+    });
+
+    it("reads a mapped answer as Yes or No", () => {
+      const u = clone();
+      setField(u, 42923276, [{ id: 1, value: "Yes, claim tax free threshold" }]);
+      const { payload, issues } = applyFieldMap(u, withOptions);
+      expect(issues).toEqual([]);
+      expect(payload.claimTaxFreeThreshold).toBe(true);
+    });
+
+    it("holds an unmapped answer (N/A, TBC) for a Correction, even a plain 'Yes'", () => {
+      for (const answer of ["N/A", "TBC", "Yes"]) {
+        const u = clone();
+        setField(u, 42923276, [{ id: 1, value: answer }]);
+        const { payload, issues } = applyFieldMap(u, withOptions);
+        expect(payload.claimTaxFreeThreshold).toBeUndefined();
+        expect(issues).toContainEqual(
+          expect.objectContaining({ ehField: "claimTaxFreeThreshold", reason: expect.stringContaining(`"${answer}"`) }),
+        );
+      }
+    });
+  });
+
   it("flags a tax-declaration answer that isn't Yes or No", () => {
     const u = clone();
     setField(u, 42923316, [{ id: 2, value: "Unsure" }]);

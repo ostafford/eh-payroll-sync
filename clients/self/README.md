@@ -32,10 +32,11 @@ Running several clients from one deployment instead? Add each under
 `clients/<slug>/`, register it in `src/mapping/registry.ts`, and set
 `FIELD_MAP_CLIENT=<slug>`.
 
-**`field-picks.json`** (optional, #112) records which of the client's own
-Connecteam fields feeds each field the sync needs, by field ID:
-`{ "Claim tax-free threshold?": { "id": 43566219 } }`. The field check,
-`create-fields` and `discover` all read it before matching by name. Add an
-entry when the field check reports "more than one match", or when the client's
-field has a name the check doesn't recognise. If a picked field is deleted,
-the check reports it so the entry can be updated.
+**`field-picks.json`** (#112) records which of the client's own Connecteam
+fields feeds each field the sync needs: `{ "id": 43566219 }` (plus, for a
+dropdown, `"options": { "Full-time": "FullTime", "PBV": null }`, where `null`
+means not synced: a Correction message), `{ "skip": true }`
+(optional fields only), or `{ "create": true }` (waiting on `create-fields`,
+which swaps in the new field's ID). The wizard's picker (`npm run pick-fields`)
+writes it. The field check, `create-fields` and `discover` all read it before
+matching by name. Remove an entry to be asked about that field again.

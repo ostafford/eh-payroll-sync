@@ -48,6 +48,9 @@ export interface FieldSpec {
   target: Target;
 }
 
+/** EH can't create the employee without it: never skipped. */
+export const requiredForSync = (spec: FieldSpec): boolean => spec.target.kind === "field" && spec.target.required === true;
+
 const PERSONAL = "Personal Details";
 const COMPANY = "Company Related Info";
 const TAX = "Super & TAX Information";
