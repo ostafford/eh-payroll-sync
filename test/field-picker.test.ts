@@ -88,21 +88,44 @@ describe("runFieldPicker (scripted answers)", () => {
     expect(result.TFN).toEqual({ id: 42923222 });
   });
 
-  it("doesn't offer a field already used for another field, and names types as Connecteam's UI does", async () => {
-    const raw = demo().filter((f) => f.name !== "Suburb");
-    const { out } = await run(raw, {}, ["y", "1"]);
-    const suburb = out.slice(out.indexOf("Suburb (optional)"));
-    expect(suburb).not.toContain('"Legal First Name"');
-    expect(suburb).toContain('Use "Employee ID" (text)');
-  });
+  describe("changing a match: every usable field is listed (your rehearsal)", () => {
+    const row = (name: string) => (screen: string) => new RegExp(`(\\d+)\\) ${name}\\s`).exec(screen)![1]!;
+    const choice = (field: string) => (screen: string) =>
+      [...screen.matchAll(new RegExp(`(\\d+)\\) Use "${field}"`, "g"))].at(-1)![1]!;
+    const question = (out: string, name: string) => {
+      const from = out.lastIndexOf(`${name} (`);
+      const to = out.indexOf("Matched automatically", from);
+      return to === -1 ? out.slice(from) : out.slice(from, to);
+    };
 
-  it("changing one match doesn't offer a field another match in the table is about to use", async () => {
-    const usiRow = (screen: string) => /(\d+)\) Super Fund USI/.exec(screen)![1]!;
-    const { out } = await run(demo(), {}, [usiRow, "1", "y"]);
-    const from = out.lastIndexOf("Super Fund USI (optional)");
-    const usi = out.slice(from, out.indexOf("Matched automatically", from));
-    expect(usi).toContain('1) Use "Super Fund USI" (text)');
-    expect(usi).not.toContain('"Legal Surname"');
+    it("lists fields in use elsewhere, saying what for, and why the rest aren't listed", async () => {
+      const { out } = await run(demo(), {}, [row("Postcode"), "1", "y"]);
+      const q = question(out, "Postcode");
+      expect(q).toContain('Use "Postcode" (text)');
+      expect(q).toContain('Use "Suburb" (text) - currently used for Suburb');
+      expect(q).toContain('Use "Legal Surname" (text) - currently used for Legal Surname');
+      expect(q).toMatch(/\d+ other fields aren't listed: .*can't hold this value/);
+      expect(q).toContain('Use "Standard hours per week" (number) - currently used for');
+    });
+
+    it("picking a field in use moves it, and the field it came from is asked again", async () => {
+      // The client's postcode is really in the field matched to Suburb.
+      const raw = [...demo(), { id: 501, name: "Locality", type: "str" }];
+      const { result, asked } = await run(raw, {}, [row("Postcode"), choice("Suburb"), "y", choice("Locality")]);
+      expect(result.Postcode).toEqual({ id: 42920715 }); // the field named "Suburb"
+      expect(asked.at(-1)).toBe("Pick 1-" + asked.at(-1)!.match(/1-(\d+)/)![1] + " for Suburb: ");
+      expect(result.Suburb).toEqual({ id: 501 });
+      const ids = Object.values(result).flatMap((p) => ("id" in p ? [p.id] : []));
+      expect(new Set(ids).size).toBe(ids.length); // still no field used twice
+    });
+
+    it("the same for a field saved on an earlier run", async () => {
+      const first = (await run(demo(), {}, ["y"])).result;
+      const raw = demo().filter((f) => f.name !== "Postcode");
+      const { result, asked } = await run(raw, first, [choice("Suburb"), choice("Employee ID")]);
+      expect(asked.map((a) => a.replace(/1-\d+/, "1-N"))).toEqual(["Pick 1-N for Postcode: ", "Pick 1-N for Suburb: "]);
+      expect(result.Postcode).toEqual({ id: 42920715 });
+    });
   });
 
   it("asks about an ambiguous field on its own, by number", async () => {

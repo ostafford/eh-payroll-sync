@@ -54,14 +54,33 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
     const pick = out[spec.name];
     return !!pick && "skip" in pick;
   };
+  /** Which of the sync's other fields each Connecteam field is used for: picked, or still in "use all". */
+  const usedBy = (spec: FieldSpec): Map<number, FieldSpec> => {
+    const m = new Map<number, FieldSpec>();
+    for (const s of FIELD_SPEC) {
+      const p = out[s.name];
+      if (s !== spec && p && "id" in p) m.set(p.id, s);
+    }
+    for (const a of auto) if (a.spec !== spec) m.set(a.field.id, a.spec);
+    return m;
+  };
+
   // Asks about one field and saves the answer. The sync's super rule needs all
   // four super fields or none (#117), so skipping one is skipping super.
   const decide = async (spec: FieldSpec, why: string, suggested?: FieldDef): Promise<void> => {
     for (;;) {
-      // Fields the rest of the "use all" table will take aren't offered either.
-      const pending = auto.filter((a) => a.spec !== spec).map((a) => a.field.id);
-      const choice = await askOne(spec, why, unused(fields, out, spec, pending), io, suggested);
+      const used = usedBy(spec);
+      const choice = await askOne(spec, why, fields, used, io, suggested);
       if (choice.kind !== "skip" || spec.target.kind !== "super") {
+        // A field in use elsewhere moves here; the field it came from is asked again, so none feeds two.
+        const from = choice.kind === "use" ? used.get(choice.field.id) : undefined;
+        if (from && choice.kind === "use") {
+          const i = auto.findIndex((a) => a.spec === from);
+          if (i !== -1) auto.splice(i, 1);
+          else out = Object.fromEntries(Object.entries(out).filter(([name]) => name !== from.name));
+          undecided.push({ spec: from, why: `its field "${choice.field.name}" is now used for ${spec.name}` });
+          io.print(`  "${choice.field.name}" is now used for ${spec.name}; ${from.name} is asked about again below.`);
+        }
         out = applyChoice(out, spec, choice);
         return;
       }
@@ -84,17 +103,20 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
       break;
     }
     if (answer === "n") {
-      for (const { spec, field } of auto) if (!skipped(spec)) await decide(spec, `matched "${field.name}"`, field);
+      // Taken off the table as each is asked, so the rest still show as in use.
+      while (auto.length) {
+        const { spec, field } = auto.shift()!;
+        if (!skipped(spec)) await decide(spec, `matched "${field.name}"`, field);
+      }
       break;
     }
     const n = Number(answer);
-    const one = Number.isInteger(n) ? auto[n - 1] : undefined;
+    const one = Number.isInteger(n) && n >= 1 ? auto.splice(n - 1, 1)[0] : undefined;
     if (!one) {
       io.print(`  Type y, n, or a number from 1 to ${auto.length}.`);
       continue;
     }
     await decide(one.spec, `matched "${one.field.name}"`, one.field);
-    auto.splice(n - 1, 1);
     // Skipping super takes its other fields out of "use all".
     auto.splice(0, auto.length, ...auto.filter((a) => !skipped(a.spec)));
   }
@@ -109,12 +131,6 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
     if (options) out = { ...out, [spec.name]: { id: pick.id, options } };
   }
   return out;
-}
-
-/** Fields not already picked (or about to be) for another of the sync's fields, so none is used twice. */
-function unused(fields: FieldDef[], picks: FieldPicks, spec: FieldSpec, pending: number[] = []): FieldDef[] {
-  const taken = new Set([...pending, ...Object.entries(picks).flatMap(([name, p]) => (name !== spec.name && "id" in p ? [p.id] : []))]);
-  return fields.filter((f) => !taken.has(f.id));
 }
 
 const NOT_SYNCED = "Not synced: the employee gets a Correction message";
@@ -164,14 +180,39 @@ async function mapOptions(spec: FieldSpec, live: string[], known: OptionMap, io:
   return options;
 }
 
-/** `suggested` (the automatic match) is listed first. */
-async function askOne(spec: FieldSpec, why: string, fields: FieldDef[], io: PickerIo, suggested?: FieldDef): Promise<Choice> {
+/**
+ * Every field of a usable type is listed, so the right one is never hidden:
+ * `suggested` (the automatic match) first, then free fields, then fields in use
+ * elsewhere (`used`), labelled with what for. Fields of other types are counted.
+ */
+async function askOne(
+  spec: FieldSpec,
+  why: string,
+  fields: FieldDef[],
+  used: Map<number, FieldSpec>,
+  io: PickerIo,
+  suggested?: FieldDef,
+): Promise<Choice> {
   const all = pickerChoices(spec, fields);
   const isSuggested = (c: Choice) => c.kind === "use" && c.field.id === suggested?.id;
-  const choices = [...all.filter(isSuggested), ...all.filter((c) => !isSuggested(c))];
+  const inUse = (c: Choice) => c.kind === "use" && used.has(c.field.id);
+  const choices = [
+    ...all.filter(isSuggested),
+    ...all.filter((c) => !isSuggested(c) && c.kind === "use" && !inUse(c)),
+    ...all.filter((c) => !isSuggested(c) && inUse(c)),
+    ...all.filter((c) => c.kind !== "use"),
+  ];
   io.print("", `${spec.name} (${requiredForSync(spec) ? "required" : "optional"}): ${why}`);
   if (spec.about) io.print(`  ${spec.about}`);
-  choices.forEach((c, i) => io.print(`  ${String(i + 1).padStart(2)}) ${choiceLabel(spec, c)}`));
+  choices.forEach((c, i) => {
+    const elsewhere = c.kind === "use" ? used.get(c.field.id) : undefined;
+    io.print(`  ${String(i + 1).padStart(2)}) ${choiceLabel(spec, c)}${elsewhere ? ` - currently used for ${elsewhere.name}` : ""}`);
+  });
+  const hidden = fields.filter((f) => !compatibleType(spec, f.type));
+  if (hidden.length) {
+    const types = [...new Set(hidden.map((f) => typeName(f.type)))].join(", ");
+    io.print(`  ${hidden.length} other field${hidden.length === 1 ? " isn't" : "s aren't"} listed: ${types} fields can't hold this value.`);
+  }
   for (;;) {
     const n = Number((await io.ask(`Pick 1-${choices.length} for ${spec.name}: `)).trim());
     const choice = Number.isInteger(n) ? choices[n - 1] : undefined;
