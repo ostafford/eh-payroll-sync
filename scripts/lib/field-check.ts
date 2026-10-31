@@ -39,6 +39,8 @@ export interface CheckRow {
   blocking: boolean;
   /** Options the field should have (for the fix text). */
   options?: string[];
+  /** Why a number field won't do (FieldSpec ct.numberNote). */
+  numberNote?: string;
 }
 
 /** As docs/connecteam-field-checklist.md's key: only the award field is "admin". */
@@ -101,6 +103,7 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
       // An unmapped option on a required field gets every employee who picks it a Correction (#112).
       blocking: level === "required" && ["missing", "wrongType", "ambiguous", "stalePick", "options"].includes(result.status),
       ...(spec.ct.options ? { options: spec.ct.options } : {}),
+      ...(spec.ct.numberNote ? { numberNote: spec.ct.numberNote } : {}),
     };
   });
 
@@ -166,7 +169,9 @@ function explain(r: CheckRow): { why: string; fix: string } {
       };
     case "wrongType":
       return {
-        why: `"${r.field?.name}" is a ${typeName(res.got)} field; the sync needs a ${typeName(res.want)} field, so the value can't be converted.`,
+        why:
+          `"${r.field?.name}" is a ${typeName(res.got)} field; the sync needs a ${typeName(res.want)} field, so the value can't be converted.` +
+          (res.got === "number" && r.numberNote ? ` ${r.numberNote}` : ""),
         fix:
           `Connecteam can't change a field's type. Create a new ${typeName(res.want)} field, add it to the pack, ` +
           `then delete or rename "${r.field?.name}" so it no longer matches.`,

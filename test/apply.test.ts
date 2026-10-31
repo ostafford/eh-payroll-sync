@@ -532,6 +532,20 @@ describe("applyFieldMap - happy path", () => {
   });
 });
 
+describe("applyFieldMap - number-type Postcode and BSB fields (#116)", () => {
+  it("restores the leading zeros a number field drops", () => {
+    const u = clone();
+    for (const f of u.customFields) {
+      if (f.customFieldId === 42923224) Object.assign(f, { type: "number", value: 800 }); // NT postcode 0800
+      if (f.customFieldId === 42923223) Object.assign(f, { type: "number", value: 82140 }); // BSB 082-140
+    }
+    const { payload, issues } = applyFieldMap(u, map);
+    expect(issues).toEqual([]);
+    expect(payload.residentialPostCode).toBe("0800");
+    expect(payload.bankAccount1_BSB).toBe("082140");
+  });
+});
+
 describe("applyFieldMap - missing and bad values", () => {
   it("flags a missing required field as an issue, keyed to the EH + source field", () => {
     const u = clone();

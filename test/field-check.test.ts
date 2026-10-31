@@ -157,6 +157,24 @@ describe("checkFields", () => {
     });
   });
 
+  describe("number-type fields (#116)", () => {
+    it.each(["Postcode", "BSB"])("accepts a number-type %s: the sync restores its leading zeros", (name) => {
+      expect(row(checkFields(replace(name, { type: "number" })), name).result.status).toBe("found");
+    });
+
+    it.each(["TFN", "Account Number"])("rejects a number-type %s, saying why", (name) => {
+      const rows = checkFields(replace(name, { type: "number" }));
+      expect(row(rows, name).result).toEqual({ status: "wrongType", got: "number", want: "str" });
+      const out = renderFieldCheck(rows, { color: false }).replace(/\n {8}(?![\[WF])/g, " ");
+      expect(out).toMatch(/leading zeros/);
+    });
+
+    it("gives the leading-zeros reason only for a number field", () => {
+      const out = renderFieldCheck(checkFields(replace("TFN", { type: "date" })), { color: false });
+      expect(out).not.toMatch(/leading zeros/);
+    });
+  });
+
   it("warns when employees can edit the award field", () => {
     const rows = checkFields(replace("EH Pay Rate Template", { isEditableForUsers: true }));
     expect(row(rows, "EH Pay Rate Template")).toMatchObject({ level: "admin", blocking: false, result: { status: "userEditable" } });
