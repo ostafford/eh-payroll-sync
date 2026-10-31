@@ -32,11 +32,15 @@ export interface FieldSpec {
   /** Matches the client's existing field, whatever they called it. */
   match: RegExp;
   group: Group;
-  /** Created by create-fields when missing; false = only matched if present. */
+  /** Created by create-fields when missing; false = optional, only used if the client has it. */
   create: boolean;
+  /** What it's for, shown when the picker asks about an optional field. */
+  about?: string;
   ct: {
     type: "str" | "dropdown" | "date" | "birthday" | "location" | "directManager";
     options?: string[];
+    /** Other Connecteam types the sync's transform also reads (e.g. a number field for hours). */
+    alsoAccepts?: string[];
     /** Every option must exist (a Yes/No question needs both answers). */
     allOptionsRequired?: boolean;
     /** Category to create it under, by name; falls back to the account's first. */
@@ -117,9 +121,10 @@ export const FIELD_SPEC: FieldSpec[] = [
     ct: { type: "dropdown", options: ["FullTime", "PartTime", "Casual", "LabourHire"], ...adminSet(COMPANY) },
     target: { kind: "field", eh: "employmentType", transform: "dropdownValue", required: true,
       map: { FullTime: "FullTime", PartTime: "PartTime", Casual: "Casual", LabourHire: "LabourHire" } } },
-  // Optional, per issue #42 - only used with employmentHero.perEmployeeRate.
+  // Optional (#42, #118): sent with the pay-run settings, overriding the default hours.
   { name: "Standard hours per week", match: /standard hours.*week|hours per week|weekly hours/i, group: "Employment", create: false,
-    ct: { type: "str", ...adminSet(COMPANY) },
+    about: "Each employee's standard weekly hours, sent with their pay settings. Skip if payroll uses the default hours.",
+    ct: { type: "str", alsoAccepts: ["number"], ...adminSet(COMPANY) },
     target: { kind: "field", eh: "hoursPerWeek", transform: "number" } },
 
   // --- Tax

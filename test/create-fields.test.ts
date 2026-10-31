@@ -94,6 +94,12 @@ describe("planMissingFields", () => {
     expect(plan.missing.map((m) => m.spec.name)).toContain("TFN");
   });
 
+  it("never creates the optional hours field, missing or skipped (#118)", () => {
+    const plan = planMissingFields([], CATEGORIES, { "Standard hours per week": { skip: true } });
+    const names = [...plan.missing.map((m) => m.spec.name), ...plan.skipped.map((s) => s.name), ...plan.undecided.map((u) => u.spec.name)];
+    expect(names).not.toContain("Standard hours per week");
+  });
+
   it("never creates a skipped field", () => {
     const plan = planMissingFields([], CATEGORIES, { Suburb: { skip: true } });
     expect(plan.missing.map((m) => m.spec.name)).not.toContain("Suburb");

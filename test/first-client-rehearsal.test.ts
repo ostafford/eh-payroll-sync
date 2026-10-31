@@ -39,6 +39,7 @@ describe("first client's setup, replayed", () => {
       [/^Employee Status: "(PBV|Contractor)"/, "5"], // not synced
       [/^Claim tax-free threshold\?: "Yes, claim/, "1"],
       [/^Claim tax-free threshold\?: "(N\/A|TBC)"/, "3"], // not synced
+      [/^Pick .* for Standard hours per week/, () => /(\d+)\) Skip/.exec(screen.join("\n"))![1]!], // they don't record hours
     ];
     const asked: string[] = [];
     const picks = await runFieldPicker(raw, {}, {
@@ -53,7 +54,7 @@ describe("first client's setup, replayed", () => {
       print: (...lines) => screen.push(...lines),
     });
 
-    expect(asked).toHaveLength(1 + 2 + 3 + 4 + 3);
-    expect(summarise(checkFields(raw, picks))).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 0 });
+    expect(asked).toHaveLength(1 + 3 + 3 + 4 + 3);
+    expect(summarise(checkFields(raw, picks))).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1 });
   });
 });

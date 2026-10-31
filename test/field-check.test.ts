@@ -26,17 +26,17 @@ const replace = (name: string, over: object) => demoRaw().map((f) => (f.name ===
 const row = (rows: ReturnType<typeof checkFields>, name: string) => rows.find((r) => r.name === name)!;
 
 describe("checkFields", () => {
-  it("passes the demo account: everything found, nothing blocking", () => {
+  it("passes the demo account: everything found but the optional hours field it doesn't have", () => {
     const rows = checkFields(demoRaw());
-    expect(rows.filter((r) => r.result.status !== "found")).toEqual([]);
-    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 0 });
+    expect(rows.filter((r) => r.result.status !== "found").map((r) => r.name)).toEqual(["Standard hours per week"]);
+    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1 });
   });
 
   it("a missing required field blocks; a missing recommended one only warns", () => {
     const rows = checkFields(without("TFN").filter((f) => f.name !== "Suburb"));
     expect(row(rows, "TFN")).toMatchObject({ level: "required", blocking: true, result: { status: "missing" } });
     expect(row(rows, "Suburb")).toMatchObject({ level: "recommended", blocking: false, result: { status: "missing" } });
-    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1, skipped: 0 });
+    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1, skipped: 1 });
   });
 
   it("flags a wrong type, and blocks when the field is required", () => {
@@ -110,9 +110,9 @@ describe("checkFields", () => {
   it("a skipped recommended field is neither missing nor a warning", () => {
     const rows = checkFields(without("Suburb"), { Suburb: { skip: true } });
     expect(row(rows, "Suburb")).toMatchObject({ blocking: false, result: { status: "skipped" } });
-    expect(summarise(rows)).toEqual({ ok: 27, blocking: 0, warnings: 0, skipped: 1 });
+    expect(summarise(rows)).toEqual({ ok: 27, blocking: 0, warnings: 0, skipped: 2 });
     expect(renderFieldCheck(rows, { color: false }).trim().split("\n").at(-1)).toBe(
-      "27 ok · 0 required missing or wrong · 0 warnings · 1 skipped",
+      "27 ok · 0 required missing or wrong · 0 warnings · 2 not used",
     );
   });
 
@@ -141,6 +141,22 @@ describe("checkFields", () => {
     });
   });
 
+  describe("Standard hours per week: optional, never created (#118)", () => {
+    it("missing is shown as not used, not a warning", () => {
+      expect(row(checkFields(demoRaw()), "Standard hours per week")).toMatchObject({
+        level: "optional",
+        blocking: false,
+        result: { status: "missing" },
+      });
+    });
+
+    it("a number-type field counts as found", () => {
+      const hours = { id: 70, name: "Contracted hours", type: "number", isEditableForUsers: false, dropdownOptions: [] };
+      const rows = checkFields([...demoRaw(), hours], { "Standard hours per week": { id: 70 } });
+      expect(row(rows, "Standard hours per week")).toMatchObject({ field: { id: 70 }, result: { status: "found" } });
+    });
+  });
+
   it("warns when employees can edit the award field", () => {
     const rows = checkFields(replace("EH Pay Rate Template", { isEditableForUsers: true }));
     expect(row(rows, "EH Pay Rate Template")).toMatchObject({ level: "admin", blocking: false, result: { status: "userEditable" } });
@@ -164,7 +180,7 @@ describe("renderFieldCheck", () => {
     const unwrapped = out.replace(/\n {8}(?![\[WF])/g, " ");
     expect(unwrapped).toMatch(/Why: .*Correction message/);
     expect(unwrapped).toMatch(/Fix: .*npm run create-fields/);
-    expect(out.trim().split("\n").at(-1)).toBe("27 ok · 1 required missing or wrong · 0 warnings");
+    expect(out.trim().split("\n").at(-1)).toBe("27 ok · 1 required missing or wrong · 0 warnings · 1 not used");
   });
 
   it("fits a 100-column terminal", () => {

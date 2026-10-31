@@ -45,7 +45,11 @@ describe("applyChoice", () => {
 });
 
 describe("runFieldPicker (scripted answers)", () => {
-  const demo = () => DEMO_CUSTOM_FIELDS.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type }));
+  // The demo account plus an hours field (it has none), so one "y" answers every field.
+  const demo = () => [
+    ...DEMO_CUSTOM_FIELDS.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type })),
+    { id: 99001, name: "Standard hours per week", type: "number" },
+  ];
   /** A function answer reads the screen so far, as a person would. */
   const run = async (raw: any[], picks: FieldPicks, answers: Array<string | ((screen: string) => string)>) => {
     const asked: string[] = [];
@@ -65,7 +69,7 @@ describe("runFieldPicker (scripted answers)", () => {
   it("one 'y' confirms every automatic match, saving each by ID", async () => {
     const { result, asked } = await run(demo(), {}, ["y"]);
     expect(asked).toHaveLength(1);
-    expect(Object.keys(result)).toHaveLength(FIELD_SPEC.filter((s) => s.create).length);
+    expect(Object.keys(result)).toHaveLength(FIELD_SPEC.length);
     expect(result.TFN).toEqual({ id: 42923222 });
   });
 
@@ -117,14 +121,14 @@ describe("runFieldPicker (scripted answers)", () => {
     const { result, asked, out } = await run(raw, {}, ["3", dob, "y"]);
     expect(out).toContain(' 3) Birthday');
     expect(asked).toHaveLength(3);
-    expect(asked[2]).toContain("Use all 26");
+    expect(asked[2]).toContain("Use all 27");
     expect(result.Birthday).toEqual({ id: 77 });
     expect(result.TFN).toEqual({ id: 42923222 });
   });
 
   it("'n' goes through every match one by one, the automatic match listed first", async () => {
     const all = await run(demo(), {}, ["y"]);
-    const n = FIELD_SPEC.filter((s) => s.create).length;
+    const n = FIELD_SPEC.length;
     const oneByOne = await run(demo(), {}, ["n", ...Array(n).fill("1")]);
     expect(oneByOne.asked).toHaveLength(n + 1);
     expect(oneByOne.result).toEqual(all.result);
@@ -203,6 +207,28 @@ describe("runFieldPicker (scripted answers)", () => {
       const { result } = await run(demo(), {}, [usiRow, skip, "y", "y"]);
       for (const name of SUPER) expect(result[name]).toEqual({ skip: true });
       expect(result.TFN).toEqual({ id: 42923222 });
+    });
+  });
+
+  describe("Standard hours per week: optional (#118)", () => {
+    const noHours = () => demo().filter((f) => f.name !== "Standard hours per week");
+
+    it("asks about it with what it's for, offers a number field named anything, and never Create", async () => {
+      const raw = [...noHours(), { id: 80, name: "Contracted hours", type: "number" }];
+      const contracted = (screen: string) => [...screen.matchAll(/(\d+)\) Use "Contracted hours" \(number\)/g)].at(-1)![1]!;
+      const { result, out } = await run(raw, {}, ["y", contracted]);
+      const q = out.slice(out.lastIndexOf("Standard hours per week (optional)"));
+      expect(q).toContain("standard weekly hours");
+      expect(q).not.toContain("Create a new");
+      expect(q).toContain("Skip");
+      expect(result["Standard hours per week"]).toEqual({ id: 80 });
+      expect((await run(raw, result, [])).asked).toEqual([]);
+    });
+
+    it("can be skipped", async () => {
+      const skip = (screen: string) => [...screen.matchAll(/(\d+)\) Skip/g)].at(-1)![1]!;
+      const { result } = await run(noHours(), {}, ["y", skip]);
+      expect(result["Standard hours per week"]).toEqual({ skip: true });
     });
   });
 });

@@ -206,6 +206,17 @@ describe("buildFieldMapDraft", () => {
     expect(() => parseFieldMap(draft)).not.toThrow();
   });
 
+  it("maps a picked hours field, named anything, to hoursPerWeek (#118)", () => {
+    const { draft, unmapped } = buildFieldMapDraft({
+      ...base,
+      fields: [{ customFieldId: 80, name: "Contracted hours", type: "number" }],
+      picks: { "Standard hours per week": { id: 80 } },
+    });
+
+    expect(draft.fields).toContainEqual({ eh: "hoursPerWeek", from: { customFieldId: 80 }, transform: "number" });
+    expect(unmapped).toEqual([]);
+  });
+
   it("lists unrecognised fields for review", () => {
     const { unmapped } = buildFieldMapDraft({
       ...base,

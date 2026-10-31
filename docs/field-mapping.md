@@ -55,7 +55,7 @@ fills them in but nothing reads them.
 | Employee Type | 42921224 | *(informational)* | Employee / Contractor |
 | Pay Type | 42921208 | *(not synced)* | Hourly / Salaried — superseded by `perEmployeeRate` (issue #42): `rate` + `rateUnit` come from the pay-rates API |
 | *(pay-rates API, per user)* | — | `rate`, `rateUnit` | opt-in `employmentHero.perEmployeeRate` — `GET /pay-rates/v1/pay-rates`; `defaultRate` → `rate`, `rateType` `hourly`→`Hourly` / `yearly`→`Annually` / `monthly`→`Monthly` (all confirmed) |
-| Standard hours/week *(custom field, per client)* | — | `hoursPerWeek` | optional; `number` transform. Only shipped when the full pay-run set resolves |
+| Standard hours/week *(custom field, per client)* | — | `hoursPerWeek` | optional; text or number field, `number` transform. Only shipped when the full pay-run set resolves. Picked (or skipped) in the field picker (#118) |
 | TFN | 42923222 | `taxFileNumber` | string; keep leading zeros. **EH does NOT reject a bad TFN via the API** — it stores it and the record stays `Incomplete`. Catch this via the Incomplete status, not a 400. |
 | Claim tax-free threshold? | 42923276 | `claimTaxFreeThreshold` | Yes → true |
 | Australian resident for tax purposes? | 42923315 | `australianResident` | Yes → true; No → false + manual follow-up (EH has no `isNonResident`; tax scale / WHM is a payroll decision) |

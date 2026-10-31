@@ -12,7 +12,8 @@ import { AWARD_FIELD_NAME, findAwardField } from "./award-field.js";
 import { compatibleType, optionsOf, resolveField, type FieldPicks, type OptionMap } from "./field-resolve.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec, type Group } from "./field-spec.js";
 
-export type Level = "required" | "recommended" | "admin" | "notSynced";
+/** "optional": only used if the client has it, never created (#118). */
+export type Level = "required" | "recommended" | "optional" | "admin" | "notSynced";
 
 export type CheckResult =
   | { status: "found" }
@@ -42,7 +43,11 @@ export interface CheckRow {
 
 /** As docs/connecteam-field-checklist.md's key: only the award field is "admin". */
 const levelOf = (spec: FieldSpec): Level =>
-  spec.target.kind === "none" ? "notSynced" : requiredForSync(spec) ? "required" : "recommended";
+  spec.target.kind === "none" ? "notSynced" : requiredForSync(spec) ? "required" : spec.create ? "recommended" : "optional";
+
+/** Skipped by the human, or an optional field the client doesn't have: nothing to fix. */
+const notUsed = (r: CheckRow): boolean =>
+  r.result.status === "skipped" || (r.level === "optional" && r.result.status === "missing");
 
 export const liveOptions = (f: any): string[] =>
   (f?.dropdownOptions ?? []).filter((o: any) => !o.isDeleted).map((o: any) => String(o.value));
@@ -75,7 +80,7 @@ function checkOne(spec: FieldSpec, f: any, optionMap?: OptionMap): CheckResult {
  */
 export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
   const defs = raw.map((x) => ({ id: x?.id, name: String(x?.name ?? ""), type: String(x?.type ?? "") }));
-  const rows: CheckRow[] = FIELD_SPEC.filter((s) => s.create).map((spec) => {
+  const rows: CheckRow[] = FIELD_SPEC.map((spec) => {
     const resolved = resolveField(spec, defs, picks);
     const f = resolved.status === "matched" ? raw.find((x) => x?.id === resolved.field.id) : undefined;
     const level = levelOf(spec);
@@ -123,7 +128,7 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
 
 export function summarise(rows: CheckRow[]): { ok: number; blocking: number; warnings: number; skipped: number } {
   const ok = rows.filter((r) => r.result.status === "found").length;
-  const skipped = rows.filter((r) => r.result.status === "skipped").length;
+  const skipped = rows.filter(notUsed).length;
   const blocking = rows.filter((r) => r.blocking).length;
   return { ok, blocking, warnings: rows.length - ok - skipped - blocking, skipped };
 }
@@ -204,7 +209,13 @@ const LABEL: Record<CheckResult["status"], string> = {
   stalePick: "picked field deleted",
   skipped: "skipped",
 };
-const LEVEL: Record<Level, string> = { required: "required", recommended: "recommended", admin: "admin-only", notSynced: "not synced" };
+const LEVEL: Record<Level, string> = {
+  required: "required",
+  recommended: "recommended",
+  optional: "optional",
+  admin: "admin-only",
+  notSynced: "not synced",
+};
 
 function wrap(text: string, indent: string): string[] {
   const out: string[] = [];
@@ -221,11 +232,11 @@ function wrap(text: string, indent: string): string[] {
 
 export function renderFieldCheck(rows: CheckRow[], opts: { color: boolean }): string {
   const c = (code: string, s: string) => (opts.color ? `\u001b[${code}m${s}\u001b[0m` : s);
-  const quiet = (r: CheckRow) => r.result.status === "found" || r.result.status === "skipped";
+  const quiet = (r: CheckRow) => r.result.status === "found" || notUsed(r);
   const mark = (r: CheckRow) =>
     r.result.status === "found"
       ? c("32", opts.color ? "✓" : "[ok]")
-      : r.result.status === "skipped"
+      : notUsed(r)
         ? c("2", opts.color ? "–" : "[-]")
         : r.blocking
         ? c("31", opts.color ? "✗" : "[x]")
@@ -242,7 +253,7 @@ export function renderFieldCheck(rows: CheckRow[], opts: { color: boolean }): st
     const status =
       r.result.status === "found"
         ? ""
-        : `  ${r.blocking ? c("31", LABEL[r.result.status]) : c(r.result.status === "skipped" ? "2" : "33", LABEL[r.result.status])}`;
+        : `  ${r.blocking ? c("31", LABEL[r.result.status]) : c(notUsed(r) ? "2" : "33", notUsed(r) ? "not used" : LABEL[r.result.status])}`;
     lines.push(`  ${mark(r)} ${r.name.padEnd(38)} ${c("2", LEVEL[r.level].padEnd(11))}${status}${matched}`);
     if (!quiet(r)) {
       const { why, fix } = explain(r);
@@ -255,7 +266,7 @@ export function renderFieldCheck(rows: CheckRow[], opts: { color: boolean }): st
     "",
     `${c("32", `${s.ok} ok`)} · ${c(s.blocking ? "31" : "32", `${s.blocking} required missing or wrong`)} · ` +
       c(s.warnings ? "33" : "32", `${s.warnings} warning${s.warnings === 1 ? "" : "s"}`) +
-      (s.skipped ? c("2", ` · ${s.skipped} skipped`) : ""),
+      (s.skipped ? c("2", ` · ${s.skipped} not used`) : ""),
   );
   return lines.map((l) => l.trimEnd()).join("\n");
 }
