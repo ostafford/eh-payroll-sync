@@ -80,10 +80,10 @@ async function main(): Promise<void> {
   ]);
   const picksPath = fieldPicksPath("self");
   const picks = loadFieldPicks(picksPath);
-  const { found, missing, undecided, skipped } = planMissingFields(fields, categories, picks);
+  const { found, missing, undecided, skipped, fromProfile } = planMissingFields(fields, categories, picks);
 
   console.log(
-    `Connecteam already has ${found.length} of the ${found.length + missing.length + undecided.length} custom fields the sync needs` +
+    `Connecteam already has ${found.length + fromProfile.length} of the ${found.length + fromProfile.length + missing.length + undecided.length} custom fields the sync needs` +
       (skipped.length ? ` (${skipped.length} skipped: ${skipped.map((s) => s.name).join(", ")}).` : "."),
   );
   for (const { spec, reason } of undecided) {

@@ -19,7 +19,9 @@ export type Resolution =
   /** The picked field no longer exists (deleted): a human picks again. */
   | { status: "stalePick"; id: number }
   /** The human chose not to use this field (recommended and not-synced fields only). */
-  | { status: "skipped" };
+  | { status: "skipped" }
+  /** Read from the Connecteam profile (FieldSpec `profile`), confirmed by the human. */
+  | { status: "profile" };
 
 /** Types that carry the same value shape (both arrive as "DD/MM/YYYY"). */
 export const COMPATIBLE: Record<string, string[]> = { birthday: ["birthday", "date"], date: ["date", "birthday"] };
@@ -40,7 +42,7 @@ const prefer = (fields: FieldDef[], keep: (f: FieldDef) => boolean): FieldDef[] 
  * One field's choice: a Connecteam field ID, not used at all, or to be made by
  * create-fields (which then saves the new field's ID in its place).
  */
-export type FieldPick = { id: number; options?: OptionMap } | { skip: true } | { create: true };
+export type FieldPick = { id: number; options?: OptionMap } | { skip: true } | { create: true } | { profile: true };
 
 /**
  * A dropdown's options, as the client named them, to what the sync sends (#112):
@@ -62,6 +64,7 @@ export type FieldPicks = Record<string, FieldPick>;
 export function resolveField(spec: FieldSpec, fields: FieldDef[], picks: FieldPicks = {}): Resolution {
   const pick = picks[spec.name];
   if (pick && "skip" in pick) return { status: "skipped" };
+  if (pick && "profile" in pick) return spec.profile ? { status: "profile" } : { status: "none" };
   // Not made yet: no name match stands in for it, so create-fields makes it.
   if (pick && "create" in pick) return { status: "none" };
   if (pick) {

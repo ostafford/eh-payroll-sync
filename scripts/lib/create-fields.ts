@@ -27,6 +27,8 @@ export interface FieldPlan {
   undecided: Array<{ spec: FieldSpec; reason: "ambiguous" | "stalePick" }>;
   /** The human chose not to use these: never created. */
   skipped: FieldSpec[];
+  /** Read from the Connecteam profile (legal-name fields, confirmed): never created. */
+  fromProfile: FieldSpec[];
 }
 
 export function planMissingFields(
@@ -34,7 +36,7 @@ export function planMissingFields(
   categories: Array<{ id: number; name: string }>,
   picks: FieldPicks = {},
 ): FieldPlan {
-  const plan: FieldPlan = { found: [], missing: [], undecided: [], skipped: [] };
+  const plan: FieldPlan = { found: [], missing: [], undecided: [], skipped: [], fromProfile: [] };
   const defs = existing.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type }));
   for (const spec of FIELD_SPEC.filter((s) => s.create)) {
     const resolved = resolveField(spec, defs, picks);
@@ -44,6 +46,10 @@ export function planMissingFields(
     }
     if (resolved.status === "skipped") {
       plan.skipped.push(spec);
+      continue;
+    }
+    if (resolved.status === "profile") {
+      plan.fromProfile.push(spec);
       continue;
     }
     if (resolved.status !== "none") {

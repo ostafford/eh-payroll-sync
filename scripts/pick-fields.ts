@@ -77,6 +77,7 @@ async function main(): Promise<void> {
   const picks = await runFieldPicker(await source.load(ctGet), before, {
     ask,
     print: (...out) => out.forEach((l) => console.log(l)),
+    color: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
   });
   rl.close();
 

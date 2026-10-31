@@ -27,12 +27,16 @@ export function loadFieldPicks(path: string): FieldPicks {
     const spec = FIELD_SPEC.find((s) => s.name === name);
     if (!spec) throw new Error(`${path}: "${name}" is not a field the sync needs`);
     if ((pick as any)?.create === true) continue;
+    if ((pick as any)?.profile === true) {
+      if (!spec.profile) throw new Error(`${path}: "${name}" can't be read from the Connecteam profile - only the legal-name fields can`);
+      continue;
+    }
     if ((pick as any)?.skip === true) {
       if (requiredForSync(spec)) throw new Error(`${path}: "${name}" is required, so it can't be skipped`);
       continue;
     }
     const id = (pick as any)?.id;
-    if (!Number.isInteger(id) || id <= 0) throw new Error(`${path}: "${name}" needs { "id": <Connecteam field id> }, { "skip": true } or { "create": true }`);
+    if (!Number.isInteger(id) || id <= 0) throw new Error(`${path}: "${name}" needs { "id": <Connecteam field id> }, { "skip": true }, { "create": true } or (legal names only) { "profile": true }`);
     const options = (pick as any).options;
     if (options === undefined) continue;
     if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error(`${path}: "${name}".options must be an object`);

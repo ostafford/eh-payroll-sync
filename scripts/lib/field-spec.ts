@@ -51,6 +51,11 @@ export interface FieldSpec {
     isVisibleToUsers: boolean;
     isEditableForUsers: boolean;
   };
+  /**
+   * A Connecteam profile field that can stand in for it, when the human confirms
+   * (the profile name may be a preferred one, and payroll needs the legal name, #70).
+   */
+  profile?: { key: "firstName" | "lastName"; label: string; plural: string };
   target: Target;
 }
 
@@ -72,9 +77,11 @@ const NUMBER_LOSES_ZEROS =
 export const FIELD_SPEC: FieldSpec[] = [
   // --- Identity
   { name: "Legal First Name", match: /legal first name/i, group: "Identity", create: true,
+    profile: { key: "firstName", label: "First name", plural: "first names" },
     ct: { type: "str", ...employee(PERSONAL) },
     target: { kind: "field", eh: "firstName", transform: "trimString", required: true } },
   { name: "Legal Surname", match: /legal surname/i, group: "Identity", create: true,
+    profile: { key: "lastName", label: "Last name", plural: "last names" },
     ct: { type: "str", ...employee(PERSONAL) },
     target: { kind: "field", eh: "surname", transform: "trimString", required: true } },
   { name: "Birthday", match: /birthday|date of birth/i, group: "Identity", create: true,
