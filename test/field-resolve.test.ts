@@ -57,6 +57,12 @@ describe("resolveField", () => {
     expect(resolveField(spec("Suburb"), fields, { Suburb: { skip: true } })).toEqual({ status: "skipped" });
   });
 
+  it("never name-matches a field already picked for another field, so none feeds two", () => {
+    const fields = [{ id: 5, name: "Suburb", type: "str" }];
+    expect(resolveField(spec("Suburb"), fields, { Postcode: { id: 5 } })).toEqual({ status: "none" });
+    expect(resolveField(spec("Suburb"), fields, {})).toMatchObject({ status: "matched", field: { id: 5 } });
+  });
+
   it("finds nothing when no name matches", () => {
     expect(resolveField(spec("TFN"), [{ id: 1, name: "Suburb", type: "str" }])).toEqual({ status: "none" });
   });

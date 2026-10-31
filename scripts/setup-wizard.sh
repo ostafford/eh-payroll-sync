@@ -529,13 +529,11 @@ next_up "check every Connecteam field the sync reads."
 # ─────────────────────────────────────────────────────────────────────────
 stage "Connecteam field check"
 why "The sync reads 27 Connecteam fields (TFN, bank, super, tax answers," \
-    "emergency contact...) plus the award dropdown. This checks each one exists," \
-    "has the right type and dropdown options, and says how to fix anything that doesn't."
+    "emergency contact...) plus the award dropdown. This shows the client's field for" \
+    "each one, then lets you pick the right field or map dropdown options where it doesn't fit."
 printf '\n'
-# Confirm or pick each field first (#112): the check, create-fields and discover
-# all read these picks, so they agree on the field.
-npm run --silent pick-fields || exit 1
-printf '\n'
+# One step (#112): the table, then fix or change any field. The check,
+# create-fields and discover all read the saved picks, so they agree.
 field_check() { npm run --silent field-check && fc_rc=0 || fc_rc=$?; [[ $fc_rc -ne 1 ]] || exit 1; }
 field_check
 plan=$(npm run --silent create-fields -- --dry-run) || { printf '%s\n' "$plan" | sed 's/^/  /'; exit 1; }
@@ -558,9 +556,7 @@ while [[ $fc_rc -eq 2 ]]; do
   printf '\n'
   fail "A required field is missing, the wrong type or not yet picked (marked above)."
   fail "The sync can't create employees in Employment Hero until it's fixed."
-  pause "Fix it in Connecteam if needed, then press Enter to pick and check again (Ctrl-C to stop)."
-  printf '\n'
-  npm run --silent pick-fields || exit 1
+  pause "Fix it in Connecteam if needed, then press Enter to check again (Ctrl-C to stop)."
   printf '\n'
   field_check
 done

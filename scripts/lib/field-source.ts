@@ -1,5 +1,5 @@
 /**
- * Where pick-fields and field-check read the client's fields from, and where
+ * Where field-check reads the client's fields from, and where
  * the picks live. `--fields-file <path>` rehearses against saved definitions
  * (#112): nothing is sent to Connecteam, and the picks go to a scratch file so
  * the deployment's clients/self/field-picks.json is never touched.

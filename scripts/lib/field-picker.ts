@@ -3,7 +3,7 @@
  * the human can choose from, and how a choice is saved to field-picks.json.
  */
 import { compatibleType, resolveField, type FieldDef, type FieldPick, type FieldPicks, type OptionMap } from "./field-resolve.js";
-import { liveOptions, typeName } from "./field-check.js";
+import { checkFields, liveOptions, renderFieldCheck, typeName, type CheckRow } from "./field-check.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec } from "./field-spec.js";
 
 export type Choice = { kind: "use"; field: FieldDef } | { kind: "profile" } | { kind: "create" } | { kind: "skip" };
@@ -54,50 +54,37 @@ const palette = (on: boolean): Palette => {
   return { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1") };
 };
 
+/** Not a problem to fix: found, decided (skipped / to be created), or optional and absent. */
+const settledRow = (r: CheckRow) =>
+  r.group === "Award" ||
+  ["found", "skipped", "toCreate"].includes(r.result.status) ||
+  (r.level === "optional" && r.result.status === "missing");
+
 /**
- * Shows every automatic match for one confirmation, asks about each field that
- * needs a decision, and returns the picks to save. Fields already picked are
- * not asked again.
+ * The combined field check (#112): shows every field the sync needs with the
+ * client's Connecteam field and a status, then lets the human fix the problems
+ * one by one or change any row by number, redrawing after each. Finishing saves
+ * every name match by ID along with the changes, so a re-run asks nothing.
  */
-export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo): Promise<FieldPicks> {
+export async function reviewFields(raw: any[], picks: FieldPicks, io: PickerIo): Promise<FieldPicks> {
   const fields: FieldDef[] = raw.map((x) => ({ id: x?.id, name: String(x?.name ?? ""), type: String(x?.type ?? "") }));
   const p = palette(io.color === true);
   let out = { ...picks };
+  const changed = new Set<string>();
 
-  const auto: Array<{ spec: FieldSpec; field: FieldDef }> = [];
-  const undecided: Array<{ spec: FieldSpec; why: string }> = [];
-  for (const spec of FIELD_SPEC) {
-    const r = resolveField(spec, fields, out);
-    const pick = out[spec.name];
-    if (r.status === "skipped" || r.status === "profile" || (pick && "create" in pick)) continue;
-    if (r.status === "matched" && compatibleType(spec, r.field.type)) {
-      if (!r.picked) auto.push({ spec, field: r.field });
-    } else undecided.push({ spec, why: whyAsk(r, spec) });
-  }
-
-  // The table's rows never change, so a row's number always means the same field.
-  const table = auto.map((a) => a.spec);
-  const changed = new Set<FieldSpec>(); // decided from the table, not as matched
-  const moved = new Set<FieldSpec>(); // its field went to another; asked below
-  const settled = new Set<FieldSpec>(); // decided in this run
-
-  const skipped = (spec: FieldSpec) => {
-    const pick = out[spec.name];
-    return !!pick && "skip" in pick;
-  };
-  /** Which of the sync's other fields each Connecteam field is used for: picked, or still in "use all". */
+  /** Which of the sync's other fields each Connecteam field is used for, picked or matched by name. */
   const usedBy = (spec: FieldSpec): Map<number, FieldSpec> => {
     const m = new Map<number, FieldSpec>();
     for (const s of FIELD_SPEC) {
-      const p = out[s.name];
-      if (s !== spec && p && "id" in p) m.set(p.id, s);
+      if (s === spec) continue;
+      const r = resolveField(s, fields, out);
+      if (r.status === "matched") m.set(r.field.id, s);
     }
-    for (const a of auto) if (a.spec !== spec) m.set(a.field.id, a.spec);
     return m;
   };
 
-  // Asks about one field and saves the answer. The sync's super rule needs all
-  // four super fields or none (#117), so skipping one is skipping super.
+  // Asks which field to use and saves the answer. The sync's super rule needs
+  // all four super fields or none (#117), so skipping one is skipping super.
   const decide = async (spec: FieldSpec, why: string, suggested?: FieldDef): Promise<void> => {
     for (;;) {
       const used = usedBy(spec);
@@ -109,101 +96,81 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
         if (ok.trim().toLowerCase() !== "y") continue;
       }
       if (choice.kind !== "skip" || spec.target.kind !== "super") {
-        // A field in use elsewhere moves here; the field it came from is asked again, so none feeds two.
+        // A field in use elsewhere moves here. Where it came from then shows as a problem
+        // (a field picked for one is never a name match for another), so none feeds two.
         const from = choice.kind === "use" ? used.get(choice.field.id) : undefined;
         if (from && choice.kind === "use") {
-          const i = auto.findIndex((a) => a.spec === from);
-          if (i !== -1) auto.splice(i, 1);
-          else out = Object.fromEntries(Object.entries(out).filter(([name]) => name !== from.name));
-          settled.delete(from);
-          changed.delete(from);
-          if (table.includes(from)) moved.add(from);
-          undecided.push({ spec: from, why: `its field "${choice.field.name}" is now used for ${spec.name}` });
-          io.print(`  ${p.ct(`"${choice.field.name}"`)} is now used for ${p.eh(spec.name)}; ${p.eh(from.name)} is asked about again below.`);
+          out = Object.fromEntries(Object.entries(out).filter(([name]) => name !== from.name));
+          changed.delete(from.name);
+          io.print(`  ${p.ct(`"${choice.field.name}"`)} is now used for ${p.eh(spec.name)}; ${p.eh(from.name)} needs another field.`);
         }
         out = applyChoice(out, spec, choice);
-        settled.add(spec);
-        moved.delete(spec);
+        changed.add(spec.name);
         return;
       }
       io.print("", "The sync needs all four super fields or none.");
       const all = (await io.ask("Skip super entirely? Super details are then entered in Employment Hero by hand. [y/N] ")).trim().toLowerCase();
       if (all === "y") {
-        for (const s of FIELD_SPEC.filter((x) => x.target.kind === "super")) out = applyChoice(out, s, { kind: "skip" });
+        for (const s of FIELD_SPEC.filter((x) => x.target.kind === "super")) {
+          out = applyChoice(out, s, { kind: "skip" });
+          changed.add(s.name);
+        }
         return;
       }
     }
   };
 
-  const fieldName = (id: number) => fields.find((f) => f.id === id)?.name ?? `field ${id}`;
-  /** One table row: what the sync needs, and the client's field for it (or what happened to it). */
-  const tableRow = (spec: FieldSpec, i: number): string => {
-    const pending = auto.find((a) => a.spec === spec);
+  /** A dropdown's options EH doesn't take: ask what each one sends. */
+  const fixOptions = async (spec: FieldSpec): Promise<void> => {
+    if (!spec.ct.options) return;
+    const r = resolveField(spec, fields, out);
+    if (r.status !== "matched") return;
     const pick = out[spec.name];
-    const yours = pending
-      ? p.ct(`"${pending.field.name}"`)
-      : moved.has(spec)
-        ? `${p.dim("(asked below)".padEnd(30))}  ${p.change("← moved")}`
-        : `${
-            pick && "id" in pick
-              ? p.ct(`"${fieldName(pick.id)}"`.padEnd(30))
-              : pick && "profile" in pick && spec.profile
-                ? p.ct(`profile "${spec.profile.label}"`.padEnd(30))
-                : p.dim((pick && "skip" in pick ? "(skipped)" : "(new field to create)").padEnd(30))
-          }  ${p.change("← changed")}`;
-    return `  ${String(i + 1).padStart(2)}) ${p.eh(spec.name.padEnd(38))} ${yours}`;
+    const known = pick && "id" in pick && pick.id === r.field.id ? (pick.options ?? {}) : {};
+    const options = await mapOptions(spec, liveOptions(raw.find((x) => x?.id === r.field.id)), known, io);
+    if (options) {
+      out = { ...out, [spec.name]: { id: r.field.id, options } };
+      changed.add(spec.name);
+    }
   };
 
-  // Every match is shown, so a wrong one is caught; one answer accepts the rest.
-  // Rows stay put: a change shows in its row, never by dropping it.
-  while (auto.length) {
-    io.print("", "Matched automatically:");
-    io.print(`      ${p.bold(p.eh("Employment Hero needs".padEnd(38)))} ${p.bold(p.ct("Your Connecteam field"))}`);
-    io.print(`      ${p.dim("─".repeat(38))} ${p.dim("─".repeat(30))}`);
-    table.forEach((spec, i) => io.print(tableRow(spec, i)));
-    const prompt = changed.size
-      ? `Use the ${auto.length} automatic matches? Your ${changed.size} change${changed.size === 1 ? " is" : "s are"} kept.`
-      : `Use all ${auto.length} matches above?`;
-    const answer = (await io.ask(`${prompt} [Y / n / number to change] `)).trim().toLowerCase();
+  /** Fixes one row: options to map are asked about directly; anything else (or a change) picks a field first. */
+  const fix = async (spec: FieldSpec, change: boolean): Promise<void> => {
+    const r = resolveField(spec, fields, out);
+    const row = checkFields(raw, out).find((x) => x.name === spec.name)!;
+    if (!change && row.result.status === "options") return fixOptions(spec);
+    const current = r.status === "matched" ? r.field : undefined;
+    await decide(spec, current && change ? `matched "${current.name}"` : whyAsk(r, spec), current);
+    await fixOptions(spec);
+  };
+
+  for (;;) {
+    const rows = checkFields(raw, out);
+    io.print("", ...renderFieldCheck(rows, { color: io.color === true, numbered: true, explain: false, changed }).split("\n"));
+    const problems = FIELD_SPEC.filter((s) => !settledRow(rows.find((r) => r.name === s.name)!));
+    const prompt = problems.length
+      ? `Fix the ${problems.length} problem${problems.length === 1 ? "" : "s"} now? [Y / number to change a row / done] `
+      : "Everything's in place. Press Enter to finish, or type a number to change a row. ";
+    const answer = (await io.ask(prompt)).trim().toLowerCase();
+
+    if (answer === "done" || (!problems.length && (answer === "" || answer === "y"))) break;
     if (answer === "" || answer === "y") {
-      for (const { spec, field } of auto) out = applyChoice(out, spec, { kind: "use", field });
-      break;
-    }
-    if (answer === "n") {
-      // Taken off the table as each is asked, so the rest still show as in use.
-      while (auto.length) {
-        const { spec, field } = auto.shift()!;
-        if (!skipped(spec)) await decide(spec, `matched "${field.name}"`, field);
+      for (const spec of problems) {
+        // An earlier answer (a move, skipping super) may have settled or changed it.
+        if (!settledRow(checkFields(raw, out).find((r) => r.name === spec.name)!)) await fix(spec, false);
       }
-      break;
-    }
-    const n = Number(answer);
-    const spec = Number.isInteger(n) && n >= 1 ? table[n - 1] : undefined;
-    if (!spec) {
-      io.print(`  Type y, n, or a number from 1 to ${table.length}.`);
       continue;
     }
-    const i = auto.findIndex((a) => a.spec === spec);
-    const pending = i !== -1 ? auto.splice(i, 1)[0] : undefined;
-    const pick = out[spec.name];
-    const current = pending?.field ?? (pick && "id" in pick ? fields.find((f) => f.id === pick.id) : undefined);
-    await decide(spec, current ? `matched "${current.name}"` : moved.has(spec) ? "its field was moved to another" : "you changed it", current);
-    changed.add(spec);
-    // Skipping super takes its other fields out of "use all".
-    for (const a of [...auto]) if (skipped(a.spec)) {
-      auto.splice(auto.indexOf(a), 1);
-      changed.add(a.spec);
-    }
+    const n = Number(answer);
+    const spec = Number.isInteger(n) && n >= 1 ? FIELD_SPEC[n - 1] : undefined;
+    if (spec) await fix(spec, true);
+    else io.print(`  Type ${problems.length ? "y, " : ""}done, or a number from 1 to ${FIELD_SPEC.length}.`);
   }
 
-  for (const { spec, why } of undecided) if (!skipped(spec) && !settled.has(spec)) await decide(spec, why);
-
-  // Then each picked dropdown whose options aren't all values EH takes.
-  for (const spec of FIELD_SPEC.filter((s) => s.create && s.ct.options)) {
-    const pick = out[spec.name];
-    if (!pick || !("id" in pick)) continue;
-    const options = await mapOptions(spec, liveOptions(raw.find((x) => x?.id === pick.id)), pick.options ?? {}, io);
-    if (options) out = { ...out, [spec.name]: { id: pick.id, options } };
+  // Finishing confirms what's shown: every name match is saved by ID, so a re-run asks nothing.
+  for (const spec of FIELD_SPEC) {
+    const r = resolveField(spec, fields, out);
+    if (r.status === "matched" && !r.picked) out = applyChoice(out, spec, { kind: "use", field: r.field });
   }
   return out;
 }
