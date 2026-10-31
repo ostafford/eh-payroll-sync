@@ -77,6 +77,15 @@ describe("runFieldPicker (scripted answers)", () => {
     expect(suburb).toContain('Use "Employee ID" (text)');
   });
 
+  it("changing one match doesn't offer a field another match in the table is about to use", async () => {
+    const usiRow = (screen: string) => /(\d+)\) Super Fund USI/.exec(screen)![1]!;
+    const { out } = await run(demo(), {}, [usiRow, "1", "y"]);
+    const from = out.lastIndexOf("Super Fund USI (optional)");
+    const usi = out.slice(from, out.indexOf("Matched automatically", from));
+    expect(usi).toContain('1) Use "Super Fund USI" (text)');
+    expect(usi).not.toContain('"Legal Surname"');
+  });
+
   it("asks about an ambiguous field on its own, by number", async () => {
     const raw = [...demo(), { id: 7, name: "Tax File Number", type: "str" }];
     const { result, asked, out } = await run(raw, {}, ["y", "2"]);
@@ -102,14 +111,14 @@ describe("runFieldPicker (scripted answers)", () => {
   });
 
   it("a number changes that one match, then asks again for the rest", async () => {
-    const raw = demo();
-    const startDate = pickerChoices(spec("Birthday"), raw).findIndex((c) => c.kind === "use" && c.field.name === "Employment Start Date");
+    const raw = [...demo(), { id: 77, name: "DOB (2026)", type: "date" }];
+    const dob = (screen: string) => [...screen.matchAll(/(\d+)\) Use "DOB \(2026\)"/g)].at(-1)![1]!;
     // Birthday is 3rd in the table (after the two legal names).
-    const { result, asked, out } = await run(raw, {}, ["3", String(startDate + 1), "y"]);
+    const { result, asked, out } = await run(raw, {}, ["3", dob, "y"]);
     expect(out).toContain(' 3) Birthday');
     expect(asked).toHaveLength(3);
     expect(asked[2]).toContain("Use all 26");
-    expect(result.Birthday).toEqual({ id: raw.find((f) => f.name === "Employment Start Date")!.id });
+    expect(result.Birthday).toEqual({ id: 77 });
     expect(result.TFN).toEqual({ id: 42923222 });
   });
 
@@ -167,6 +176,33 @@ describe("runFieldPicker (scripted answers)", () => {
       const { result, asked } = await run(client(), picks, ["4"]);
       expect(asked).toEqual(['Employee Status: "Contractor" -> ']);
       expect(result["Employee Status"]).toMatchObject({ options: { Contractor: "LabourHire", PBV: null } });
+    });
+  });
+
+  describe("super fields: all four or none (#117)", () => {
+    const SUPER = ["Super Fund USI", "Super Fund ABN", "Super Fund Name", "Member Number"];
+    const noUsi = () => demo().filter((f) => f.name !== "Super Fund USI");
+    const skip = (screen: string) => [...screen.matchAll(/(\d+)\) Skip/g)].at(-1)![1]!;
+
+    it("skipping one asks to skip super entirely; yes skips all four", async () => {
+      const { result, asked, out } = await run(noUsi(), {}, ["y", skip, "y"]);
+      expect(asked.at(-1)).toMatch(/^Skip super entirely\?/);
+      expect(out).toContain("The sync needs all four super fields or none.");
+      for (const name of SUPER) expect(result[name]).toEqual({ skip: true });
+    });
+
+    it("no goes back to the choices for that field", async () => {
+      const usiNumber = (screen: string) => [...screen.matchAll(/(\d+)\) Create a new "Super Fund USI"/g)].at(-1)![1]!;
+      const { result } = await run(noUsi(), {}, ["y", skip, "n", usiNumber]);
+      expect(result["Super Fund USI"]).toEqual({ create: true });
+      expect(result["Super Fund ABN"]).toEqual({ id: 42920783 });
+    });
+
+    it("changing a matched super field to Skip, then yes, keeps 'use all' from undoing it", async () => {
+      const usiRow = (screen: string) => /(\d+)\) Super Fund USI/.exec(screen)![1]!;
+      const { result } = await run(demo(), {}, [usiRow, skip, "y", "y"]);
+      for (const name of SUPER) expect(result[name]).toEqual({ skip: true });
+      expect(result.TFN).toEqual({ id: 42923222 });
     });
   });
 });

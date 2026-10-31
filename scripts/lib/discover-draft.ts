@@ -42,7 +42,8 @@ export interface DraftResult {
     fields: Array<{ eh: string; from: Record<string, unknown>; transform: string; [k: string]: unknown }>;
     rules: {
       taxDeclaration: Record<string, { customFieldId: number; options?: Record<string, string> }>;
-      super: Record<string, number | "TODO">;
+      /** Absent when super is skipped in the picker: entered in EH by hand (#117). */
+      super?: Record<string, number | "TODO">;
       constants: Record<string, unknown>;
     };
   };
@@ -67,7 +68,11 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
 
   const mapped: DraftResult["draft"]["fields"] = [];
   const taxDeclaration: DraftResult["draft"]["rules"]["taxDeclaration"] = {};
-  const superFields: DraftResult["draft"]["rules"]["super"] = {};
+  const superFields: Record<string, number | "TODO"> = {};
+  // The sync's super rule takes all four fields or none, and the picker skips all four together.
+  const superSkipped = FIELD_SPEC.filter((s) => s.target.kind === "super").every(
+    (s) => resolveField(s, defs, input.picks).status === "skipped",
+  );
   const ruleConsumed = new Set<number>();
   const specNotSynced = new Set<number>();
   for (const spec of FIELD_SPEC) {
@@ -110,7 +115,7 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
     ],
     rules: {
       taxDeclaration,
-      super: superFields,
+      ...(superSkipped ? {} : { super: superFields }),
       constants: { bankAccount1_AllocatedPercentage: 100, bankAccount1: "Electronic" },
     },
   };

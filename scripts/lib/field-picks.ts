@@ -40,6 +40,13 @@ export function loadFieldPicks(path: string): FieldPicks {
       if (to !== null && typeof to !== "string") throw new Error(`${path}: "${name}" option "${option}" must map to a value or null (not synced)`);
     }
   }
+  // The sync's super rule takes all four fields or none (#117).
+  const supers = FIELD_SPEC.filter((s) => s.target.kind === "super").map((s) => s.name);
+  const skippedSupers = supers.filter((n) => raw[n]?.skip === true);
+  if (skippedSupers.length && skippedSupers.length < supers.length) {
+    const rest = supers.filter((n) => !skippedSupers.includes(n));
+    throw new Error(`${path}: the sync needs all four super fields or none - skip ${rest.join(", ")} too, or un-skip ${skippedSupers.join(", ")}`);
+  }
   return raw as FieldPicks;
 }
 
