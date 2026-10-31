@@ -37,6 +37,6 @@ fields feeds each field the sync needs: `{ "id": 43566219 }` (plus, for a
 dropdown, `"options": { "Full-time": "FullTime", "PBV": null }`, where `null`
 means not synced: a Correction message), `{ "skip": true }`
 (optional fields only), or `{ "create": true }` (waiting on `create-fields`,
-which swaps in the new field's ID). The wizard's picker (`npm run pick-fields`)
+which swaps in the new field's ID). The wizard's field check (`npm run field-check`)
 writes it. The field check, `create-fields` and `discover` all read it before
 matching by name. Remove an entry to be asked about that field again.

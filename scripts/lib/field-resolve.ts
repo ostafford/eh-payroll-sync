@@ -72,7 +72,9 @@ export function resolveField(spec: FieldSpec, fields: FieldDef[], picks: FieldPi
     return field ? { status: "matched", field, picked: true } : { status: "stalePick", id: pick.id };
   }
 
-  const named = fields.filter((f) => spec.match.test(f.name));
+  // A field picked for another of the sync's fields isn't a candidate here, so none feeds two.
+  const taken = new Set(Object.entries(picks).flatMap(([name, p]) => (name !== spec.name && "id" in p ? [p.id] : [])));
+  const named = fields.filter((f) => spec.match.test(f.name) && !taken.has(f.id));
   const typed = prefer(named, (f) => compatibleType(spec, f.type));
   const current = prefer(typed, (f) => !RETIRED.test(f.name));
   const [only, ...more] = current;

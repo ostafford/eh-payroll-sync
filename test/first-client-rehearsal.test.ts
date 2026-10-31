@@ -1,13 +1,13 @@
 /**
  * The first client's setup call (#112), replayed from their field definitions
  * (test/fixtures/first-client-fields.json): what stopped the call, then the
- * picker answers a person would give, ending with a clean field check.
+ * combined field check's questions answered as a person would, ending clean.
  */
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { readFieldsFile } from "../scripts/lib/connecteam-custom-fields.js";
 import { checkFields, summarise } from "../scripts/lib/field-check.js";
-import { runFieldPicker } from "../scripts/lib/field-picker.js";
+import { reviewFields } from "../scripts/lib/field-picker.js";
 
 const raw = readFieldsFile(fileURLToPath(new URL("./fixtures/first-client-fields.json", import.meta.url)));
 const row = (rows: ReturnType<typeof checkFields>, name: string) => rows.find((r) => r.name === name)!;
@@ -23,26 +23,26 @@ describe("first client's setup, replayed", () => {
     expect(row(rows, "Employee Status")).toMatchObject({ blocking: true, result: { status: "options" } });
   });
 
-  it("after the picker: a clean field check", async () => {
+  it("through the combined field check: Y fixes each problem, ending in a clean check", async () => {
     // Reads a choice's number off the screen, as a person would.
     let screen: string[] = [];
     const numberOf = (fieldName: string) => () =>
       screen.map((l) => /^\s*(\d+)\) Use "(.*)" \(/.exec(l)).find((m) => m?.[2] === fieldName)![1]!;
     // What a person answers to each question, keyed by the question.
     const answers: Array<[RegExp, string | (() => string)]> = [
-      [/^Use all \d+ matches/, "y"],
-      [/^Pick .* for Claim tax-free threshold\?/, numberOf("Claim Tax Free Threshold?")],
-      [/^Pick .* for Have a HELP/, numberOf(raw.find((f) => f.name.startsWith("Higher Education"))!.name)],
+      [/^Fix the 4 problems now\?/, "y"],
       [/^Gender: /, "3"], // Indeterminate (EH leaves it blank)
       [/^Employee Status: "Full-time"/, "1"],
       [/^Employee Status: "Part-time"/, "2"],
       [/^Employee Status: "(PBV|Contractor)"/, "5"], // not synced
+      [/^Pick .* for Claim tax-free threshold\?/, numberOf("Claim Tax Free Threshold?")],
       [/^Claim tax-free threshold\?: "Yes, claim/, "1"],
       [/^Claim tax-free threshold\?: "(N\/A|TBC)"/, "3"], // not synced
-      [/^Pick .* for Standard hours per week/, () => /(\d+)\) Skip/.exec(screen.join("\n"))![1]!], // they don't record hours
+      [/^Pick .* for Have a HELP/, numberOf(raw.find((f) => f.name.startsWith("Higher Education"))!.name)],
+      [/^Everything's in place/, ""],
     ];
     const asked: string[] = [];
-    const picks = await runFieldPicker(raw, {}, {
+    const picks = await reviewFields(raw, {}, {
       ask: async (prompt) => {
         asked.push(prompt);
         const hit = answers.find(([q]) => q.test(prompt));
@@ -54,7 +54,7 @@ describe("first client's setup, replayed", () => {
       print: (...lines) => screen.push(...lines),
     });
 
-    expect(asked).toHaveLength(1 + 3 + 3 + 4 + 3);
-    expect(summarise(checkFields(raw, picks))).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1 });
+    expect(asked).toHaveLength(1 + 3 + 4 + 1 + 3 + 1 + 1);
+    expect(summarise(checkFields(raw, picks))).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1, toCreate: 0 });
   });
 });

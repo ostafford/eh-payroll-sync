@@ -153,27 +153,33 @@ Connecteam when the webhook is registered (step 5). → **`CT_WEBHOOK_SECRET`**
 
 ### 2f. Custom fields
 The sync reads 27 custom fields (`docs/connecteam-field-checklist.md`; the award
-dropdown is §3). The wizard first shows which of the client's fields it matched
-to each one and lets you confirm, pick another, create one or skip (optional
-fields only). It then checks them and creates any that are missing, with the
-right type, dropdown options and permissions:
+dropdown is §3). The field check shows one table: each field the sync needs,
+the client's Connecteam field for it, and a status (matched by name, missing,
+wrong type, options to map, more than one match…), grouped by area. It then
+offers to fix each problem in turn, or change any row by number: pick another
+field, use the profile name (legal-name fields only), create one, skip it
+(optional fields only), or map dropdown options. Finishing saves every match by
+field ID. The wizard then creates any field picked as "create", with the right
+type, dropdown options and permissions:
 
 ```bash
-npm run pick-fields                  # confirm or pick each field; saved to clients/self/field-picks.json
-npm run field-check                  # every field: found / missing / wrong type / options, with fixes
+npm run field-check                  # the table, then fix / change; saved to clients/self/field-picks.json
+npm run field-check -- --check-only  # just the table, with why + how to fix each problem
 npm run create-fields -- --dry-run   # list what's missing
 npm run create-fields
 ```
 
-`field-check` exits `2` when a required field is missing, the wrong type, or
-not yet picked (more than one match, or the picked field was deleted); the
-wizard won't continue until it's fixed.
+Not in a terminal (piped), `field-check` acts like `--check-only` and asks
+nothing. It exits `2` when a required field is missing, the wrong type, not yet
+picked (more than one match, or the picked field was deleted) or still to be
+created; the wizard won't continue until it's fixed.
 
 Picks are saved by Connecteam field ID, and `field-check`, `create-fields` and
 `discover` all read them before matching by name, so all three use the same
 field. A field the client already has under their own name (e.g. "Tax File Number"
 for "TFN") is matched and left alone, so re-running never duplicates one. A
-re-run of the picker asks only about fields not yet decided.
+field picked for one thing is never a name match for another, so no field feeds
+two. A re-run shows everything as "confirmed" and needs only Enter.
 
 Super is all four fields or none (#117): the sync's super rule needs the USI,
 ABN, fund name and member number together. Skipping any one asks "Skip super
@@ -182,23 +188,22 @@ super is entered in Employment Hero by hand for every employee. A hand-edited
 `field-picks.json` that skips some super fields but not all is rejected.
 
 For a picked dropdown whose options aren't all values EH takes (e.g. Employee
-Status `Full-time | PBV`), the picker asks what each option sends: an EH value,
+Status `Full-time | PBV`), the check asks what each option sends: an EH value,
 or "not synced" (the employee gets a Correction message). Tax questions map to
 Yes / No the same way. The choices are saved with the pick, go into the draft
 field map, and `discover` writes them into a field map it kept.
 
-**Rehearse the picker without an account.** `--fields-file` reads saved field
+**Rehearse the field check without an account.** `--fields-file` reads saved field
 definitions instead of calling Connecteam, and keeps the choices in a scratch
 file in the system temp folder (never `clients/self`). The bundled file is the
 first client's setup (#112): `(OLD)` duplicates, renamed tax questions, and
 options EH doesn't take.
 
 ```bash
-npm run pick-fields -- --fields-file test/fixtures/first-client-fields.json
 npm run field-check -- --fields-file test/fixtures/first-client-fields.json
 ```
 
-Delete the scratch file the picker names to start over.
+Delete the scratch file it names at the top to start over.
 **Then attach each new field to the onboarding pack in the Connecteam UI** (no
 API for that); the script prints the exact list. A field not in the pack is
 never asked, so it is always blank.

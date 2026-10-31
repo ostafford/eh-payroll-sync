@@ -29,14 +29,14 @@ describe("checkFields", () => {
   it("passes the demo account: everything found but the optional hours field it doesn't have", () => {
     const rows = checkFields(demoRaw());
     expect(rows.filter((r) => r.result.status !== "found").map((r) => r.name)).toEqual(["Standard hours per week"]);
-    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1 });
+    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1, toCreate: 0 });
   });
 
   it("a missing required field blocks; a missing recommended one only warns", () => {
     const rows = checkFields(without("TFN").filter((f) => f.name !== "Suburb"));
     expect(row(rows, "TFN")).toMatchObject({ level: "required", blocking: true, result: { status: "missing" } });
     expect(row(rows, "Suburb")).toMatchObject({ level: "recommended", blocking: false, result: { status: "missing" } });
-    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1, skipped: 1 });
+    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1, skipped: 1, toCreate: 0 });
   });
 
   it("flags a wrong type, and blocks when the field is required", () => {
@@ -110,9 +110,9 @@ describe("checkFields", () => {
   it("a skipped recommended field is neither missing nor a warning", () => {
     const rows = checkFields(without("Suburb"), { Suburb: { skip: true } });
     expect(row(rows, "Suburb")).toMatchObject({ blocking: false, result: { status: "skipped" } });
-    expect(summarise(rows)).toEqual({ ok: 27, blocking: 0, warnings: 0, skipped: 2 });
+    expect(summarise(rows)).toEqual({ ok: 27, blocking: 0, warnings: 0, skipped: 2, toCreate: 0 });
     expect(renderFieldCheck(rows, { color: false }).trim().split("\n").at(-1)).toBe(
-      "27 ok · 0 required missing or wrong · 0 warnings · 2 not used",
+      "27 ok · 0 required to fix · 0 to check · 2 not used",
     );
   });
 
@@ -178,7 +178,7 @@ describe("checkFields", () => {
   it("a profile pick for a legal-name field counts as found, naming the profile field", () => {
     const rows = checkFields(without("Legal First Name"), { "Legal First Name": { profile: true } });
     expect(row(rows, "Legal First Name")).toMatchObject({ blocking: false, result: { status: "found" }, profile: "First name" });
-    expect(renderFieldCheck(rows, { color: false })).toContain('(your field: Connecteam profile "First name")');
+    expect(renderFieldCheck(rows, { color: false })).toMatch(/Legal First Name\s+profile "First name"\s+profile name/);
   });
 
   it("warns when employees can edit the award field", () => {
@@ -194,26 +194,74 @@ describe("checkFields", () => {
   });
 });
 
-describe("renderFieldCheck", () => {
+describe("renderFieldCheck: the combined table", () => {
   const rows = checkFields(without("TFN"));
+  const plain = (r = rows, o: object = {}) => renderFieldCheck(r, { color: false, ...o });
+  const line = (out: string, name: string) => out.split("\n").find((l) => new RegExp(`\\s${name}\\s`).test(l))!;
 
-  it("groups by area, explains every non-green result, and ends with a summary", () => {
-    const out = renderFieldCheck(rows, { color: false });
-    expect(out).toContain("Identity");
-    expect(out).toContain("[x] TFN");
-    const unwrapped = out.replace(/\n {8}(?![\[WF])/g, " ");
+  it("heads the columns and groups rows by area", () => {
+    const out = plain();
+    expect(out).toMatch(/Employment Hero needs\s+Your Connecteam field\s+Status/);
+    for (const g of ["Identity", "Address", "Tax", "Bank", "Super", "Award"]) expect(out).toContain(`\n${g}\n`);
+  });
+
+  it("says how each field was found, or what's wrong, in the status column", () => {
+    const raw = [
+      ...demoRaw().filter((f) => !["Suburb", "Gender", "BSB"].includes(f.name)),
+      { id: 7, name: "Tax File Number", type: "str", isEditableForUsers: true, dropdownOptions: [] },
+    ];
+    const picks = {
+      "Legal Surname": { profile: true },
+      Title: { id: 25145108 },
+      Suburb: { skip: true },
+      BSB: { create: true },
+    } as const;
+    const out = plain(checkFields(raw, picks));
+    expect(line(out, "Legal First Name")).toMatch(/\[ok\] Legal First Name\s+"Legal First Name"\s+matched by name$/);
+    expect(line(out, "Title")).toMatch(/"Title"\s+confirmed$/);
+    expect(line(out, "Legal Surname")).toMatch(/profile "Last name"\s+profile name$/);
+    expect(line(out, "Suburb")).toMatch(/\[-\] Suburb\s+\(skipped\)\s+skipped$/);
+    expect(line(out, "BSB")).toMatch(/\(new field to create\)\s+to be created$/);
+    expect(line(out, "Gender")).toMatch(/\[!\] Gender\s+\(none found\)\s+missing$/);
+    expect(line(out, "TFN")).toMatch(/\[x\] TFN\s+\(2 fields match\)\s+more than one match$/);
+    expect(line(out, "Standard hours per week")).toMatch(/\[-\] .*\(none found\)\s+not used$/);
+  });
+
+  it("numbers the fields you can change (not the award row), and marks your changes", () => {
+    const out = plain(rows, { numbered: true, explain: false, changed: new Set(["Suburb"]) });
+    expect(out).toMatch(/\n {3}1\) \[ok\] Legal First Name/);
+    expect(line(out, "Suburb")).toMatch(/^\s+6\) .*"Suburb"\s+changed$/);
+    expect(line(out, "EH Pay Rate Template")).not.toMatch(/\d\)/);
+  });
+
+  it("explains each problem in check-only mode, and not when asked not to", () => {
+    const unwrapped = plain().replace(/\n {8}(?![\[WF])/g, " ");
     expect(unwrapped).toMatch(/Why: .*Correction message/);
     expect(unwrapped).toMatch(/Fix: .*npm run create-fields/);
-    expect(out.trim().split("\n").at(-1)).toBe("27 ok · 1 required missing or wrong · 0 warnings · 1 not used");
+    expect(plain(rows, { explain: false })).not.toContain("Why:");
   });
 
-  it("fits a 100-column terminal", () => {
-    const wide = renderFieldCheck(checkFields(replace("Birthday", { type: "str" })), { color: false });
-    for (const line of wide.split("\n")) expect(line.length).toBeLessThanOrEqual(100);
+  it("ends with a summary", () => {
+    expect(plain().trim().split("\n").at(-1)).toBe("27 ok · 1 required to fix · 0 to check · 1 not used");
   });
 
-  it("uses colour only when asked", () => {
-    expect(renderFieldCheck(rows, { color: false })).not.toContain("\u001b[");
-    expect(renderFieldCheck(rows, { color: true })).toContain("\u001b[");
+  it("fits a 100-column terminal, numbered or not", () => {
+    const raw = replace("Have a HELP/STSL study debt?", {
+      name: "Higher Education Loan Program (HELP), Student Startup Loan (SSL), Trade Support Loan?",
+    });
+    const help = { "Have a HELP/STSL study debt?": { id: 42923316 } };
+    for (const o of [{}, { numbered: true }]) {
+      for (const l of plain(checkFields(raw, help), o).split("\n")) expect(l.length).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("colours Employment Hero purple, Connecteam cyan, and each status, only when asked", () => {
+    expect(plain()).not.toContain("\u001b[");
+    const out = renderFieldCheck(rows, { color: true, changed: new Set(["Suburb"]) });
+    expect(out).toContain("\u001b[35mLegal First Name");
+    expect(out).toContain('\u001b[36m"Legal First Name"');
+    expect(out).toContain("\u001b[32m✓");
+    expect(out).toContain("\u001b[31m✗");
+    expect(out).toContain("\u001b[33mchanged");
   });
 });

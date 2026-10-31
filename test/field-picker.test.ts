@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyChoice, pickerChoices, runFieldPicker } from "../scripts/lib/field-picker.js";
+import { applyChoice, pickerChoices, reviewFields } from "../scripts/lib/field-picker.js";
 import type { FieldPicks } from "../scripts/lib/field-resolve.js";
 import { FIELD_SPEC } from "../scripts/lib/field-spec.js";
 import { DEMO_CUSTOM_FIELDS } from "./fixtures/demo-custom-fields.js";
@@ -59,13 +59,36 @@ describe("applyChoice", () => {
   });
 });
 
-describe("runFieldPicker (scripted answers)", () => {
-  // The demo account plus an hours field (it has none), so one "y" answers every field.
-  const demo = () => [
-    ...DEMO_CUSTOM_FIELDS.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type })),
+describe("reviewFields: the combined field check (scripted answers)", () => {
+  // The demo account (with its dropdown options) plus an hours field it lacks,
+  // so a clean run has nothing to fix.
+  const DEMO_OPTIONS: Record<string, string[]> = {
+    Gender: ["Male", "Female", "Other"],
+    State: ["QLD", "NSW", "VIC", "ACT", "TAS", "SA", "WA", "NT", "INTERNATIONAL"],
+    "Employee Status": ["FullTime", "Casual", "PartTime", "LabourHire"],
+    "Claim tax-free threshold?": ["Yes", "No"],
+    "Australian resident for tax purposes?": ["Yes", "No"],
+    "Have a HELP/STSL study debt?": ["Yes", "No"],
+  };
+  const demo = (): any[] => [
+    ...DEMO_CUSTOM_FIELDS.map((f) => ({
+      id: f.customFieldId,
+      name: f.name,
+      type: f.type,
+      isEditableForUsers: f.name !== "EH Pay Rate Template",
+      dropdownOptions: (DEMO_OPTIONS[f.name] ?? []).map((value) => ({ value, isDeleted: false })),
+    })),
     { id: 99001, name: "Standard hours per week", type: "number" },
   ];
-  /** A function answer reads the screen so far, as a person would. */
+  const ALL_GOOD = "Everything's in place. Press Enter to finish, or type a number to change a row. ";
+  const fixPrompt = (n: number) => `Fix the ${n} problem${n === 1 ? "" : "s"} now? [Y / number to change a row / done] `;
+  /** A row's number in the table (FIELD_SPEC order). */
+  const rowOf = (name: string) => String(FIELD_SPEC.findIndex((s) => s.name === name) + 1);
+  /** Picks a choice by what it says, reading the screen as a person would. */
+  const choice = (label: string) => (screen: string) => {
+    const hits = [...screen.matchAll(/^\s*(\d+)\) (.*)$/gm)].filter((m) => m[2]!.startsWith(label));
+    return hits.at(-1)![1]!;
+  };
   const run = async (
     raw: any[],
     picks: FieldPicks,
@@ -74,7 +97,7 @@ describe("runFieldPicker (scripted answers)", () => {
   ) => {
     const asked: string[] = [];
     const out: string[] = [];
-    const result = await runFieldPicker(raw, picks, {
+    const result = await reviewFields(raw, picks, {
       ask: async (prompt) => {
         asked.push(prompt);
         const a = answers.shift();
@@ -87,135 +110,91 @@ describe("runFieldPicker (scripted answers)", () => {
     });
     return { result, asked, out: out.join("\n") };
   };
+  /** The last table drawn: its numbered rows. */
+  const lastTable = (out: string) => {
+    const from = out.lastIndexOf("Employment Hero needs");
+    return out.slice(from).split("\n").filter((l) => /^\s+\d+\) /.test(l)).slice(0, FIELD_SPEC.length);
+  };
+  const tableRow = (out: string, name: string) => lastTable(out).find((l) => new RegExp(`\\) \\S+ ${name.replace(/[?()]/g, "\\$&")}\\s`).test(l))!;
 
-  it("one 'y' confirms every automatic match, saving each by ID", async () => {
-    const { result, asked } = await run(demo(), {}, ["y"]);
-    expect(asked).toHaveLength(1);
+  it("shows the table, and on a clean account one Enter saves every match by ID", async () => {
+    const { result, asked, out } = await run(demo(), {}, [""]);
+    expect(asked).toEqual([ALL_GOOD]);
+    expect(out).toMatch(/Employment Hero needs\s+Your Connecteam field\s+Status/);
+    expect(tableRow(out, "Legal First Name")).toMatch(/^\s+1\) \[ok\] Legal First Name\s+"Legal First Name"\s+matched by name$/);
     expect(Object.keys(result)).toHaveLength(FIELD_SPEC.length);
     expect(result.TFN).toEqual({ id: 42923222 });
   });
 
-  describe("changing a match: every usable field is listed (your rehearsal)", () => {
-    const row = (name: string) => (screen: string) => new RegExp(`(\\d+)\\) ${name}\\s`).exec(screen)![1]!;
-    const choice = (field: string) => (screen: string) =>
-      [...screen.matchAll(new RegExp(`(\\d+)\\) Use "${field}"`, "g"))].at(-1)![1]!;
-    const question = (out: string, name: string) => {
-      const from = out.lastIndexOf(`${name} (`);
-      const to = out.indexOf("Matched automatically", from);
-      return to === -1 ? out.slice(from) : out.slice(from, to);
-    };
-
-    it("lists fields in use elsewhere, saying what for, and why the rest aren't listed", async () => {
-      const { out } = await run(demo(), {}, [row("Postcode"), "1", "y"]);
-      const q = question(out, "Postcode");
-      expect(q).toContain('Use "Postcode" (text)');
-      expect(q).toContain('Use "Suburb" (text) - currently used for Suburb');
-      expect(q).toContain('Use "Legal Surname" (text) - currently used for Legal Surname');
-      expect(q).toMatch(/\d+ other fields aren't listed: .*can't hold this value/);
-      expect(q).toContain('Use "Standard hours per week" (number) - currently used for');
-    });
-
-    it("picking a field in use moves it, and the field it came from is asked again", async () => {
-      // The client's postcode is really in the field matched to Suburb.
-      const raw = [...demo(), { id: 501, name: "Locality", type: "str" }];
-      const { result, asked } = await run(raw, {}, [row("Postcode"), choice("Suburb"), "y", choice("Locality")]);
-      expect(result.Postcode).toEqual({ id: 42920715 }); // the field named "Suburb"
-      expect(asked.at(-1)).toBe("Pick 1-" + asked.at(-1)!.match(/1-(\d+)/)![1] + " for Suburb: ");
-      expect(result.Suburb).toEqual({ id: 501 });
-      const ids = Object.values(result).flatMap((p) => ("id" in p ? [p.id] : []));
-      expect(new Set(ids).size).toBe(ids.length); // still no field used twice
-    });
-
-    /** The last "Matched automatically" table printed, rows only. */
-    const lastTable = (out: string) => {
-      const lines = out.slice(out.lastIndexOf("Matched automatically")).split("\n");
-      const end = lines.indexOf("", 1);
-      return lines.slice(0, end === -1 ? undefined : end).filter((l) => /^\s+\d+\) /.test(l));
-    };
-
-    it("keeps a changed row in the table, showing your choice, so the count never drops", async () => {
-      const raw = [...demo(), { id: 77, name: "DOB (2026)", type: "date" }];
-      const { asked, out } = await run(raw, {}, [row("Birthday"), choice("DOB \\(2026\\)"), "y"]);
-      const table = lastTable(out);
-      expect(table).toHaveLength(FIELD_SPEC.length);
-      expect(table.find((l) => l.includes("Birthday"))).toMatch(/Birthday\s+"DOB \(2026\)"\s+← changed/);
-      expect(asked.at(-1)).toBe(`Use the ${FIELD_SPEC.length - 1} automatic matches? Your 1 change is kept. [Y / n / number to change] `);
-    });
-
-    it("shows a moved field as asked below", async () => {
-      const raw = [...demo(), { id: 501, name: "Locality", type: "str" }];
-      const { out } = await run(raw, {}, [row("Postcode"), choice("Suburb"), "y", choice("Locality")]);
-      const table = lastTable(out);
-      expect(table).toHaveLength(FIELD_SPEC.length);
-      expect(table.find((l) => / Suburb\s/.test(l))).toMatch(/\(asked below\)\s+← moved/);
-      expect(table.find((l) => l.includes("Postcode"))).toMatch(/"Suburb"\s+← changed/);
-    });
-
-    it("heads the columns, and colours Employment Hero purple, Connecteam cyan, changes yellow", async () => {
-      const raw = [...demo(), { id: 77, name: "DOB (2026)", type: "date" }];
-      const answers = () => [row("Birthday"), choice("DOB \\(2026\\)"), "y"];
-      const plain = (await run(raw, {}, answers())).out;
-      expect(plain).toMatch(/Employment Hero needs\s+Your Connecteam field/);
-      expect(plain).not.toContain("\u001b[");
-
-      const coloured = (await run(raw, {}, answers(), { color: true })).out;
-      expect(coloured).toContain("\u001b[35mBirthday"); // EH name: purple
-      expect(coloured).toContain('\u001b[36m"DOB (2026)"'); // Connecteam field: cyan
-      expect(coloured).toContain("\u001b[33m← changed"); // change: yellow
-      expect(coloured).toContain('\u001b[36m"Legal Surname"'); // in the question too
-    });
-
-    it("the same for a field saved on an earlier run", async () => {
-      const first = (await run(demo(), {}, ["y"])).result;
-      const raw = demo().filter((f) => f.name !== "Postcode");
-      const { result, asked } = await run(raw, first, [choice("Suburb"), choice("Employee ID")]);
-      expect(asked.map((a) => a.replace(/1-\d+/, "1-N"))).toEqual(["Pick 1-N for Postcode: ", "Pick 1-N for Suburb: "]);
-      expect(result.Postcode).toEqual({ id: 42920715 });
-    });
+  it("a re-run shows them confirmed and needs only Enter", async () => {
+    const first = (await run(demo(), {}, [""])).result;
+    const { result, asked, out } = await run(demo(), first, [""]);
+    expect(asked).toEqual([ALL_GOOD]);
+    expect(tableRow(out, "TFN")).toMatch(/"TFN"\s+confirmed$/);
+    expect(result).toEqual(first);
   });
 
-  it("asks about an ambiguous field on its own, by number", async () => {
+  it("Y fixes each problem in turn, then redraws: an ambiguous field", async () => {
     const raw = [...demo(), { id: 7, name: "Tax File Number", type: "str" }];
-    const { result, asked, out } = await run(raw, {}, ["y", "2"]);
-    expect(asked).toHaveLength(2);
-    expect(asked[1]).toContain("TFN");
-    expect(out).toContain('1) Use "TFN"');
-    expect(out).toContain('2) Use "Tax File Number"');
+    const { result, asked, out } = await run(raw, {}, ["y", choice('Use "Tax File Number"'), ""]);
+    expect(asked[0]).toBe(fixPrompt(1));
+    expect(asked[1]).toMatch(/^Pick 1-\d+ for TFN: $/);
+    expect(asked.at(-1)).toBe(ALL_GOOD);
+    expect(out).toContain("more than one of your fields could be it");
+    expect(tableRow(out, "TFN")).toMatch(/"Tax File Number"\s+changed$/);
     expect(result.TFN).toEqual({ id: 7 });
   });
 
-  it("a re-run with saved picks asks nothing, except about a pick whose field was deleted", async () => {
-    const first = await run(demo(), {}, ["y"]);
-    expect((await run(demo(), first.result, [])).asked).toEqual([]);
-
-    const gone = demo().filter((f) => f.name !== "Suburb");
-    const raw = [...gone, { id: 8, name: "Locality", type: "str" }];
-    const locality = (screen: string) => [...screen.matchAll(/(\d+)\) Use "Locality"/g)].at(-1)![1]!;
-    const again = await run(raw, first.result, [locality]);
-    expect(again.asked).toHaveLength(1);
-    expect(again.asked[0]).toMatch(/^Pick 1-\d+ for Suburb: $/);
-    expect(again.out).toContain("was deleted");
-    expect(again.result.Suburb).toEqual({ id: 8 });
+  it("a pick whose field was deleted is a problem to fix", async () => {
+    const first = (await run(demo(), {}, [""])).result;
+    const raw = [...demo().filter((f) => f.name !== "Suburb"), { id: 8, name: "Locality", type: "str" }];
+    const { result, asked, out } = await run(raw, first, ["y", choice('Use "Locality"'), ""]);
+    expect(asked[0]).toBe(fixPrompt(1));
+    expect(out).toContain("was deleted");
+    expect(result.Suburb).toEqual({ id: 8 });
   });
 
-  it("a number changes that one match, then asks again for the rest", async () => {
+  it("a number changes that row; the table keeps every row and marks the change", async () => {
     const raw = [...demo(), { id: 77, name: "DOB (2026)", type: "date" }];
-    const dob = (screen: string) => [...screen.matchAll(/(\d+)\) Use "DOB \(2026\)"/g)].at(-1)![1]!;
-    // Birthday is 3rd in the table (after the two legal names).
-    const { result, asked, out } = await run(raw, {}, ["3", dob, "y"]);
-    expect(out).toContain(' 3) Birthday');
-    expect(asked).toHaveLength(3);
-    expect(asked[2]).toContain("Use the 27 automatic matches? Your 1 change is kept.");
+    const { result, out } = await run(raw, {}, [rowOf("Birthday"), choice('Use "DOB (2026)"'), ""]);
+    expect(lastTable(out)).toHaveLength(FIELD_SPEC.length);
+    expect(tableRow(out, "Birthday")).toMatch(/"DOB \(2026\)"\s+changed$/);
     expect(result.Birthday).toEqual({ id: 77 });
-    expect(result.TFN).toEqual({ id: 42923222 });
   });
 
-  it("'n' goes through every match one by one, the automatic match listed first", async () => {
-    const all = await run(demo(), {}, ["y"]);
-    const n = FIELD_SPEC.length;
-    const oneByOne = await run(demo(), {}, ["n", ...Array(n).fill("1")]);
-    expect(oneByOne.asked).toHaveLength(n + 1);
-    expect(oneByOne.result).toEqual(all.result);
+  it("lists every usable field, saying what each in-use one is for, and why the rest aren't listed", async () => {
+    const { out } = await run(demo(), {}, [rowOf("Postcode"), "1", ""]);
+    const q = out.slice(out.lastIndexOf("Postcode (optional)"));
+    expect(q).toContain('Use "Suburb" (text) - currently used for Suburb');
+    expect(q).toMatch(/\d+ other fields aren't listed: .*can't hold this value/);
+  });
+
+  it("taking a field in use moves it; the field it came from becomes the problem to fix", async () => {
+    const raw = [...demo(), { id: 501, name: "Locality", type: "str" }];
+    const { result, asked, out } = await run(raw, {}, [rowOf("Postcode"), choice('Use "Suburb"'), "y", choice('Use "Locality"'), ""]);
+    expect(out).toContain('"Suburb" is now used for Postcode; Suburb needs another field.');
+    expect(asked[2]).toBe(fixPrompt(1));
+    expect(result.Postcode).toEqual({ id: 42920715 });
+    expect(result.Suburb).toEqual({ id: 501 });
+    const ids = Object.values(result).flatMap((p) => ("id" in p ? [p.id] : []));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("colours Employment Hero purple, Connecteam cyan and changes yellow, in the table and the questions", async () => {
+    const raw = [...demo(), { id: 77, name: "DOB (2026)", type: "date" }];
+    const answers = () => [rowOf("Birthday"), choice('Use "DOB (2026)"'), ""];
+    expect((await run(raw, {}, answers())).out).not.toContain("\u001b[");
+    const { out } = await run(raw, {}, answers(), { color: true });
+    expect(out).toContain("\u001b[35mBirthday");
+    expect(out).toContain('\u001b[36m"DOB (2026)"');
+    expect(out).toContain("\u001b[33mchanged");
+  });
+
+  it("done finishes with problems left: what's decided is saved, the rest isn't", async () => {
+    const raw = [...demo(), { id: 7, name: "Tax File Number", type: "str" }];
+    const { result } = await run(raw, {}, ["done"]);
+    expect(result.TFN).toBeUndefined();
+    expect(result["Legal First Name"]).toEqual({ id: 42920713 });
   });
 
   describe("dropdown options (#112: the first client's options)", () => {
@@ -229,11 +208,12 @@ describe("runFieldPicker (scripted answers)", () => {
             : f,
       );
 
-    it("asks about each option that isn't an EH value; exact matches map themselves", async () => {
+    it("Y asks about each option that isn't an EH value; exact matches map themselves", async () => {
       // Employee Status: 1 FullTime, 2 PartTime, 3 Casual, 4 LabourHire, 5 not synced.
       // Tax question:    1 Yes, 2 No, 3 not synced.
-      const { result, asked, out } = await run(client(), {}, ["y", "1", "2", "5", "5", "1", "3", "3"]);
-      expect(asked.slice(1)).toEqual([
+      const { result, asked, out } = await run(client(), {}, ["y", "1", "2", "5", "5", "1", "3", "3", ""]);
+      expect(asked[0]).toBe(fixPrompt(2));
+      expect(asked.slice(1, -1)).toEqual([
         'Employee Status: "Full-time" -> ',
         'Employee Status: "Part-time" -> ',
         'Employee Status: "PBV" -> ',
@@ -251,94 +231,73 @@ describe("runFieldPicker (scripted answers)", () => {
         id: 42923276,
         options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": null, TBC: null },
       });
-
-      expect((await run(client(), result, [])).asked).toEqual([]);
+      expect((await run(client(), result, [""])).asked).toEqual([ALL_GOOD]);
     });
 
     it("asks only about an option added since the last run", async () => {
       const picks: FieldPicks = {
-        ...(await run(demo(), {}, ["y"])).result,
+        ...(await run(demo(), {}, [""])).result,
         "Employee Status": { id: 42920839, options: { "Full-time": "FullTime", "Part-time": "PartTime", Casual: "Casual", PBV: null } },
         "Claim tax-free threshold?": { id: 42923276, options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": null, TBC: null } },
       };
-      const { result, asked } = await run(client(), picks, ["4"]);
-      expect(asked).toEqual(['Employee Status: "Contractor" -> ']);
+      const { result, asked, out } = await run(client(), picks, ["y", "4", ""]);
+      expect(tableRow(out.slice(0, out.indexOf("Employee Status:")), "Employee Status")).toMatch(/1 option to map$/);
+      expect(asked.slice(1, -1)).toEqual(['Employee Status: "Contractor" -> ']);
       expect(result["Employee Status"]).toMatchObject({ options: { Contractor: "LabourHire", PBV: null } });
     });
   });
 
   describe("super fields: all four or none (#117)", () => {
-    const SUPER = ["Super Fund USI", "Super Fund ABN", "Super Fund Name", "Member Number"];
     const noUsi = () => demo().filter((f) => f.name !== "Super Fund USI");
-    const skip = (screen: string) => [...screen.matchAll(/(\d+)\) Skip/g)].at(-1)![1]!;
 
     it("skipping one asks to skip super entirely; yes skips all four", async () => {
-      const { result, asked, out } = await run(noUsi(), {}, ["y", skip, "y"]);
-      expect(asked.at(-1)).toMatch(/^Skip super entirely\?/);
+      const { result, asked, out } = await run(noUsi(), {}, ["y", choice("Skip"), "y", ""]);
+      expect(asked[2]).toMatch(/^Skip super entirely\?/);
       expect(out).toContain("The sync needs all four super fields or none.");
-      for (const name of SUPER) expect(result[name]).toEqual({ skip: true });
+      for (const name of ["Super Fund USI", "Super Fund ABN", "Super Fund Name", "Member Number"]) {
+        expect(result[name]).toEqual({ skip: true });
+      }
+      expect(tableRow(out, "Super Fund ABN")).toMatch(/\(skipped\)\s+changed$/);
     });
 
     it("no goes back to the choices for that field", async () => {
-      const usiNumber = (screen: string) => [...screen.matchAll(/(\d+)\) Create a new "Super Fund USI"/g)].at(-1)![1]!;
-      const { result } = await run(noUsi(), {}, ["y", skip, "n", usiNumber]);
+      const { result } = await run(noUsi(), {}, ["y", choice("Skip"), "n", choice("Create"), ""]);
       expect(result["Super Fund USI"]).toEqual({ create: true });
       expect(result["Super Fund ABN"]).toEqual({ id: 42920783 });
-    });
-
-    it("changing a matched super field to Skip, then yes, keeps 'use all' from undoing it", async () => {
-      const usiRow = (screen: string) => /(\d+)\) Super Fund USI/.exec(screen)![1]!;
-      const { result } = await run(demo(), {}, [usiRow, skip, "y", "y"]);
-      for (const name of SUPER) expect(result[name]).toEqual({ skip: true });
-      expect(result.TFN).toEqual({ id: 42923222 });
     });
   });
 
   describe("Standard hours per week: optional (#118)", () => {
     const noHours = () => demo().filter((f) => f.name !== "Standard hours per week");
 
-    it("asks about it with what it's for, offers a number field named anything, and never Create", async () => {
+    it("isn't a problem when absent, and can be picked by number from a field named anything", async () => {
       const raw = [...noHours(), { id: 80, name: "Contracted hours", type: "number" }];
-      const contracted = (screen: string) => [...screen.matchAll(/(\d+)\) Use "Contracted hours" \(number\)/g)].at(-1)![1]!;
-      const { result, out } = await run(raw, {}, ["y", contracted]);
+      const { result, asked, out } = await run(raw, {}, [rowOf("Standard hours per week"), choice('Use "Contracted hours"'), ""]);
+      expect(asked[0]).toBe(ALL_GOOD);
       const q = out.slice(out.lastIndexOf("Standard hours per week (optional)"));
       expect(q).toContain("standard weekly hours");
       expect(q).not.toContain("Create a new");
-      expect(q).toContain("Skip");
       expect(result["Standard hours per week"]).toEqual({ id: 80 });
-      expect((await run(raw, result, [])).asked).toEqual([]);
-    });
-
-    it("can be skipped", async () => {
-      const skip = (screen: string) => [...screen.matchAll(/(\d+)\) Skip/g)].at(-1)![1]!;
-      const { result } = await run(noHours(), {}, ["y", skip]);
-      expect(result["Standard hours per week"]).toEqual({ skip: true });
     });
   });
 
   describe("Connecteam's profile First name / Last name (legal-name fields only)", () => {
-    const profile = (screen: string) => [...screen.matchAll(/(\d+)\) Use profile "First name"/g)].at(-1)![1]!;
-    const firstRow = (screen: string) => /(\d+)\) Legal First Name\s/.exec(screen)![1]!;
-
     it("is offered for Legal First Name, with the warning, and needs the legal-name confirmation", async () => {
-      const { result, asked, out } = await run(demo(), {}, [firstRow, profile, "y", "y"]);
+      const { result, asked, out } = await run(demo(), {}, [rowOf("Legal First Name"), choice('Use profile "First name"'), "y", ""]);
       expect(out).toMatch(/Use profile "First name" \(Connecteam profile - may be a preferred name, not the legal one\)/);
-      expect(asked[2]).toMatch(/^The ATO needs the legal name\. Are this client's profile first names their legal names\? \[y\/N\] $/);
+      expect(asked[2]).toBe("The ATO needs the legal name. Are this client's profile first names their legal names? [y/N] ");
       expect(result["Legal First Name"]).toEqual({ profile: true });
-      const table = out.slice(out.lastIndexOf("Matched automatically"));
-      expect(table).toMatch(/Legal First Name\s+profile "First name"\s+← changed/);
+      expect(tableRow(out, "Legal First Name")).toMatch(/profile "First name"\s+changed$/);
     });
 
     it("'n' to the confirmation goes back to the list", async () => {
-      const keep = (screen: string) => [...screen.matchAll(/(\d+)\) Use "Legal First Name"/g)].at(-1)![1]!;
-      const { result } = await run(demo(), {}, [firstRow, profile, "n", keep, "y"]);
+      const { result } = await run(demo(), {}, [rowOf("Legal First Name"), choice('Use profile "First name"'), "n", choice('Use "Legal First Name"'), ""]);
       expect(result["Legal First Name"]).toEqual({ id: 42920713 });
     });
 
     it("isn't offered for any other field", async () => {
-      const { out } = await run(demo(), {}, [(s) => /(\d+)\) Title\s/.exec(s)![1]!, "1", "y"]);
-      const q = out.slice(out.lastIndexOf("Title ("));
-      expect(q).not.toContain("Use profile");
+      const { out } = await run(demo(), {}, [rowOf("Title"), "1", ""]);
+      expect(out.slice(out.lastIndexOf("Title ("))).not.toContain("Use profile");
     });
   });
 });
