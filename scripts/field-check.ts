@@ -9,13 +9,16 @@
  * wrong type (the wizard stops), 1 = the check itself failed.
  * Colour only on a terminal, and never with NO_COLOR set.
  *
+ * `-- --fields-file <path>` checks saved field definitions instead, with the
+ * picks from a `pick-fields -- --fields-file` rehearsal (no API key needed).
+ *
  * Env (from .dev.vars or the shell): CT_API_KEY.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { listRawCustomFields } from "./lib/connecteam-custom-fields.js";
 import { checkFields, renderFieldCheck, summarise } from "./lib/field-check.js";
-import { fieldPicksPath, loadFieldPicks } from "./lib/field-picks.js";
+import { loadFieldPicks } from "./lib/field-picks.js";
+import { fieldSource, rehearsalBanner } from "./lib/field-source.js";
 
 // --- env -----------------------------------------------------------------
 
@@ -48,10 +51,12 @@ async function ctGet(path: string): Promise<any> {
 // --- main --------------------------------------------------------------
 
 async function main(): Promise<void> {
+  const source = fieldSource(process.argv);
   loadDevVars();
-  if (!process.env.CT_API_KEY) throw new Error("CT_API_KEY must be set (in .dev.vars or the shell)");
+  if (source.fieldsFile) console.log(rehearsalBanner(source));
+  else if (!process.env.CT_API_KEY) throw new Error("CT_API_KEY must be set (in .dev.vars or the shell)");
 
-  const rows = checkFields(await listRawCustomFields(ctGet), loadFieldPicks(fieldPicksPath("self")));
+  const rows = checkFields(await source.load(ctGet), loadFieldPicks(source.picksPath));
   const color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
   console.log(renderFieldCheck(rows, { color }));
   if (summarise(rows).blocking > 0) process.exitCode = 2;

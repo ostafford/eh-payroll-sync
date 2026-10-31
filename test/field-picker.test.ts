@@ -46,7 +46,8 @@ describe("applyChoice", () => {
 
 describe("runFieldPicker (scripted answers)", () => {
   const demo = () => DEMO_CUSTOM_FIELDS.map((f) => ({ id: f.customFieldId, name: f.name, type: f.type }));
-  const run = async (raw: any[], picks: FieldPicks, answers: string[]) => {
+  /** A function answer reads the screen so far, as a person would. */
+  const run = async (raw: any[], picks: FieldPicks, answers: Array<string | ((screen: string) => string)>) => {
     const asked: string[] = [];
     const out: string[] = [];
     const result = await runFieldPicker(raw, picks, {
@@ -54,7 +55,7 @@ describe("runFieldPicker (scripted answers)", () => {
         asked.push(prompt);
         const a = answers.shift();
         if (a === undefined) throw new Error(`no answer left for: ${prompt}`);
-        return a;
+        return typeof a === "string" ? a : a(out.join("\n"));
       },
       print: (...lines) => out.push(...lines),
     });
@@ -66,6 +67,14 @@ describe("runFieldPicker (scripted answers)", () => {
     expect(asked).toHaveLength(1);
     expect(Object.keys(result)).toHaveLength(FIELD_SPEC.filter((s) => s.create).length);
     expect(result.TFN).toEqual({ id: 42923222 });
+  });
+
+  it("doesn't offer a field already used for another field, and names types as Connecteam's UI does", async () => {
+    const raw = demo().filter((f) => f.name !== "Suburb");
+    const { out } = await run(raw, {}, ["y", "1"]);
+    const suburb = out.slice(out.indexOf("Suburb (optional)"));
+    expect(suburb).not.toContain('"Legal First Name"');
+    expect(suburb).toContain('Use "Employee ID" (text)');
   });
 
   it("asks about an ambiguous field on its own, by number", async () => {
@@ -84,8 +93,8 @@ describe("runFieldPicker (scripted answers)", () => {
 
     const gone = demo().filter((f) => f.name !== "Suburb");
     const raw = [...gone, { id: 8, name: "Locality", type: "str" }];
-    const n = String(pickerChoices(spec("Suburb"), raw).findIndex((c) => c.kind === "use" && c.field.id === 8) + 1);
-    const again = await run(raw, first.result, [n]);
+    const locality = (screen: string) => [...screen.matchAll(/(\d+)\) Use "Locality"/g)].at(-1)![1]!;
+    const again = await run(raw, first.result, [locality]);
     expect(again.asked).toHaveLength(1);
     expect(again.asked[0]).toMatch(/^Pick 1-\d+ for Suburb: $/);
     expect(again.out).toContain("was deleted");

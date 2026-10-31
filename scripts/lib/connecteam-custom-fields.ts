@@ -2,6 +2,7 @@
  * Connecteam custom-field DEFINITIONS (id, name, type) for the whole account,
  * independent of whether any employee has answered them yet.
  */
+import { readFileSync } from "node:fs";
 
 export interface CustomFieldDefinition {
   customFieldId: number;
@@ -34,4 +35,16 @@ export async function listCustomFieldDefinitions(ctGet: CtGet): Promise<CustomFi
     name: String(f.name ?? ""),
     type: String(f.type ?? ""),
   }));
+}
+
+/**
+ * The same rows from a saved file instead of the API, for rehearsing the field
+ * picker without an account (#112), e.g. test/fixtures/first-client-fields.json.
+ * Takes a bare array, `{ customFields }` or the API's own `{ data: { customFields } }`.
+ */
+export function readFieldsFile(path: string): any[] {
+  const doc = JSON.parse(readFileSync(path, "utf8"));
+  const rows = Array.isArray(doc) ? doc : (doc?.customFields ?? doc?.data?.customFields);
+  if (!Array.isArray(rows)) throw new Error(`${path}: expected an array of custom fields, { customFields } or { data: { customFields } }`);
+  return rows;
 }

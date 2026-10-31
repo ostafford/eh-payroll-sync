@@ -9,13 +9,17 @@
  * Reads field DEFINITIONS only, never an employee's answer, and changes
  * nothing in Connecteam ("create" is done by create-fields, next stage).
  *
+ * `-- --fields-file <path>` rehearses against saved field definitions instead
+ * (e.g. test/fixtures/first-client-fields.json): no API key, nothing sent, and
+ * the choices go to a scratch file, not clients/self.
+ *
  * Env (from .dev.vars or the shell): CT_API_KEY.
  */
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { listRawCustomFields } from "./lib/connecteam-custom-fields.js";
-import { fieldPicksPath, loadFieldPicks, saveFieldPicks } from "./lib/field-picks.js";
+import { loadFieldPicks, saveFieldPicks } from "./lib/field-picks.js";
+import { fieldSource, rehearsalBanner } from "./lib/field-source.js";
 import { runFieldPicker } from "./lib/field-picker.js";
 
 // --- env -----------------------------------------------------------------
@@ -63,12 +67,14 @@ async function ask(prompt: string): Promise<string> {
 // --- main --------------------------------------------------------------
 
 async function main(): Promise<void> {
+  const source = fieldSource(process.argv);
   loadDevVars();
-  if (!process.env.CT_API_KEY) throw new Error("CT_API_KEY must be set (in .dev.vars or the shell)");
+  if (source.fieldsFile) console.log(rehearsalBanner(source));
+  else if (!process.env.CT_API_KEY) throw new Error("CT_API_KEY must be set (in .dev.vars or the shell)");
 
-  const path = fieldPicksPath("self");
+  const path = source.picksPath;
   const before = loadFieldPicks(path);
-  const picks = await runFieldPicker(await listRawCustomFields(ctGet), before, {
+  const picks = await runFieldPicker(await source.load(ctGet), before, {
     ask,
     print: (...out) => out.forEach((l) => console.log(l)),
   });
@@ -76,7 +82,7 @@ async function main(): Promise<void> {
 
   const changed = Object.keys(picks).filter((k) => JSON.stringify(picks[k]) !== JSON.stringify(before[k])).length;
   if (changed) saveFieldPicks(path, picks);
-  console.log(changed ? `\nSaved ${changed} choice(s) to clients/self/field-picks.json.` : "\nNothing new to save: every field is already decided.");
+  console.log(changed ? `\nSaved ${changed} choice(s) to ${path}.` : "\nNothing new to save: every field is already decided.");
 }
 
 main().catch((err) => {

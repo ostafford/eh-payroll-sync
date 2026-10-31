@@ -191,7 +191,7 @@ function explain(r: CheckRow): { why: string; fix: string } {
 }
 
 /** Connecteam's API type names, as its UI shows them. */
-const typeName = (t: string): string =>
+export const typeName = (t: string): string =>
   ({ str: "text", dropdown: "dropdown", date: "date", birthday: "birthday", location: "location", directManager: "direct manager", number: "number" })[t] ?? t;
 
 const LABEL: Record<CheckResult["status"], string> = {

@@ -3,7 +3,7 @@
  * the human can choose from, and how a choice is saved to field-picks.json.
  */
 import { compatibleType, resolveField, type FieldDef, type FieldPick, type FieldPicks, type OptionMap } from "./field-resolve.js";
-import { liveOptions } from "./field-check.js";
+import { liveOptions, typeName } from "./field-check.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec } from "./field-spec.js";
 
 export type Choice = { kind: "use"; field: FieldDef } | { kind: "create" } | { kind: "skip" };
@@ -60,7 +60,7 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
       break;
     }
     if (answer === "n") {
-      for (const { spec, field } of auto) out = applyChoice(out, spec, await askOne(spec, `matched "${field.name}"`, fields, io, field));
+      for (const { spec, field } of auto) out = applyChoice(out, spec, await askOne(spec, `matched "${field.name}"`, unused(fields, out, spec), io, field));
       break;
     }
     const n = Number(answer);
@@ -69,11 +69,11 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
       io.print(`  Type y, n, or a number from 1 to ${auto.length}.`);
       continue;
     }
-    out = applyChoice(out, one.spec, await askOne(one.spec, `matched "${one.field.name}"`, fields, io, one.field));
+    out = applyChoice(out, one.spec, await askOne(one.spec, `matched "${one.field.name}"`, unused(fields, out, one.spec), io, one.field));
     auto.splice(n - 1, 1);
   }
 
-  for (const { spec, why } of undecided) out = applyChoice(out, spec, await askOne(spec, why, fields, io));
+  for (const { spec, why } of undecided) out = applyChoice(out, spec, await askOne(spec, why, unused(fields, out, spec), io));
 
   // Then each picked dropdown whose options aren't all values EH takes.
   for (const spec of FIELD_SPEC.filter((s) => s.create && s.ct.options)) {
@@ -83,6 +83,12 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
     if (options) out = { ...out, [spec.name]: { id: pick.id, options } };
   }
   return out;
+}
+
+/** Fields not already picked for another of the sync's fields, so none is used twice. */
+function unused(fields: FieldDef[], picks: FieldPicks, spec: FieldSpec): FieldDef[] {
+  const taken = new Set(Object.entries(picks).flatMap(([name, p]) => (name !== spec.name && "id" in p ? [p.id] : [])));
+  return fields.filter((f) => !taken.has(f.id));
 }
 
 const NOT_SYNCED = "Not synced: the employee gets a Correction message";
@@ -161,7 +167,7 @@ function whyAsk(r: ReturnType<typeof resolveField>, spec: FieldSpec): string {
 }
 
 function choiceLabel(spec: FieldSpec, c: Choice): string {
-  if (c.kind === "use") return `Use "${c.field.name}" (${c.field.type})`;
+  if (c.kind === "use") return `Use "${c.field.name}" (${typeName(c.field.type)})`;
   if (c.kind === "create") return `Create a new "${spec.name}" field`;
   return "Skip: the sync won't use this field";
 }

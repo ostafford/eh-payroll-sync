@@ -180,6 +180,19 @@ Status `Full-time | PBV`), the picker asks what each option sends: an EH value,
 or "not synced" (the employee gets a Correction message). Tax questions map to
 Yes / No the same way. The choices are saved with the pick, go into the draft
 field map, and `discover` writes them into a field map it kept.
+
+**Rehearse the picker without an account.** `--fields-file` reads saved field
+definitions instead of calling Connecteam, and keeps the choices in a scratch
+file in the system temp folder (never `clients/self`). The bundled file is the
+first client's setup (#112): `(OLD)` duplicates, renamed tax questions, and
+options EH doesn't take.
+
+```bash
+npm run pick-fields -- --fields-file test/fixtures/first-client-fields.json
+npm run field-check -- --fields-file test/fixtures/first-client-fields.json
+```
+
+Delete the scratch file the picker names to start over.
 **Then attach each new field to the onboarding pack in the Connecteam UI** (no
 API for that); the script prints the exact list. A field not in the pack is
 never asked, so it is always blank.
