@@ -28,6 +28,21 @@ describe("pickerChoices", () => {
   });
 });
 
+describe("pickerChoices - number-type fields (#116)", () => {
+  const fields = [
+    { id: 1, name: "Old postcode", type: "number" },
+    { id: 2, name: "Notes", type: "str" },
+  ];
+  const offered = (name: string) => pickerChoices(spec(name), fields).flatMap((c) => (c.kind === "use" ? [c.field.id] : []));
+
+  it("offers a number field for Postcode and BSB, but not for TFN or Account Number", () => {
+    expect(offered("Postcode")).toContain(1);
+    expect(offered("BSB")).toContain(1);
+    expect(offered("TFN")).not.toContain(1);
+    expect(offered("Account Number")).not.toContain(1);
+  });
+});
+
 describe("applyChoice", () => {
   const picks = { TFN: { id: 9 } };
 

@@ -43,7 +43,7 @@ account before setup, and as the reference for the wizard's field check.
 | 🟡 | Street Address | Location | Street address | Residential address for payroll records |
 | 🟡 | Suburb | Text | Suburb | |
 | 🟡 | State | Dropdown | State | `INTERNATIONAL` holds the sync and asks the employee to correct it |
-| 🟡 | Postcode | Text | Postcode | Leading zeros are kept (e.g. `0800`) |
+| 🟡 | Postcode | Text or number | Postcode | Leading zeros are kept (e.g. `0800`), and restored when a number field drops them (#116) |
 | 🟡 | Country | Location | Country | Blank is sent as `AU` |
 
 ## 💼 Employment
@@ -66,7 +66,7 @@ account before setup, and as the reference for the wizard's field check.
 
 | | Connecteam field | Type | → EH field | Why EH needs it |
 |---|---|---|---|---|
-| 🔴 | TFN | Text | Tax file number | EH **accepts an invalid TFN** but marks the record `Incomplete` |
+| 🔴 | TFN | Text only | Tax file number | EH **accepts an invalid TFN** but marks the record `Incomplete`. Not a number field: its length varies, so a dropped leading zero can't be restored |
 | 🟡 | Claim tax-free threshold? | Yes / No | Tax-free threshold | Sets the withholding rate |
 | 🟡 | Australian resident for tax purposes? | Yes / No | Australian resident | `No` sends a follow-up to the admins (tax scale is a payroll decision) |
 | 🟡 | Have a HELP/STSL study debt? | Yes / No | HELP **and** STSL debt | One answer sets both flags |
@@ -76,8 +76,8 @@ account before setup, and as the reference for the wizard's field check.
 | | Connecteam field | Type | → EH field |
 |---|---|---|---|
 | 🟡 | Name on Bank Account | Text | Bank account 1: name |
-| 🟡 | BSB | Text | Bank account 1: BSB (zero-padded to 6 digits) |
-| 🟡 | Account Number | Text | Bank account 1: account number |
+| 🟡 | BSB | Text or number | Bank account 1: BSB (zero-padded to 6 digits, so a number field's dropped leading zero is restored) |
+| 🟡 | Account Number | Text only | Bank account 1: account number (not a number field: leading zeros matter and the length varies) |
 
 One account only, set to 100% and paid electronically.
 

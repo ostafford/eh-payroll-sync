@@ -41,6 +41,8 @@ export interface FieldSpec {
     options?: string[];
     /** Other Connecteam types the sync's transform also reads (e.g. a number field for hours). */
     alsoAccepts?: string[];
+    /** Why a number field won't do, added to the check's "wrong type" explanation. */
+    numberNote?: string;
     /** Every option must exist (a Yes/No question needs both answers). */
     allOptionsRequired?: boolean;
     /** Category to create it under, by name; falls back to the account's first. */
@@ -63,6 +65,9 @@ const PAYROLL = "Payroll Information";
 const employee = (category: string, isRequired = false) => ({ category, isRequired, isVisibleToUsers: true, isEditableForUsers: true });
 const adminSet = (category: string) => ({ category, isRequired: false, isVisibleToUsers: true, isEditableForUsers: false });
 const YES_NO = ["Yes", "No"];
+// Unlike postcode and BSB, these vary in length, so a dropped leading zero can't be put back (#116).
+const NUMBER_LOSES_ZEROS =
+  "A number field drops leading zeros, and this value's length varies, so the sync can't put them back.";
 
 export const FIELD_SPEC: FieldSpec[] = [
   // --- Identity
@@ -93,7 +98,8 @@ export const FIELD_SPEC: FieldSpec[] = [
     ct: { type: "dropdown", options: ["QLD", "NSW", "VIC", "ACT", "TAS", "SA", "WA", "NT", "INTERNATIONAL"], ...adminSet(PERSONAL) },
     target: { kind: "field", eh: "residentialState", transform: "dropdownValue" } },
   { name: "Postcode", match: /postcode|post code/i, group: "Address", create: true,
-    ct: { type: "str", ...employee(PERSONAL) },
+    // A number field drops the leading zero (0800 -> 800); zeroPad4 restores it (#116).
+    ct: { type: "str", alsoAccepts: ["number"], ...employee(PERSONAL) },
     target: { kind: "field", eh: "residentialPostCode", transform: "zeroPad4" } },
   { name: "Country", match: /country/i, group: "Address", create: true,
     ct: { type: "location", ...employee(PERSONAL) },
@@ -129,7 +135,7 @@ export const FIELD_SPEC: FieldSpec[] = [
 
   // --- Tax
   { name: "TFN", match: /^tfn|tax file number/i, group: "Tax", create: true,
-    ct: { type: "str", ...employee(TAX) },
+    ct: { type: "str", numberNote: NUMBER_LOSES_ZEROS, ...employee(TAX) },
     target: { kind: "field", eh: "taxFileNumber", transform: "digits", required: true, sensitive: true } },
   { name: "Claim tax-free threshold?", match: /tax-?free threshold/i, group: "Tax", create: true,
     ct: { type: "dropdown", options: YES_NO, allOptionsRequired: true, ...employee(TAX, true) },
@@ -146,10 +152,11 @@ export const FIELD_SPEC: FieldSpec[] = [
     ct: { type: "str", ...employee(PAYROLL) },
     target: { kind: "field", eh: "bankAccount1_AccountName", transform: "trimString", sensitive: true } },
   { name: "BSB", match: /^bsb/i, group: "Bank", create: true,
-    ct: { type: "str", ...employee(PAYROLL) },
+    // Always 6 digits, so zeroPad6 restores a leading zero a number field drops (#116).
+    ct: { type: "str", alsoAccepts: ["number"], ...employee(PAYROLL) },
     target: { kind: "field", eh: "bankAccount1_BSB", transform: "zeroPad6", sensitive: true } },
   { name: "Account Number", match: /account number/i, group: "Bank", create: true,
-    ct: { type: "str", ...employee(PAYROLL) },
+    ct: { type: "str", numberNote: NUMBER_LOSES_ZEROS, ...employee(PAYROLL) },
     target: { kind: "field", eh: "bankAccount1_AccountNumber", transform: "digits", sensitive: true } },
 
   // --- Super
