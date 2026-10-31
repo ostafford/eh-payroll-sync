@@ -234,6 +234,45 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
       expect((await run(client(), result, [""])).asked).toEqual([ALL_GOOD]);
     });
 
+    it("warns when a tax answer that doesn't say Yes or No is sent as one; n asks again, y keeps it", async () => {
+      // Employee Status as before; then the tax question: Yes / No / not synced = 1 / 2 / 3.
+      const answers = ["y", "1", "2", "5", "5", "1", "2", "n", "3", "2", "y", "done"];
+      const { result, asked, out } = await run(client(), {}, answers);
+      const tax = asked.filter((q) => q.startsWith("Claim tax-free threshold?") || q.startsWith("Send "));
+      expect(tax).toEqual([
+        'Claim tax-free threshold?: "Yes, claim tax free threshold" -> ',
+        'Claim tax-free threshold?: "N/A" -> ',
+        'Send "N/A" as No anyway? [y/N] ',
+        'Claim tax-free threshold?: "N/A" -> ',
+        'Claim tax-free threshold?: "TBC" -> ',
+        'Send "TBC" as No anyway? [y/N] ',
+      ]);
+      expect(out).toContain('"N/A" doesn\'t say Yes or No. Sending it as No tells Employment Hero the employee declared No');
+      expect(result["Claim tax-free threshold?"]).toMatchObject({ options: { "N/A": null, TBC: "no" } });
+      // Kept on purpose, but still shown as one to check.
+      expect(asked.at(-1)).toBe(fixPrompt(1));
+      expect(tableRow(out, "Claim tax-free threshold?")).toMatch(/1 answer to check$/);
+    });
+
+    it("Y on saved guesses asks again about just those answers", async () => {
+      const picks: FieldPicks = {
+        ...(await run(demo(), {}, [""])).result,
+        "Employee Status": { id: 42920839, options: { "Full-time": "FullTime", "Part-time": "PartTime", Casual: "Casual", PBV: null, Contractor: null } },
+        "Claim tax-free threshold?": { id: 42923276, options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": "no", TBC: "no" } },
+      };
+      const { result, asked } = await run(client(), picks, ["y", "3", "3", ""]);
+      expect(asked).toEqual([
+        fixPrompt(1),
+        'Claim tax-free threshold?: "N/A" -> ',
+        'Claim tax-free threshold?: "TBC" -> ',
+        ALL_GOOD,
+      ]);
+      expect(result["Claim tax-free threshold?"]).toEqual({
+        id: 42923276,
+        options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": null, TBC: null },
+      });
+    });
+
     it("asks only about an option added since the last run", async () => {
       const picks: FieldPicks = {
         ...(await run(demo(), {}, [""])).result,
