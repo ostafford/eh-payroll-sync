@@ -66,7 +66,12 @@ describe("runFieldPicker (scripted answers)", () => {
     { id: 99001, name: "Standard hours per week", type: "number" },
   ];
   /** A function answer reads the screen so far, as a person would. */
-  const run = async (raw: any[], picks: FieldPicks, answers: Array<string | ((screen: string) => string)>) => {
+  const run = async (
+    raw: any[],
+    picks: FieldPicks,
+    answers: Array<string | ((screen: string) => string)>,
+    { color = false }: { color?: boolean } = {},
+  ) => {
     const asked: string[] = [];
     const out: string[] = [];
     const result = await runFieldPicker(raw, picks, {
@@ -74,9 +79,11 @@ describe("runFieldPicker (scripted answers)", () => {
         asked.push(prompt);
         const a = answers.shift();
         if (a === undefined) throw new Error(`no answer left for: ${prompt}`);
-        return typeof a === "string" ? a : a(out.join("\n"));
+        // Read the screen as a person sees it: without colour codes.
+        return typeof a === "string" ? a : a(out.join("\n").replace(/\u001b\[\d+m/g, ""));
       },
       print: (...lines) => out.push(...lines),
+      color,
     });
     return { result, asked, out: out.join("\n") };
   };
@@ -119,6 +126,45 @@ describe("runFieldPicker (scripted answers)", () => {
       expect(new Set(ids).size).toBe(ids.length); // still no field used twice
     });
 
+    /** The last "Matched automatically" table printed, rows only. */
+    const lastTable = (out: string) => {
+      const lines = out.slice(out.lastIndexOf("Matched automatically")).split("\n");
+      const end = lines.indexOf("", 1);
+      return lines.slice(0, end === -1 ? undefined : end).filter((l) => /^\s+\d+\) /.test(l));
+    };
+
+    it("keeps a changed row in the table, showing your choice, so the count never drops", async () => {
+      const raw = [...demo(), { id: 77, name: "DOB (2026)", type: "date" }];
+      const { asked, out } = await run(raw, {}, [row("Birthday"), choice("DOB \\(2026\\)"), "y"]);
+      const table = lastTable(out);
+      expect(table).toHaveLength(FIELD_SPEC.length);
+      expect(table.find((l) => l.includes("Birthday"))).toMatch(/Birthday\s+"DOB \(2026\)"\s+← changed/);
+      expect(asked.at(-1)).toBe(`Use the ${FIELD_SPEC.length - 1} automatic matches? Your 1 change is kept. [Y / n / number to change] `);
+    });
+
+    it("shows a moved field as asked below", async () => {
+      const raw = [...demo(), { id: 501, name: "Locality", type: "str" }];
+      const { out } = await run(raw, {}, [row("Postcode"), choice("Suburb"), "y", choice("Locality")]);
+      const table = lastTable(out);
+      expect(table).toHaveLength(FIELD_SPEC.length);
+      expect(table.find((l) => / Suburb\s/.test(l))).toMatch(/\(asked below\)\s+← moved/);
+      expect(table.find((l) => l.includes("Postcode"))).toMatch(/"Suburb"\s+← changed/);
+    });
+
+    it("heads the columns, and colours Employment Hero purple, Connecteam cyan, changes yellow", async () => {
+      const raw = [...demo(), { id: 77, name: "DOB (2026)", type: "date" }];
+      const answers = () => [row("Birthday"), choice("DOB \\(2026\\)"), "y"];
+      const plain = (await run(raw, {}, answers())).out;
+      expect(plain).toMatch(/Employment Hero needs\s+Your Connecteam field/);
+      expect(plain).not.toContain("\u001b[");
+
+      const coloured = (await run(raw, {}, answers(), { color: true })).out;
+      expect(coloured).toContain("\u001b[35mBirthday"); // EH name: purple
+      expect(coloured).toContain('\u001b[36m"DOB (2026)"'); // Connecteam field: cyan
+      expect(coloured).toContain("\u001b[33m← changed"); // change: yellow
+      expect(coloured).toContain('\u001b[36m"Legal Surname"'); // in the question too
+    });
+
     it("the same for a field saved on an earlier run", async () => {
       const first = (await run(demo(), {}, ["y"])).result;
       const raw = demo().filter((f) => f.name !== "Postcode");
@@ -159,7 +205,7 @@ describe("runFieldPicker (scripted answers)", () => {
     const { result, asked, out } = await run(raw, {}, ["3", dob, "y"]);
     expect(out).toContain(' 3) Birthday');
     expect(asked).toHaveLength(3);
-    expect(asked[2]).toContain("Use all 27");
+    expect(asked[2]).toContain("Use the 27 automatic matches? Your 1 change is kept.");
     expect(result.Birthday).toEqual({ id: 77 });
     expect(result.TFN).toEqual({ id: 42923222 });
   });
