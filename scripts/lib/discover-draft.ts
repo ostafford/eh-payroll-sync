@@ -76,8 +76,13 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
   const ruleConsumed = new Set<number>();
   const specNotSynced = new Set<number>();
   for (const spec of FIELD_SPEC) {
-    const id = idOf(spec);
     const t = spec.target;
+    // Confirmed in the picker: the Connecteam profile's own first / last name.
+    if (spec.profile && t.kind === "field" && resolveField(spec, defs, input.picks).status === "profile") {
+      mapped.push({ eh: t.eh, from: { userField: spec.profile.key }, transform: t.transform, ...(t.required ? { required: true } : {}) });
+      continue;
+    }
+    const id = idOf(spec);
     const picked = optionsOf(input.picks?.[spec.name]);
     const options = picked && syncedOptions(picked);
     if (t.kind === "super") superFields[t.key] = id ?? "TODO";
@@ -97,7 +102,7 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
     } else if (t.kind === "super") ruleConsumed.add(id);
     else specNotSynced.add(id);
   }
-  const used = new Set([...mapped.map((r) => r.from.customFieldId as number), ...ruleConsumed, ...specNotSynced]);
+  const used = new Set([...mapped.flatMap((r) => (typeof r.from.customFieldId === "number" ? [r.from.customFieldId] : [])), ...ruleConsumed, ...specNotSynced]);
 
   const draft: DraftResult["draft"] = {
     client: input.client,

@@ -315,4 +315,30 @@ describe("runFieldPicker (scripted answers)", () => {
       expect(result["Standard hours per week"]).toEqual({ skip: true });
     });
   });
+
+  describe("Connecteam's profile First name / Last name (legal-name fields only)", () => {
+    const profile = (screen: string) => [...screen.matchAll(/(\d+)\) Use profile "First name"/g)].at(-1)![1]!;
+    const firstRow = (screen: string) => /(\d+)\) Legal First Name\s/.exec(screen)![1]!;
+
+    it("is offered for Legal First Name, with the warning, and needs the legal-name confirmation", async () => {
+      const { result, asked, out } = await run(demo(), {}, [firstRow, profile, "y", "y"]);
+      expect(out).toMatch(/Use profile "First name" \(Connecteam profile - may be a preferred name, not the legal one\)/);
+      expect(asked[2]).toMatch(/^The ATO needs the legal name\. Are this client's profile first names their legal names\? \[y\/N\] $/);
+      expect(result["Legal First Name"]).toEqual({ profile: true });
+      const table = out.slice(out.lastIndexOf("Matched automatically"));
+      expect(table).toMatch(/Legal First Name\s+profile "First name"\s+← changed/);
+    });
+
+    it("'n' to the confirmation goes back to the list", async () => {
+      const keep = (screen: string) => [...screen.matchAll(/(\d+)\) Use "Legal First Name"/g)].at(-1)![1]!;
+      const { result } = await run(demo(), {}, [firstRow, profile, "n", keep, "y"]);
+      expect(result["Legal First Name"]).toEqual({ id: 42920713 });
+    });
+
+    it("isn't offered for any other field", async () => {
+      const { out } = await run(demo(), {}, [(s) => /(\d+)\) Title\s/.exec(s)![1]!, "1", "y"]);
+      const q = out.slice(out.lastIndexOf("Title ("));
+      expect(q).not.toContain("Use profile");
+    });
+  });
 });

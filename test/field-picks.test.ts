@@ -21,4 +21,9 @@ describe("loadFieldPicks", () => {
     const picks = { "Super Fund USI": skip, "Super Fund ABN": skip, "Super Fund Name": skip, "Member Number": skip };
     expect(loadFieldPicks(file(picks))).toEqual(picks);
   });
+
+  it("accepts a profile pick only for the legal-name fields", () => {
+    expect(loadFieldPicks(file({ "Legal First Name": { profile: true } }))).toEqual({ "Legal First Name": { profile: true } });
+    expect(() => loadFieldPicks(file({ Title: { profile: true } }))).toThrow(/"Title" can't be read from the Connecteam profile/);
+  });
 });

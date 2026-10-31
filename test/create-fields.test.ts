@@ -100,6 +100,12 @@ describe("planMissingFields", () => {
     expect(names).not.toContain("Standard hours per week");
   });
 
+  it("never creates a legal-name field read from the Connecteam profile", () => {
+    const plan = planMissingFields([], CATEGORIES, { "Legal First Name": { profile: true } });
+    expect(plan.missing.map((m) => m.spec.name)).not.toContain("Legal First Name");
+    expect(plan.fromProfile.map((s) => s.name)).toEqual(["Legal First Name"]);
+  });
+
   it("never creates a skipped field", () => {
     const plan = planMissingFields([], CATEGORIES, { Suburb: { skip: true } });
     expect(plan.missing.map((m) => m.spec.name)).not.toContain("Suburb");

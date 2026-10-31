@@ -175,6 +175,12 @@ describe("checkFields", () => {
     });
   });
 
+  it("a profile pick for a legal-name field counts as found, naming the profile field", () => {
+    const rows = checkFields(without("Legal First Name"), { "Legal First Name": { profile: true } });
+    expect(row(rows, "Legal First Name")).toMatchObject({ blocking: false, result: { status: "found" }, profile: "First name" });
+    expect(renderFieldCheck(rows, { color: false })).toContain('(your field: Connecteam profile "First name")');
+  });
+
   it("warns when employees can edit the award field", () => {
     const rows = checkFields(replace("EH Pay Rate Template", { isEditableForUsers: true }));
     expect(row(rows, "EH Pay Rate Template")).toMatchObject({ level: "admin", blocking: false, result: { status: "userEditable" } });

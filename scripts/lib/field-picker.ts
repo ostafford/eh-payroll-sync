@@ -6,7 +6,7 @@ import { compatibleType, resolveField, type FieldDef, type FieldPick, type Field
 import { liveOptions, typeName } from "./field-check.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec } from "./field-spec.js";
 
-export type Choice = { kind: "use"; field: FieldDef } | { kind: "create" } | { kind: "skip" };
+export type Choice = { kind: "use"; field: FieldDef } | { kind: "profile" } | { kind: "create" } | { kind: "skip" };
 
 /** Only fields the sync can read are offered, so an unusable one can't be picked. */
 export function pickerChoices(spec: FieldSpec, fields: FieldDef[]): Choice[] {
@@ -15,13 +15,21 @@ export function pickerChoices(spec: FieldSpec, fields: FieldDef[]): Choice[] {
   const others = usable.filter((f) => !named.includes(f));
   return [
     ...[...named, ...others].map((field) => ({ kind: "use" as const, field })),
+    ...(spec.profile ? [{ kind: "profile" as const }] : []),
     ...(spec.create ? [{ kind: "create" as const }] : []),
     ...(requiredForSync(spec) ? [] : [{ kind: "skip" as const }]),
   ];
 }
 
 export function applyChoice(picks: FieldPicks, spec: FieldSpec, choice: Choice): FieldPicks {
-  const pick: FieldPick = choice.kind === "use" ? { id: choice.field.id } : choice.kind === "skip" ? { skip: true } : { create: true };
+  const pick: FieldPick =
+    choice.kind === "use"
+      ? { id: choice.field.id }
+      : choice.kind === "skip"
+        ? { skip: true }
+        : choice.kind === "profile"
+          ? { profile: true }
+          : { create: true };
   return { ...picks, [spec.name]: pick };
 }
 
@@ -61,7 +69,7 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
   for (const spec of FIELD_SPEC) {
     const r = resolveField(spec, fields, out);
     const pick = out[spec.name];
-    if (r.status === "skipped" || (pick && "create" in pick)) continue;
+    if (r.status === "skipped" || r.status === "profile" || (pick && "create" in pick)) continue;
     if (r.status === "matched" && compatibleType(spec, r.field.type)) {
       if (!r.picked) auto.push({ spec, field: r.field });
     } else undecided.push({ spec, why: whyAsk(r, spec) });
@@ -94,6 +102,12 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
     for (;;) {
       const used = usedBy(spec);
       const choice = await askOne(spec, why, fields, used, io, suggested);
+      if (choice.kind === "profile" && spec.profile) {
+        const ok = await io.ask(
+          `The ATO needs the legal name. Are this client's profile ${spec.profile.plural} their legal names? [y/N] `,
+        );
+        if (ok.trim().toLowerCase() !== "y") continue;
+      }
       if (choice.kind !== "skip" || spec.target.kind !== "super") {
         // A field in use elsewhere moves here; the field it came from is asked again, so none feeds two.
         const from = choice.kind === "use" ? used.get(choice.field.id) : undefined;
@@ -130,7 +144,13 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
       ? p.ct(`"${pending.field.name}"`)
       : moved.has(spec)
         ? `${p.dim("(asked below)".padEnd(30))}  ${p.change("← moved")}`
-        : `${pick && "id" in pick ? p.ct(`"${fieldName(pick.id)}"`.padEnd(30)) : p.dim((pick && "skip" in pick ? "(skipped)" : "(new field to create)").padEnd(30))}  ${p.change("← changed")}`;
+        : `${
+            pick && "id" in pick
+              ? p.ct(`"${fieldName(pick.id)}"`.padEnd(30))
+              : pick && "profile" in pick && spec.profile
+                ? p.ct(`profile "${spec.profile.label}"`.padEnd(30))
+                : p.dim((pick && "skip" in pick ? "(skipped)" : "(new field to create)").padEnd(30))
+          }  ${p.change("← changed")}`;
     return `  ${String(i + 1).padStart(2)}) ${p.eh(spec.name.padEnd(38))} ${yours}`;
   };
 
@@ -293,6 +313,9 @@ function whyAsk(r: ReturnType<typeof resolveField>, spec: FieldSpec): string {
 
 function choiceLabel(spec: FieldSpec, c: Choice, p: Palette): string {
   if (c.kind === "use") return `Use ${p.ct(`"${c.field.name}"`)} (${typeName(c.field.type)})`;
+  if (c.kind === "profile" && spec.profile) {
+    return `Use profile ${p.ct(`"${spec.profile.label}"`)} (Connecteam profile - may be a preferred name, not the legal one)`;
+  }
   if (c.kind === "create") return `Create a new ${p.ct(`"${spec.name}"`)} field in Connecteam`;
   return "Skip: the sync won't use this field";
 }

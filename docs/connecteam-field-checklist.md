@@ -35,6 +35,11 @@ account before setup, and as the reference for the wizard's field check.
 > **Legal First Name** and **Legal Surname** fields. The *First name* on the
 > Connecteam profile is the employee's **preferred** name and is deliberately
 > not synced, so changing it doesn't change payroll (#70).
+>
+> **Exception:** a client with no legal-name fields, whose profile names *are*
+> legal names, can pick the profile's *First name* / *Last name* in the field
+> picker (`npm run pick-fields`). It asks to confirm, since the ATO needs the
+> legal name. Only these two fields can come from the profile.
 
 ## 🏠 Address
 

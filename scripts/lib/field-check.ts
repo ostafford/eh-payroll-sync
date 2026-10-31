@@ -34,6 +34,8 @@ export interface CheckRow {
   level: Level;
   /** The client's field it matched, if any. */
   field?: { id: number; name: string };
+  /** Read from this Connecteam profile field instead (e.g. "First name"). */
+  profile?: string;
   result: CheckResult;
   /** A required field missing, of the wrong type, or not yet decided: the wizard can't continue. */
   blocking: boolean;
@@ -93,7 +95,9 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
           ? { status: "stalePick", id: resolved.id }
           : resolved.status === "skipped"
             ? { status: "skipped" }
-            : checkOne(spec, f, optionsOf(picks[spec.name]));
+            : resolved.status === "profile"
+              ? { status: "found" }
+              : checkOne(spec, f, optionsOf(picks[spec.name]));
     return {
       group: spec.group,
       name: spec.name,
@@ -104,6 +108,7 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
       blocking: level === "required" && ["missing", "wrongType", "ambiguous", "stalePick", "options"].includes(result.status),
       ...(spec.ct.options ? { options: spec.ct.options } : {}),
       ...(spec.ct.numberNote ? { numberNote: spec.ct.numberNote } : {}),
+      ...(resolved.status === "profile" && spec.profile ? { profile: spec.profile.label } : {}),
     };
   });
 
@@ -254,7 +259,11 @@ export function renderFieldCheck(rows: CheckRow[], opts: { color: boolean }): st
       group = r.group;
       lines.push("", c("1", group));
     }
-    const matched = r.field && r.field.name.trim() !== r.name ? c("2", ` (your field: "${r.field.name}")`) : "";
+    const matched = r.profile
+      ? c("2", ` (your field: Connecteam profile "${r.profile}")`)
+      : r.field && r.field.name.trim() !== r.name
+        ? c("2", ` (your field: "${r.field.name}")`)
+        : "";
     const status =
       r.result.status === "found"
         ? ""

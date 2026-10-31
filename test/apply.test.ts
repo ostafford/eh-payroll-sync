@@ -546,6 +546,25 @@ describe("applyFieldMap - number-type Postcode and BSB fields (#116)", () => {
   });
 });
 
+describe("applyFieldMap - names from the Connecteam profile (picked in the wizard)", () => {
+  it("reads the profile's first and last name when the map says userField", () => {
+    const fromProfile = parseFieldMap({
+      ...map,
+      fields: map.fields.map((f) =>
+        f.eh === "firstName"
+          ? { ...f, from: { userField: "firstName" } }
+          : f.eh === "surname"
+            ? { ...f, from: { userField: "lastName" } }
+            : f,
+      ),
+    });
+    const { payload, issues } = applyFieldMap(clone(), fromProfile);
+    expect(issues).toEqual([]);
+    expect(payload.firstName).toBe("Sam"); // the profile name, not the legal "Samuel"
+    expect(payload.surname).toBe("Rivera");
+  });
+});
+
 describe("applyFieldMap - missing and bad values", () => {
   it("flags a missing required field as an issue, keyed to the EH + source field", () => {
     const u = clone();

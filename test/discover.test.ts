@@ -217,6 +217,19 @@ describe("buildFieldMapDraft", () => {
     expect(unmapped).toEqual([]);
   });
 
+  it("drafts a profile pick as the profile's first / last name (userField)", async () => {
+    const { DEMO_CUSTOM_FIELDS } = await import("./fixtures/demo-custom-fields.js");
+    const { draft } = buildFieldMapDraft({
+      ...base,
+      fields: DEMO_CUSTOM_FIELDS.filter((f) => !f.name.startsWith("Legal")),
+      picks: { "Legal First Name": { profile: true }, "Legal Surname": { profile: true } },
+    });
+
+    expect(draft.fields).toContainEqual({ eh: "firstName", from: { userField: "firstName" }, transform: "trimString", required: true });
+    expect(draft.fields).toContainEqual({ eh: "surname", from: { userField: "lastName" }, transform: "trimString", required: true });
+    expect(() => parseFieldMap(draft)).not.toThrow();
+  });
+
   it("lists unrecognised fields for review", () => {
     const { unmapped } = buildFieldMapDraft({
       ...base,

@@ -32,8 +32,8 @@ fills them in but nothing reads them.
 
 | Connecteam field | id | EH Payroll field | Transform / rule |
 |---|---|---|---|
-| Legal First Name | 42920713 | `firstName` | legal name (ATO). Connecteam top-level `firstName` = preferred, **not synced, by decision: payroll uses the legal name** (#70) |
-| Legal Surname | 42920714 | `surname` | legal name (ATO). Connecteam top-level `lastName` is not synced, same reason |
+| Legal First Name | 42920713 | `firstName` | legal name (ATO). Connecteam top-level `firstName` = preferred, **not synced, by decision: payroll uses the legal name** (#70), unless the field picker is told the client's profile names are legal names (`userField: "firstName"`) |
+| Legal Surname | 42920714 | `surname` | legal name (ATO). Connecteam top-level `lastName` is not synced, same reason and same exception (`userField: "lastName"`) |
 | Birthday | 25145118 | `dateOfBirth` | DD/MM/YYYY → ISO |
 | Gender | 25145119 | `gender` | Male/Female → EH enum; Other → `Indeterminate`, which EH stores as **blank** (see below) |
 | `email` (top-level) | — | `emailAddress` | |
