@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { listCustomFieldDefinitions } from "../scripts/lib/connecteam-custom-fields.js";
 import { buildFieldMapDraft } from "../scripts/lib/discover-draft.js";
+import { parseFieldMap } from "../src/mapping/schema.js";
 
 const wrap = (customFields: unknown[]) => ({ requestId: "r1", data: { customFields } });
 
@@ -97,7 +98,7 @@ describe("buildFieldMapDraft", () => {
       ],
     });
 
-    expect(draft.rules.super.usiField).toBe(21);
+    expect(draft.rules.super!.usiField).toBe(21);
     expect(unmapped.map((u) => u.id)).toEqual([20]);
   });
 
@@ -143,7 +144,7 @@ describe("buildFieldMapDraft", () => {
 
     expect(draft.fields).toContainEqual({ eh: "residentialPostCode", from: { customFieldId: 30 }, transform: "zeroPad4" });
     expect(draft.rules.taxDeclaration.hasHelpOrStslDebt).toEqual({ customFieldId: 31 });
-    expect(draft.rules.super.usiField).toBe(32);
+    expect(draft.rules.super!.usiField).toBe(32);
     expect(notSynced.map((n) => n.id)).toEqual([33]);
     expect(unmapped).toEqual([]);
   });
@@ -190,6 +191,19 @@ describe("buildFieldMapDraft", () => {
       customFieldId: 61,
       options: { "Yes, claim tax free threshold": "yes", No: "no" },
     });
+  });
+
+  it("leaves the super rule out when super is skipped, so the draft is valid (#117)", async () => {
+    const { DEMO_CUSTOM_FIELDS } = await import("./fixtures/demo-custom-fields.js");
+    const skip = { skip: true } as const;
+    const { draft } = buildFieldMapDraft({
+      ...base,
+      fields: DEMO_CUSTOM_FIELDS.filter((f) => f.name !== "Super Fund USI"),
+      picks: { "Super Fund USI": skip, "Super Fund ABN": skip, "Super Fund Name": skip, "Member Number": skip },
+    });
+
+    expect(draft.rules.super).toBeUndefined();
+    expect(() => parseFieldMap(draft)).not.toThrow();
   });
 
   it("lists unrecognised fields for review", () => {

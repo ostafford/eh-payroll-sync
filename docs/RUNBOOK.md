@@ -175,6 +175,12 @@ field. A field the client already has under their own name (e.g. "Tax File Numbe
 for "TFN") is matched and left alone, so re-running never duplicates one. A
 re-run of the picker asks only about fields not yet decided.
 
+Super is all four fields or none (#117): the sync's super rule needs the USI,
+ABN, fund name and member number together. Skipping any one asks "Skip super
+entirely?". Yes skips all four, and the field map then has no super rule, so
+super is entered in Employment Hero by hand for every employee. A hand-edited
+`field-picks.json` that skips some super fields but not all is rejected.
+
 For a picked dropdown whose options aren't all values EH takes (e.g. Employee
 Status `Full-time | PBV`), the picker asks what each option sends: an EH value,
 or "not synced" (the employee gets a Correction message). Tax questions map to

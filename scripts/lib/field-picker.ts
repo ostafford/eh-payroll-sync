@@ -50,6 +50,30 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
     } else undecided.push({ spec, why: whyAsk(r, spec) });
   }
 
+  const skipped = (spec: FieldSpec) => {
+    const pick = out[spec.name];
+    return !!pick && "skip" in pick;
+  };
+  // Asks about one field and saves the answer. The sync's super rule needs all
+  // four super fields or none (#117), so skipping one is skipping super.
+  const decide = async (spec: FieldSpec, why: string, suggested?: FieldDef): Promise<void> => {
+    for (;;) {
+      // Fields the rest of the "use all" table will take aren't offered either.
+      const pending = auto.filter((a) => a.spec !== spec).map((a) => a.field.id);
+      const choice = await askOne(spec, why, unused(fields, out, spec, pending), io, suggested);
+      if (choice.kind !== "skip" || spec.target.kind !== "super") {
+        out = applyChoice(out, spec, choice);
+        return;
+      }
+      io.print("", "The sync needs all four super fields or none.");
+      const all = (await io.ask("Skip super entirely? Super details are then entered in Employment Hero by hand. [y/N] ")).trim().toLowerCase();
+      if (all === "y") {
+        for (const s of FIELD_SPEC.filter((x) => x.target.kind === "super")) out = applyChoice(out, s, { kind: "skip" });
+        return;
+      }
+    }
+  };
+
   // Every match is shown, so a wrong one is caught; one answer accepts them all.
   while (auto.length) {
     io.print("", "Matched automatically:");
@@ -60,7 +84,7 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
       break;
     }
     if (answer === "n") {
-      for (const { spec, field } of auto) out = applyChoice(out, spec, await askOne(spec, `matched "${field.name}"`, unused(fields, out, spec), io, field));
+      for (const { spec, field } of auto) if (!skipped(spec)) await decide(spec, `matched "${field.name}"`, field);
       break;
     }
     const n = Number(answer);
@@ -69,11 +93,13 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
       io.print(`  Type y, n, or a number from 1 to ${auto.length}.`);
       continue;
     }
-    out = applyChoice(out, one.spec, await askOne(one.spec, `matched "${one.field.name}"`, unused(fields, out, one.spec), io, one.field));
+    await decide(one.spec, `matched "${one.field.name}"`, one.field);
     auto.splice(n - 1, 1);
+    // Skipping super takes its other fields out of "use all".
+    auto.splice(0, auto.length, ...auto.filter((a) => !skipped(a.spec)));
   }
 
-  for (const { spec, why } of undecided) out = applyChoice(out, spec, await askOne(spec, why, unused(fields, out, spec), io));
+  for (const { spec, why } of undecided) if (!skipped(spec)) await decide(spec, why);
 
   // Then each picked dropdown whose options aren't all values EH takes.
   for (const spec of FIELD_SPEC.filter((s) => s.create && s.ct.options)) {
@@ -85,9 +111,9 @@ export async function runFieldPicker(raw: any[], picks: FieldPicks, io: PickerIo
   return out;
 }
 
-/** Fields not already picked for another of the sync's fields, so none is used twice. */
-function unused(fields: FieldDef[], picks: FieldPicks, spec: FieldSpec): FieldDef[] {
-  const taken = new Set(Object.entries(picks).flatMap(([name, p]) => (name !== spec.name && "id" in p ? [p.id] : [])));
+/** Fields not already picked (or about to be) for another of the sync's fields, so none is used twice. */
+function unused(fields: FieldDef[], picks: FieldPicks, spec: FieldSpec, pending: number[] = []): FieldDef[] {
+  const taken = new Set([...pending, ...Object.entries(picks).flatMap(([name, p]) => (name !== spec.name && "id" in p ? [p.id] : []))]);
   return fields.filter((f) => !taken.has(f.id));
 }
 
