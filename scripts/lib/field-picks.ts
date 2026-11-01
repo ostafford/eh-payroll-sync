@@ -37,6 +37,11 @@ export function loadFieldPicks(path: string): FieldPicks {
     }
     const id = (pick as any)?.id;
     if (!Number.isInteger(id) || id <= 0) throw new Error(`${path}: "${name}" needs { "id": <Connecteam field id> }, { "skip": true }, { "create": true } or (legal names only) { "profile": true }`);
+    const exclude = (pick as any).exclude;
+    if (exclude !== undefined) {
+      if (!Array.isArray(exclude) || exclude.some((v) => typeof v !== "string")) throw new Error(`${path}: "${name}".exclude must be a list of answers`);
+      if (!spec.ct.canLeaveOut) throw new Error(`${path}: "${name}" can't leave employees out of the sync`);
+    }
     const options = (pick as any).options;
     if (options === undefined) continue;
     if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error(`${path}: "${name}".options must be an object`);

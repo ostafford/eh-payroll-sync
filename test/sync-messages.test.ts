@@ -63,6 +63,24 @@ describe("friendlyLine - curated EH-error -> plain language", () => {
   });
 });
 
+describe("correctionMessage - naming the employee's own answer", () => {
+  const tbc = { field: "claimTaxFreeThreshold", reason: "x", answer: { question: "Claim Tax Free Threshold?", value: "TBC", kind: "yesNo" as const } };
+  const contractor = { field: "employmentType", reason: "x", answer: { question: "Employee Status", value: "Contractor", kind: "option" as const } };
+
+  it("says which question and what they answered, and what's needed", () => {
+    const msg = correctionMessage([tbc, contractor], "Profile > Payroll", "");
+    expect(msg).toContain('• You answered "TBC" to "Claim Tax Free Threshold?". Employment Hero needs a Yes or No answer - please update it once you know.');
+    expect(msg).toContain('• You answered "Contractor" to "Employee Status". Employment Hero can\'t use that answer - please choose a different option.');
+    expect(msg).not.toContain("missing or inconsistent");
+  });
+
+  it("keeps the plain wording in the manager's copy", () => {
+    const msg = managerEscalationMessage([tbc], undefined, "");
+    expect(msg).not.toContain("You answered");
+    expect(msg).toContain("tax declaration answers");
+  });
+});
+
 describe("correctionMessage", () => {
   it("names each distinct field once, in plain language, under 500 chars", () => {
     const msg = correctionMessage([

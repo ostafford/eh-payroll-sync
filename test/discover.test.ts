@@ -230,6 +230,16 @@ describe("buildFieldMapDraft", () => {
     expect(() => parseFieldMap(draft)).not.toThrow();
   });
 
+  it("writes the answers to leave out as rules.exclude", () => {
+    const { draft } = buildFieldMapDraft({
+      ...base,
+      fields: [{ customFieldId: 60, name: "Employee Status", type: "dropdown" }],
+      picks: { "Employee Status": { id: 60, options: { "Full-time": "FullTime", PBV: null }, exclude: ["PBV"] } },
+    });
+    expect(draft.rules.exclude).toEqual([{ customFieldId: 60, values: ["PBV"] }]);
+    expect(draft.fields.find((f) => f.eh === "employmentType")?.map).toEqual({ "Full-time": "FullTime" });
+  });
+
   it("lists unrecognised fields for review", () => {
     const { unmapped } = buildFieldMapDraft({
       ...base,

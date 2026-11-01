@@ -68,7 +68,7 @@ describe("buildStatusRoster", () => {
 
     const roster = await buildStatusRoster({ store, ct });
 
-    expect(roster.counts).toEqual({ ready: 1, waitingEmployee: 1, waitingAdmin: 0, broken: 0 });
+    expect(roster.counts).toEqual({ ready: 1, waitingEmployee: 1, waitingAdmin: 0, broken: 0, leftOut: 0 });
     expect(roster.employees).toEqual([
       { ctUserId: 1, ehEmployeeId: "1", state: "ready", reasons: [] },
       {
@@ -115,6 +115,28 @@ describe("buildStatusRoster", () => {
   });
 });
 
+describe("buildStatusRoster - left out by choice", () => {
+  it("labels them with the field map's values and never looks up their names", async () => {
+    const store = fakeStore([
+      row({ ctUserId: 1, lastOutcome: "excluded", latestOutcome: "excluded", latestDetail: "excluded: customField 42920839 (Employee Status)" }),
+    ]);
+    let calls = 0;
+    const ct = {
+      async getUser() {
+        calls++;
+        return { outcome: "ok" as const, data: null };
+      },
+      async sendChannelMessage() {
+        return { outcome: "ok" as const, data: null };
+      },
+    };
+    const roster = await buildStatusRoster({ store, ct, exclude: [{ customFieldId: 42920839, values: ["PBV"] }] });
+    expect(roster.employees[0]).toMatchObject({ state: "left_out", reasons: ["Employee Status: PBV"] });
+    expect(roster.counts.leftOut).toBe(1);
+    expect(calls).toBe(0);
+  });
+});
+
 describe("runStatusDigestNow", () => {
   it("posts the digest to the admin channel", async () => {
     const store = fakeStore([row({ ctUserId: 1, lastOutcome: "follow_up", latestOutcome: "follow_up", latestDetail: "follow_up: reason" })]);
@@ -124,7 +146,7 @@ describe("runStatusDigestNow", () => {
 
     expect(ct.channels).toHaveLength(1);
     expect(ct.channels[0]?.id).toBe(ADMIN_CHANNEL);
-    expect(ct.channels[0]?.text).toContain("Waiting on admin:");
+    expect(ct.channels[0]?.text).toContain("🟠 Waiting on admin (1):");
   });
 });
 

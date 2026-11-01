@@ -42,7 +42,7 @@ describe("GET /status (in workerd, real D1)", () => {
   it("accepts the webhook secret as a fallback bearer token and returns an empty roster", async () => {
     const { status, body } = await call("/status", { headers: { authorization: `Bearer ${SECRET}` } });
     expect(status).toBe(200);
-    expect(body.counts).toEqual({ ready: 0, waitingEmployee: 0, waitingAdmin: 0, broken: 0 });
+    expect(body.counts).toEqual({ ready: 0, waitingEmployee: 0, waitingAdmin: 0, broken: 0, leftOut: 0 });
     expect(body.employees).toEqual([]);
     expect(typeof body.generatedAt).toBe("string");
   });
@@ -62,7 +62,7 @@ describe("GET /status (in workerd, real D1)", () => {
 
     const { status, body } = await call("/status", { headers: { authorization: `Bearer ${SECRET}` } });
     expect(status).toBe(200);
-    expect(body.counts).toEqual({ ready: 1, waitingEmployee: 0, waitingAdmin: 0, broken: 0 });
+    expect(body.counts).toEqual({ ready: 1, waitingEmployee: 0, waitingAdmin: 0, broken: 0, leftOut: 0 });
     expect(body.employees).toEqual([{ ctUserId: 100, ehEmployeeId: "555", state: "ready", reasons: [] }]);
   });
 });

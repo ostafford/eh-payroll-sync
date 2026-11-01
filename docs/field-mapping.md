@@ -67,6 +67,22 @@ entry (#112): `{ "customFieldId": 61, "options": { "Yes, claim tax free threshol
 With `options`, only the listed answers count; any other answer (`N/A`, `TBC`,
 even a plain `Yes`) is held for a Correction message. The wizard's field picker
 writes it.
+
+## Leaving employees out by choice (`rules.exclude`)
+
+Some answers mean an employee isn't paid through payroll at all, e.g. the first
+client's Employee Status `PBV`. Those are listed in `rules.exclude`:
+`[{ "customFieldId": 42920839, "values": ["PBV"] }]`. The sync then skips anyone
+with that answer before mapping: no EH record, no Correction, no admin notice.
+It records them once as `excluded` (the field name only, never the answer), and
+the status digest shows a count: "⚪ Left out by choice: 3 (Employee Status: PBV)".
+Someone already in EH who changes to an excluded answer keeps their EH record;
+it just stops being updated. Picked in the field check (Employee Status only).
+
+"Not synced" is different: the employee *is* meant to be in EH, so they're sent
+a Correction naming their answer ("You answered "TBC" to "Claim Tax Free
+Threshold?". Employment Hero needs a Yes or No answer…") and their record waits
+until they change it.
 | Name on Bank Account | 42921173 | `bankAccount1_AccountName` | |
 | BSB | 42923223 | `bankAccount1_BSB` | string; zero-pad to 6 |
 | Account Number | 42921172 | `bankAccount1_AccountNumber` | |

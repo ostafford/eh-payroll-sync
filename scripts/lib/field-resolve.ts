@@ -42,7 +42,16 @@ const prefer = (fields: FieldDef[], keep: (f: FieldDef) => boolean): FieldDef[] 
  * One field's choice: a Connecteam field ID, not used at all, or to be made by
  * create-fields (which then saves the new field's ID in its place).
  */
-export type FieldPick = { id: number; options?: OptionMap } | { skip: true } | { create: true } | { profile: true };
+export type FieldPick =
+  | {
+      id: number;
+      options?: OptionMap;
+      /** Answers that leave the employee out of the sync entirely (rules.exclude); each is also `null` in `options`. */
+      exclude?: string[];
+    }
+  | { skip: true }
+  | { create: true }
+  | { profile: true };
 
 /**
  * A dropdown's options, as the client named them, to what the sync sends (#112):

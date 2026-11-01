@@ -6,6 +6,7 @@
  */
 import type { FieldMap, FieldRule, TransformName } from "./schema.js";
 import * as t from "./transforms.js";
+import type { UnusableAnswer } from "../eh/errors.js";
 import { TransformError } from "./transforms.js";
 import { applySuper, applyTaxDeclaration, FOLLOW_UP, type RuleOutput } from "./rules.js";
 
@@ -32,6 +33,8 @@ export interface MappingIssue {
   ehField: string;
   source: string;
   reason: string;
+  /** The employee's dropdown answer the sync can't use (never for a sensitive field). */
+  answer?: UnusableAnswer;
 }
 
 export interface MappingResult {
@@ -201,7 +204,9 @@ function applyFieldRules(user: ConnecteamUser, map: FieldMap): {
       payload[rule.eh] = out;
     } catch (err) {
       const reason = err instanceof TransformError ? err.message : String(err);
-      issues.push({ ehField: rule.eh, source: label, reason });
+      // A readable answer the map doesn't list: tell the employee what they picked.
+      const answer = rule.map && !rule.sensitive && "customFieldId" in rule.from ? dropdownAnswer(user, rule.from.customFieldId, "option") : undefined;
+      issues.push({ ehField: rule.eh, source: label, reason, ...(answer ? { answer } : {}) });
     }
   }
 
@@ -374,6 +379,38 @@ function mergeRuleOutput(
   Object.assign(target.payload, r.fields);
   target.issues.push(...r.issues);
   target.followUps.push(...r.followUps);
+}
+
+/**
+ * The field that leaves this employee out of the sync by choice (`rules.exclude`),
+ * as a redaction-safe label (`customField <id> (<name>)`, never the answer), or
+ * undefined if none does.
+ */
+/** A custom field's single dropdown answer, with the question's name, or undefined if blank or unreadable. */
+export function dropdownAnswer(user: ConnecteamUser, customFieldId: number, kind: UnusableAnswer["kind"]): UnusableAnswer | undefined {
+  const cf = user.customFields.find((f) => f.customFieldId === customFieldId);
+  if (!cf) return undefined;
+  try {
+    const value = t.dropdownValue(cf.value);
+    return value ? { question: cf.name, value, kind } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function leftOutBy(user: ConnecteamUser, map: FieldMap): string | undefined {
+  for (const rule of map.rules?.exclude ?? []) {
+    const cf = user.customFields.find((f) => f.customFieldId === rule.customFieldId);
+    if (!cf) continue;
+    let answer: string;
+    try {
+      answer = t.dropdownValue(cf.value);
+    } catch {
+      continue; // blank or not a single answer: not left out
+    }
+    if (rule.values.includes(answer)) return `customField ${cf.customFieldId} (${cf.name})`;
+  }
+  return undefined;
 }
 
 export function applyFieldMap(

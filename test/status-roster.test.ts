@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveRosterEntry,
+  leftOutLabel,
   summarizeRoster,
   parseRosterRows,
   type RosterRow,
@@ -114,6 +115,21 @@ describe("deriveRosterEntry", () => {
   });
 });
 
+describe("deriveRosterEntry - left out by choice", () => {
+  it("is left_out, naming the field that left them out, never broken or waiting", () => {
+    const entry = deriveRosterEntry(
+      row({ lastOutcome: "excluded", latestOutcome: "excluded", latestDetail: "excluded: customField 42920839 (Employee Status)" }),
+    );
+    expect(entry).toEqual({ ctUserId: 100, ehEmployeeId: "555", state: "left_out", reasons: ["customField 42920839 (Employee Status)"] });
+  });
+
+  it("labels it with the field map's values when known", () => {
+    const exclude = [{ customFieldId: 42920839, values: ["PBV", "Volunteer"] }];
+    expect(leftOutLabel("customField 42920839 (Employee Status)", exclude)).toBe("Employee Status: PBV, Volunteer");
+    expect(leftOutLabel("customField 42920839 (Employee Status)")).toBe("Employee Status");
+  });
+});
+
 describe("summarizeRoster", () => {
   it("tallies each state", () => {
     const entries = [
@@ -121,12 +137,13 @@ describe("summarizeRoster", () => {
       deriveRosterEntry(row({ ctUserId: 2, lastOutcome: "correction", latestOutcome: "correction", latestDetail: "correction: bsb" })),
       deriveRosterEntry(row({ ctUserId: 3, lastOutcome: "follow_up", latestOutcome: "follow_up", latestDetail: "follow_up: reason" })),
       deriveRosterEntry(row({ ctUserId: 4, latestOutcome: "dead_letter", latestDetail: "retries exhausted" })),
+      deriveRosterEntry(row({ ctUserId: 5, lastOutcome: "excluded", latestOutcome: "excluded", latestDetail: "excluded: customField 1 (X)" })),
     ];
-    expect(summarizeRoster(entries)).toEqual({ ready: 1, waitingEmployee: 1, waitingAdmin: 1, broken: 1 });
+    expect(summarizeRoster(entries)).toEqual({ ready: 1, waitingEmployee: 1, waitingAdmin: 1, broken: 1, leftOut: 1 });
   });
 
   it("is all zeroes for an empty roster", () => {
-    expect(summarizeRoster([])).toEqual({ ready: 0, waitingEmployee: 0, waitingAdmin: 0, broken: 0 });
+    expect(summarizeRoster([])).toEqual({ ready: 0, waitingEmployee: 0, waitingAdmin: 0, broken: 0, leftOut: 0 });
   });
 });
 

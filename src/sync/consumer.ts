@@ -19,7 +19,7 @@
  */
 import type { SyncJob } from "./job.js";
 import type { FieldMap } from "../mapping/schema.js";
-import { applyFieldMap, type ConnecteamUser as MappingUser } from "../mapping/apply.js";
+import { applyFieldMap, leftOutBy, type ConnecteamUser as MappingUser } from "../mapping/apply.js";
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { CtResult, PayRate } from "../connecteam/types.js";
 import type { EhPayrollClient } from "../eh/client.js";
@@ -75,7 +75,7 @@ export interface SyncDeps {
   onSystemAlert?: (info: { ctUserId: number; reason: string }) => Promise<void>;
 }
 
-export type SyncJobStatus = "synced" | "correction" | "follow_up" | "skipped" | "retry" | "collision";
+export type SyncJobStatus = "synced" | "correction" | "follow_up" | "skipped" | "retry" | "collision" | "excluded";
 
 export interface SyncJobOutcome {
   status: SyncJobStatus;
@@ -117,6 +117,24 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   if (userRes.outcome === "error") return { status: "retry", reason: `connecteam error ${userRes.status}` };
   if (userRes.data === null) return { status: "skipped", reason: "connecteam user no longer exists" };
   const user = userRes.data;
+
+  // Left out of the sync by choice (rules.exclude), e.g. an employee type that
+  // isn't paid through payroll: no EH call, no message. Recorded once, by field
+  // name only (never the answer), so the status digest can count them.
+  const excludedBy = leftOutBy(user as unknown as MappingUser, deps.fieldMap);
+  if (excludedBy) {
+    if (link?.lastOutcome === "excluded") return { status: "skipped", reason: "left out of the sync by choice" };
+    const detail = `excluded: ${excludedBy}`;
+    await deps.store.saveEmployeeLink({
+      ctUserId,
+      ehEmployeeId: link?.ehEmployeeId ?? null,
+      lastSyncedTs: eventTimestamp,
+      lastPayloadHash: null,
+      lastOutcome: "excluded",
+    });
+    await deps.store.appendSyncLog({ ctUserId, at: now(), outcome: "excluded", detail });
+    return { status: "excluded", reason: detail };
+  }
 
   // Per-employee pay rate (issue #42): only when the client opted in via
   // `employmentHero.perEmployeeRate`. `applyFieldMap` is pure, so the network

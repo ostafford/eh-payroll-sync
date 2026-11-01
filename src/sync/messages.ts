@@ -17,7 +17,7 @@
  * audit log only. Each recognised field maps to a curated, actionable line;
  * anything unrecognised falls back to one generic-but-actionable instruction.
  */
-import type { EhFieldError } from "../eh/errors.js";
+import type { EhFieldError, UnusableAnswer } from "../eh/errors.js";
 
 const MAX_LEN = 500;
 
@@ -81,6 +81,19 @@ export function friendlyLine(err: EhFieldError): string {
 }
 
 /**
+ * The employee's own dropdown answer the sync can't use, named back to them
+ * (#112): they picked an option the client offered, so a generic "missing or
+ * inconsistent" would confuse them. The wizard previews exactly this line.
+ */
+export function answerLine(a: UnusableAnswer): string {
+  const need =
+    a.kind === "yesNo"
+      ? "Employment Hero needs a Yes or No answer - please update it once you know."
+      : "Employment Hero can't use that answer - please choose a different option.";
+  return `You answered "${a.value}" to "${a.question}". ${need}`;
+}
+
+/**
  * The distinct topics behind a Correction's field errors, in the order asked
  * (#71). A field with no curated line has no topic, so an all-unknown
  * Correction yields `[]`.
@@ -134,10 +147,11 @@ export function adminCorrectionFixedMessage(ref: PersonRef, topics: readonly str
   return clamp(`✅ ${personLabel(ref)} fixed their ${what} and has now synced to Employment Hero.`);
 }
 
-function friendlyLines(fields: EhFieldError[]): string[] {
+/** `toEmployee`: name the employee's own answer where there is one (never in a manager's copy). */
+function friendlyLines(fields: EhFieldError[], toEmployee = false): string[] {
   const out: string[] = [];
   for (const f of fields) {
-    const line = friendlyLine(f);
+    const line = toEmployee && f.answer ? answerLine(f.answer) : friendlyLine(f);
     if (!out.includes(line)) out.push(line);
   }
   if (out.length === 0) return [GENERIC_CORRECTION];
@@ -150,7 +164,7 @@ function friendlyLines(fields: EhFieldError[]): string[] {
  * to fix it (`profilePath`, per client: sections are the client's choice).
  */
 export function correctionMessage(fields: EhFieldError[], profilePath: string, note: string): string {
-  const lines = friendlyLines(fields);
+  const lines = friendlyLines(fields, true);
   return fitList(
     ["Hi - a few of the details you entered need a quick fix before they can be saved to Employment Hero:"],
     lines,

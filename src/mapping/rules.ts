@@ -6,7 +6,7 @@
  * Pure. EH field names here are marked @todo - verify them against the live
  * AuUnstructuredEmployeeModel during M2 before relying on them.
  */
-import type { ConnecteamUser, MappingIssue, PayloadValue } from "./apply.js";
+import { dropdownAnswer, type ConnecteamUser, type MappingIssue, type PayloadValue } from "./apply.js";
 import { dropdownValue, yesNo, trimString, TransformError } from "./transforms.js";
 import type { Rules } from "./schema.js";
 
@@ -84,7 +84,8 @@ export function applyTaxDeclaration(
       }
       return yesNo(value);
     } catch (err) {
-      out.issues.push({ ehField, source: label, reason: err instanceof TransformError ? err.message : String(err) });
+      const answer = dropdownAnswer(user, source.customFieldId, "yesNo");
+      out.issues.push({ ehField, source: label, reason: err instanceof TransformError ? err.message : String(err), ...(answer ? { answer } : {}) });
       return undefined;
     }
   };

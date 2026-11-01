@@ -41,6 +41,8 @@ export interface FieldSpec {
     options?: string[];
     /** Other Connecteam types the sync's transform also reads (e.g. a number field for hours). */
     alsoAccepts?: string[];
+    /** Some answers can leave the employee out of the sync entirely (e.g. a type not paid through payroll). */
+    canLeaveOut?: boolean;
     /** Why a number field won't do, added to the check's "wrong type" explanation. */
     numberNote?: string;
     /** Every option must exist (a Yes/No question needs both answers). */
@@ -131,7 +133,7 @@ export const FIELD_SPEC: FieldSpec[] = [
     ct: { type: "str", ...adminSet(COMPANY) },
     target: { kind: "field", eh: "jobTitle", transform: "trimString" } },
   { name: "Employee Status", match: /employee status/i, group: "Employment", create: true,
-    ct: { type: "dropdown", options: ["FullTime", "PartTime", "Casual", "LabourHire"], ...adminSet(COMPANY) },
+    ct: { type: "dropdown", options: ["FullTime", "PartTime", "Casual", "LabourHire"], canLeaveOut: true, ...adminSet(COMPANY) },
     target: { kind: "field", eh: "employmentType", transform: "dropdownValue", required: true,
       map: { FullTime: "FullTime", PartTime: "PartTime", Casual: "Casual", LabourHire: "LabourHire" } } },
   // Optional (#42, #118): sent with the pay-run settings, overriding the default hours.

@@ -719,6 +719,26 @@ describe("applyFieldMap - rules engine", () => {
     expect(issues[0]!.reason).toMatch(/expected "Yes" or "No"/);
   });
 
+  it("carries the question and answer for an answer the sync can't use, so the employee is told what they picked", () => {
+    const u = clone();
+    setField(u, 42923316, [{ id: 2, value: "Unsure" }]);
+    expect(applyFieldMap(u, map).issues[0]!.answer).toEqual({ question: "Have a HELP/STSL study debt?", value: "Unsure", kind: "yesNo" });
+
+    const v = clone();
+    setField(v, 42920839, [{ id: 3, value: "Contractor" }]);
+    expect(applyFieldMap(v, map).issues.find((i) => i.ehField === "employmentType")!.answer).toEqual({
+      question: "Employee Status",
+      value: "Contractor",
+      kind: "option",
+    });
+  });
+
+  it("never carries a missing answer as one", () => {
+    const u = clone();
+    setField(u, 42923316, []);
+    expect(applyFieldMap(u, map).issues[0]!.answer).toBeUndefined();
+  });
+
   it("raises a follow-up for an INTERNATIONAL address", () => {
     const u = clone();
     setField(u, 42920838, [{ id: 9, value: "INTERNATIONAL" }]);

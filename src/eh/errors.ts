@@ -11,6 +11,21 @@ export interface EhFieldError {
   /** EH field name if the line named one, otherwise "(unknown)". */
   field: string;
   reason: string;
+  /** The employee's own dropdown answer the sync can't use, so their Correction can name it. */
+  answer?: UnusableAnswer;
+}
+
+/**
+ * A Connecteam dropdown answer the sync can't send (#112): "TBC" to a Yes/No tax
+ * question, or an option the field map leaves unmapped. Only ever shown back to
+ * the employee who gave it, never logged, and never for a sensitive field.
+ */
+export interface UnusableAnswer {
+  /** The question as the employee saw it (the Connecteam field's name). */
+  question: string;
+  value: string;
+  /** "yesNo": a tax question needing Yes or No; "option": any other dropdown. */
+  kind: "yesNo" | "option";
 }
 
 const NO_FIELD = "(unknown)";

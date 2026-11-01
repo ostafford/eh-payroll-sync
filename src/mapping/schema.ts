@@ -87,6 +87,14 @@ export const rules = z
       .optional(),
     /** Fixed values folded verbatim into every payload. */
     constants: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    /**
+     * Employees whose answer to a Connecteam dropdown is one of `values` are left
+     * out of the sync entirely: no EH record, no message (e.g. an employee type
+     * that isn't paid through payroll). Picked in the wizard's field check.
+     */
+    exclude: z
+      .array(z.object({ customFieldId: z.number().int().positive(), values: z.array(z.string().min(1)).min(1) }).strict())
+      .optional(),
   })
   .strict();
 

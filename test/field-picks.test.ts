@@ -26,4 +26,11 @@ describe("loadFieldPicks", () => {
     expect(loadFieldPicks(file({ "Legal First Name": { profile: true } }))).toEqual({ "Legal First Name": { profile: true } });
     expect(() => loadFieldPicks(file({ Title: { profile: true } }))).toThrow(/"Title" can't be read from the Connecteam profile/);
   });
+
+  it("accepts a list of answers to leave out, only where the field allows it", () => {
+    const ok = { "Employee Status": { id: 1, options: { PBV: null }, exclude: ["PBV"] } };
+    expect(loadFieldPicks(file(ok))).toEqual(ok);
+    expect(() => loadFieldPicks(file({ Gender: { id: 1, exclude: ["Other"] } }))).toThrow(/"Gender" can't leave employees out/);
+    expect(() => loadFieldPicks(file({ "Employee Status": { id: 1, exclude: "PBV" } }))).toThrow(/exclude must be a list/);
+  });
 });

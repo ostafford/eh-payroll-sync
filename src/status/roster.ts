@@ -25,7 +25,8 @@
  */
 import type { SyncOutcomeLabel } from "../sync/gateway.js";
 
-export type RosterState = "ready" | "waiting_on_employee" | "waiting_on_admin" | "broken";
+/** `left_out`: left out of the sync by choice (`rules.exclude`) - nothing to act on. */
+export type RosterState = "ready" | "waiting_on_employee" | "waiting_on_admin" | "broken" | "left_out";
 
 /** One joined row, as returned by {@link ROSTER_QUERY_SQL}. */
 export interface RosterRow {
@@ -84,6 +85,7 @@ ORDER BY ids.ct_user_id
 `;
 
 const CORRECTION_PREFIX = "correction: ";
+const EXCLUDED_PREFIX = "excluded: ";
 const FOLLOW_UP_PREFIX = "follow_up: ";
 const NO_DETAIL = "Employment Hero flagged this record - see the audit log.";
 
@@ -99,6 +101,8 @@ export function deriveRosterEntry(row: RosterRow): RosterEntry {
   }
 
   switch (row.lastOutcome) {
+    case "excluded":
+      return { ...base, state: "left_out", reasons: splitDetail(row.latestDetail, EXCLUDED_PREFIX, "\n") };
     case "correction":
       return {
         ...base,
@@ -132,17 +136,30 @@ export interface RosterCounts {
   waitingEmployee: number;
   waitingAdmin: number;
   broken: number;
+  leftOut: number;
 }
 
 export function summarizeRoster(entries: readonly RosterEntry[]): RosterCounts {
-  const counts: RosterCounts = { ready: 0, waitingEmployee: 0, waitingAdmin: 0, broken: 0 };
+  const counts: RosterCounts = { ready: 0, waitingEmployee: 0, waitingAdmin: 0, broken: 0, leftOut: 0 };
   for (const e of entries) {
     if (e.state === "ready") counts.ready++;
     else if (e.state === "waiting_on_employee") counts.waitingEmployee++;
     else if (e.state === "waiting_on_admin") counts.waitingAdmin++;
+    else if (e.state === "left_out") counts.leftOut++;
     else counts.broken++;
   }
   return counts;
+}
+
+/**
+ * A left-out reason (`customField <id> (<name>)`) as admins read it: the field's
+ * name, plus the answers the field map leaves out when known ("Employee Status: PBV").
+ */
+export function leftOutLabel(reason: string, exclude: ReadonlyArray<{ customFieldId: number; values: readonly string[] }> = []): string {
+  const m = /^customField (\d+) \((.*)\)$/.exec(reason.trim());
+  if (!m) return reason;
+  const values = exclude.find((r) => r.customFieldId === Number(m[1]))?.values ?? [];
+  return values.length ? `${m[2]}: ${values.join(", ")}` : m[2]!;
 }
 
 /** Parse the raw rows a D1 `.all()` call returns for {@link ROSTER_QUERY_SQL}. */

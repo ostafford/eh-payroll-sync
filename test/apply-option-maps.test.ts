@@ -39,4 +39,11 @@ describe("applyOptionMaps", () => {
     expect(changed).toEqual([]);
     expect(map.fields[0]!.map).toEqual({ FullTime: "FullTime" });
   });
+
+  it("writes the answers to leave out into the kept map's rules.exclude, replacing that field's entry", () => {
+    const map = { ...kept(), rules: { ...kept().rules, exclude: [{ customFieldId: 60, values: ["Old"] }, { customFieldId: 9, values: ["X"] }] } };
+    const { map: out, changed } = applyOptionMaps(map, { "Employee Status": { id: 60, options: { "Full-time": "FullTime", PBV: null }, exclude: ["PBV"] } });
+    expect(out.rules.exclude).toEqual([{ customFieldId: 9, values: ["X"] }, { customFieldId: 60, values: ["PBV"] }]);
+    expect(changed).toContain("Employee Status");
+  });
 });

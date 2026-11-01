@@ -189,7 +189,10 @@ super is entered in Employment Hero by hand for every employee. A hand-edited
 
 For a picked dropdown whose options aren't all values EH takes (e.g. Employee
 Status `Full-time | PBV`), the check asks what each option sends: an EH value,
-or "not synced" (the employee gets a Correction message). Tax questions map to
+or "not synced" (the employee is sent a Correction naming their answer; the check
+shows the exact message first). For Employee Status there's also "leave these
+employees out": no EH record and no message, for a type not paid through payroll
+(`rules.exclude`, `docs/field-mapping.md`). Tax questions map to
 Yes / No the same way. The choices are saved with the pick, go into the draft
 field map, and `discover` writes them into a field map it kept.
 
