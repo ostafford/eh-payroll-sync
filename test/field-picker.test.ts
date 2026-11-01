@@ -292,9 +292,10 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
       const answers = ["y", "1", "2", "5", "", "5", "", "1", "3", "n", "2", "y", "3", "", "done"];
       const { result, asked, out } = await run(client(), {}, answers);
       expect(out).toContain('Employees who answer "N/A" won\'t be synced. They\'ll be sent:');
-      expect(out).toContain('"You answered "N/A" to "Claim tax-free threshold?". Employment Hero needs a Yes or No answer - please update it once you know."');
+      expect(out).toContain('"You answered "N/A" to "Claim tax-free threshold?" - please change it to Yes or No."');
+      expect(out).not.toContain("**");
       expect(asked).toContain('Keep "Not synced" for "N/A"? [Y/n] ');
-      expect(out).toContain('"You answered "PBV" to "Employee Status". Employment Hero can\'t use that answer - please choose a different option."');
+      expect(out).toContain('"You answered "PBV" to "Employee Status" - please choose a different option."');
       expect(result["Claim tax-free threshold?"]).toMatchObject({ options: { "N/A": "no", TBC: null } });
     });
 

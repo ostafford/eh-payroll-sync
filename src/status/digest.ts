@@ -10,6 +10,7 @@
  * roster is never cut off, only split.
  */
 import type { RosterEntry, RosterState } from "./roster.js";
+import { correctionTopic } from "../sync/messages.js";
 
 export interface DigestEmployee extends RosterEntry {
   /** Best-effort display name; falls back to the id-only label when absent. */
@@ -31,7 +32,7 @@ const MAX_CHUNK = 480;
 
 function who(e: DigestEmployee): string {
   const name = (e.name ?? "").trim();
-  return name ? `${name} (${e.ctUserId})` : `Connecteam user ${e.ctUserId}`;
+  return name ? `**${name}** (${e.ctUserId})` : `Connecteam user ${e.ctUserId}`;
 }
 
 /** One or more admin-channel messages, each already within the 500-char clamp. */
@@ -41,24 +42,34 @@ export function digestMessages(employees: readonly DigestEmployee[], totalCount:
   if (nonReady.length === 0) {
     const synced = totalCount - employees.filter((e) => e.state === "left_out").length;
     const singular = synced === 1;
-    const clear = `All ${synced} employee${singular ? "" : "s"} ${singular ? "is" : "are"} Complete in Employment Hero - no follow-up needed.`;
+    const clear = `✅ All ${synced} employee${singular ? "" : "s"} ${singular ? "is" : "are"} Complete in Employment Hero - no follow-up needed.`;
     return chunk([clear, ...(leftOut.length ? ["", ...leftOut] : [])]);
   }
 
   const lines: string[] = [
-    `Employment Hero sync status: ${nonReady.length} of ${totalCount} employees need attention.`,
+    `📋 Employment Hero sync status: ${nonReady.length} of ${totalCount} employees need attention.`,
   ];
   for (const state of STATE_ORDER) {
     const group = nonReady.filter((e) => e.state === state);
     if (group.length === 0) continue;
-    lines.push("", `${STATE_LABEL[state]} (${group.length}):`);
+    lines.push("", `**${STATE_LABEL[state]} (${group.length}):**`);
     for (const e of group) {
-      const reason = e.reasons.join("; ") || "see the audit log";
+      const reason = reasonsFor(e).join("; ") || "see the audit log";
       lines.push(`• ${who(e)} — ${reason}`);
     }
   }
-  if (leftOut.length) lines.push("", ...leftOut);
+  const complete = employees.filter((e) => e.state === "ready").length;
+  if (leftOut.length || complete) lines.push("", ...leftOut, ...(complete ? [`✅ ${complete} complete in Employment Hero`] : []));
   return chunk(lines);
+}
+
+/**
+ * An employee's open Correction lists EH field names; say them as the employee
+ * was asked ("tax declaration", "bank details"), once each, keeping any unknown.
+ */
+function reasonsFor(e: DigestEmployee): string[] {
+  if (e.state !== "waiting_on_employee") return e.reasons;
+  return [...new Set(e.reasons.map((f) => correctionTopic(f) ?? f))];
 }
 
 /** People left out of the sync by choice: one count line per reason, not a name each (nothing to act on). */
@@ -69,7 +80,7 @@ function leftOutLines(employees: readonly DigestEmployee[]): string[] {
     const why = e.reasons[0] ?? "the field map";
     counts.set(why, (counts.get(why) ?? 0) + 1);
   }
-  return [...counts].map(([why, n]) => `⚪ Left out by choice: ${n} (${why})`);
+  return [...counts].map(([why, n]) => `**⚪ Left out by choice: ${n}** (${why})`);
 }
 
 /** Pack lines into messages no longer than {@link MAX_CHUNK}, splitting on line boundaries only. */

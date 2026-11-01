@@ -60,6 +60,15 @@ fills them in but nothing reads them.
 | Claim tax-free threshold? | 42923276 | `claimTaxFreeThreshold` | Yes → true |
 | Australian resident for tax purposes? | 42923315 | `australianResident` | Yes → true; No → false + manual follow-up (EH has no `isNonResident`; tax scale / WHM is a payroll decision) |
 | Have a HELP/STSL study debt? | 42923316 | `helpDebt` **and** `stslDebt` | one combined Yes/No → both flags (over-report is harmless, under-report under-withholds) |
+| Name on Bank Account | 42921173 | `bankAccount1_AccountName` | |
+| BSB | 42923223 | `bankAccount1_BSB` | string; zero-pad to 6 |
+| Account Number | 42921172 | `bankAccount1_AccountNumber` | |
+| Payment Method | 42921174 | `bankAccount1` payment method | "Bank Details" → Electronic; PBV → ignored (unknown) |
+| — | — | `bankAccount1_AllocatedPercentage` | `100` (single account) |
+| Super Fund USI | 42920803 | `superFund1_ProductCode` | EH calls the USI the "product code". **USI present → APRA path** |
+| Member Number | 42920804 | `superFund1_MemberNumber` | required on the APRA path |
+| Super Fund Name | 42920782 | `superFund1_FundName` | |
+| Super Fund ABN | 42920783 | *(not sent)* | USI blank + ABN present → **SMSF → do NOT sync super**, manual follow-up to the admin channel |
 
 A client whose tax questions use their own wording (e.g. `Yes, claim tax free
 threshold | No | N/A | TBC`) gets an `options` map on that `rules.taxDeclaration`
@@ -81,17 +90,9 @@ it just stops being updated. Picked in the field check (Employee Status only).
 
 "Not synced" is different: the employee *is* meant to be in EH, so they're sent
 a Correction naming their answer ("You answered "TBC" to "Claim Tax Free
-Threshold?". Employment Hero needs a Yes or No answer…") and their record waits
-until they change it.
-| Name on Bank Account | 42921173 | `bankAccount1_AccountName` | |
-| BSB | 42923223 | `bankAccount1_BSB` | string; zero-pad to 6 |
-| Account Number | 42921172 | `bankAccount1_AccountNumber` | |
-| Payment Method | 42921174 | `bankAccount1` payment method | "Bank Details" → Electronic; PBV → ignored (unknown) |
-| — | — | `bankAccount1_AllocatedPercentage` | `100` (single account) |
-| Super Fund USI | 42920803 | `superFund1_ProductCode` | EH calls the USI the "product code". **USI present → APRA path** |
-| Member Number | 42920804 | `superFund1_MemberNumber` | required on the APRA path |
-| Super Fund Name | 42920782 | `superFund1_FundName` | |
-| Super Fund ABN | 42920783 | *(not sent)* | USI blank + ABN present → **SMSF → do NOT sync super**, manual follow-up to the admin channel |
+Threshold?" - please change it to Yes or No.") and their record waits until they
+change it. A Correction too long for one message (500 characters) goes as
+numbered parts, "(1 of 2)", "(2 of 2)", at most 3.
 
 ## Data quality resolved
 

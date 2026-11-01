@@ -146,7 +146,7 @@ describe("runStatusDigestNow", () => {
 
     expect(ct.channels).toHaveLength(1);
     expect(ct.channels[0]?.id).toBe(ADMIN_CHANNEL);
-    expect(ct.channels[0]?.text).toContain("🟠 Waiting on admin (1):");
+    expect(ct.channels[0]?.text).toContain("**🟠 Waiting on admin (1):**");
   });
 });
 

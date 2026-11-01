@@ -250,7 +250,9 @@ async function mapOptions(
       if (sent === null) {
         // Show exactly what those employees will be sent, from the sync's own wording.
         const line = answerLine({ question, value: o, kind: spec.target.kind === "taxDeclaration" ? "yesNo" : "option" });
-        io.print(`  Employees who answer ${p.ct(`"${o}"`)} won't be synced. They'll be sent:`, `    "${line}"`, "  and their record waits until they change it.");
+        // Connecteam shows **text** as bold: show it as bold here too, not as asterisks.
+        const shown = line.replace(/\*\*(.+?)\*\*/g, (_, t: string) => p.bold(t));
+        io.print(`  Employees who answer ${p.ct(`"${o}"`)} won't be synced. They'll be sent:`, `    "${shown}"`, "  and their record waits until they change it.");
         if ((await io.ask(`Keep "Not synced" for "${o}"? [Y/n] `)).trim().toLowerCase() === "n") continue;
       }
       // A tax answer that doesn't say Yes or No, sent as one, is a declaration the employee didn't make.

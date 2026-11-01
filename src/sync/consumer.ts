@@ -33,7 +33,7 @@ import {
   type ReadBackResult,
 } from "./decide.js";
 import {
-  correctionMessage,
+  correctionMessages,
   managerEscalationMessage,
   followUpNoticeMessage,
   systemAlertMessage,
@@ -292,13 +292,20 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     // own Correction message. The employee and the Direct manager each have
     // their own claim, so a failed manager DM can be retried without DMing the
     // employee twice (issue #89).
-    const employeeKey = await noticeKey("correction", ctUserId, [hash]);
-    let escalate: boolean;
-    if (await shouldPostNotice(deps.store, employeeKey, CORRECTION_NOTICE_DEDUPE_MS, now())) {
-      const sent = await sendClaimed(deps.store, employeeKey, ctUserId, "correction", () =>
-        deps.ct.sendDirectMessage(ctUserId, correctionMessage(decision.fields, deps.fieldMap.messages.profilePath, deps.fieldMap.messages.automatedNote)),
-      );
+    // A Correction too long for one message goes as numbered parts, each with
+    // its own claim (the first keeps the single-message key), so a retry after
+    // a failed later part sends only what's missing.
+    const parts = correctionMessages(decision.fields, deps.fieldMap.messages.profilePath, deps.fieldMap.messages.automatedNote);
+    let sentPart = false;
+    for (const [i, text] of parts.entries()) {
+      const key = await noticeKey("correction", ctUserId, i === 0 ? [hash] : [hash, `part ${i + 1}`]);
+      if (!(await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, now()))) continue;
+      const sent = await sendClaimed(deps.store, key, ctUserId, "correction", () => deps.ct.sendDirectMessage(ctUserId, text));
       if (!sent) return sendFailed("correction");
+      sentPart = true;
+    }
+    let escalate: boolean;
+    if (sentPart) {
       // Bumped only once the employee has the message, so a failed send leaves
       // nothing to undo. The cycle count is saved before the manager DM, so a
       // retry of a failed manager DM reads it back below.
