@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  DEAD_LETTER_REASON,
   deriveRosterEntry,
   leftOutLabel,
   summarizeRoster,
@@ -78,8 +79,16 @@ describe("deriveRosterEntry", () => {
       ctUserId: 100,
       ehEmployeeId: "555",
       state: "broken",
-      reasons: ["retries exhausted: employment hero unavailable: 503"],
+      reasons: [DEAD_LETTER_REASON],
     });
+  });
+
+  it("gives a dead-letter a plain reason: not the employee's data, see the System alert, how to retry", () => {
+    const [reason] = deriveRosterEntry(row({ latestOutcome: "dead_letter", latestDetail: "retries exhausted" })).reasons;
+    expect(reason).toMatch(/not the employee's data/);
+    expect(reason).toMatch(/System alert/);
+    expect(reason).toMatch(/edit their profile in Connecteam to retry/);
+    expect(reason).not.toMatch(/retries exhausted|retry limit/);
   });
 
   it("is broken when the latest sync_log row is an EH identity collision", () => {
@@ -110,7 +119,7 @@ describe("deriveRosterEntry", () => {
       ctUserId: 100,
       ehEmployeeId: null,
       state: "broken",
-      reasons: ["retries exhausted: connecteam unavailable: 503"],
+      reasons: [DEAD_LETTER_REASON],
     });
   });
 });

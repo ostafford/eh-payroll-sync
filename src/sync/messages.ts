@@ -302,6 +302,7 @@ export function systemAlertMessage(detail: string, ref: PersonRef): string {
       `Employment Hero sync failed for ${personLabel(ref)} and could not be retried.`,
       detail.trim() ? `Detail: ${detail.trim()}` : "No further detail was returned.",
       "No employee action is possible - check the Employment Hero API status and credentials.",
+      "Once fixed, edit their profile in Connecteam to sync again.",
     ),
   );
 }

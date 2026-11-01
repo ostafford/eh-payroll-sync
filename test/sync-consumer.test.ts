@@ -980,6 +980,9 @@ describe("handleDeadLetter", () => {
     });
     expect(ct.channels[0]!.id).toBe("chan-1");
     expect(ct.channels[0]!.text).toContain("42");
+    expect(ct.channels[0]!.text).toContain("every retry failed");
+    expect(ct.channels[0]!.text).not.toMatch(/retry limit/);
+    expect(ct.channels[0]!.text).toContain("edit their profile in Connecteam to sync again");
     expect(store.log[0]).toMatchObject({ ctUserId: 42, at: 5, outcome: "dead_letter" });
   });
 

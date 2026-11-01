@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { digestMessages, type DigestEmployee } from "../src/status/digest.js";
+import { deriveRosterEntry } from "../src/status/roster.js";
 
 function employee(over: Partial<DigestEmployee>): DigestEmployee {
   return { ctUserId: 100, ehEmployeeId: "1", state: "waiting_on_employee", reasons: ["taxFileNumber"], ...over };
@@ -43,6 +44,23 @@ describe("digestMessages", () => {
         "✅ 1 complete in Employment Hero",
       ].join("\n"),
     );
+  });
+
+  it("explains a dead-lettered employee in plain words, and keeps a collision's own reason", () => {
+    const deadLetter = deriveRosterEntry({
+      ctUserId: 5, ehEmployeeId: "1", failureCycleCount: 0, lastOutcome: "ok", latestOutcome: "dead_letter", latestDetail: "retries exhausted",
+    });
+    const collision = deriveRosterEntry({
+      ctUserId: 6, ehEmployeeId: null, failureCycleCount: null, lastOutcome: null, latestOutcome: "collision",
+      latestDetail: "collision: EH employee 555 already linked to Connecteam user 99999",
+    });
+    const msgs = digestMessages([{ ...deadLetter, name: "Jo Park" }, collision], 2);
+    const lines = msgs.join("\n").split("\n");
+    expect(lines).toContain(
+      "• **Jo Park** (5) — sync failed repeatedly (not the employee's data): see the System alert, and once it's fixed, edit their profile in Connecteam to retry",
+    );
+    expect(lines).toContain("• Connecteam user 6 — collision: EH employee 555 already linked to Connecteam user 99999");
+    for (const m of msgs) expect(m.length).toBeLessThanOrEqual(500);
   });
 
   it("counts people left out by choice on one line, never as needing attention", () => {

@@ -88,16 +88,23 @@ const CORRECTION_PREFIX = "correction: ";
 const EXCLUDED_PREFIX = "excluded: ";
 const FOLLOW_UP_PREFIX = "follow_up: ";
 const NO_DETAIL = "Employment Hero flagged this record - see the audit log.";
+/**
+ * A dead-letter's reason (#127). Its sync_log detail is only "retries
+ * exhausted", which tells an admin nothing; the System alert posted at the same
+ * moment carries the detail. A collision keeps its own detail: its cause and
+ * fix differ.
+ */
+export const DEAD_LETTER_REASON =
+  "sync failed repeatedly (not the employee's data): see the System alert, and once it's fixed, edit their profile in Connecteam to retry";
 
 export function deriveRosterEntry(row: RosterRow): RosterEntry {
   const base = { ctUserId: row.ctUserId, ehEmployeeId: row.ehEmployeeId };
 
-  if (row.latestOutcome === "dead_letter" || row.latestOutcome === "collision") {
-    return {
-      ...base,
-      state: "broken",
-      reasons: [row.latestDetail?.trim() || "the sync exceeded its retry limit (no further detail on record)"],
-    };
+  if (row.latestOutcome === "dead_letter") {
+    return { ...base, state: "broken", reasons: [DEAD_LETTER_REASON] };
+  }
+  if (row.latestOutcome === "collision") {
+    return { ...base, state: "broken", reasons: [row.latestDetail?.trim() || "see the Identity-collision alert"] };
   }
 
   switch (row.lastOutcome) {

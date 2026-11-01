@@ -505,7 +505,7 @@ export async function handleDeadLetter(
   deps: Pick<SyncDeps, "ct" | "store" | "adminChannelId" | "now" | "onSystemAlert">,
 ): Promise<void> {
   const now = deps.now ?? Date.now;
-  const detail = `the sync exceeded its retry limit (trigger "${job.reason}")`;
+  const detail = `every retry failed, so the cause outlasted a short blip (trigger "${job.reason}")`;
 
   // A user whose job keeps dead-lettering (EH auth down, a mapping bug) would
   // otherwise post an identical alert on every retry-exhaustion. Post it once

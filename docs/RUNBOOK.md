@@ -635,7 +635,7 @@ Each entry is one of:
 | `ready` | Employment Hero reports the record `Complete` |
 | `waiting_on_employee` | an open Correction cycle — `reasons` names the field(s), `cycleCount` counts attempts |
 | `waiting_on_admin` | synced with safe defaults, but EH still needs a payroll admin to finish something by hand |
-| `broken` | a job for this person dead-lettered — `reasons` carries the last error |
+| `broken` | a job for this person dead-lettered — `reasons` says it isn't the employee's data, points to the System alert, and says to retry by editing their profile in Connecteam; or an identity collision — `reasons` carries the collision detail |
 
 **Honest limit.** `ready` means EH **accepted** every value sent and reports the
 record payroll-ready — not that the values are **truthful**. EH validates
@@ -664,7 +664,7 @@ minutes for the rest of the digest day (UTC). The Worker logs
 |---|---|---|
 | **Correction message** | the employee (DM); + Direct manager on the 3rd failed attempt in a row | the employee fixes the named field(s) in Connecteam; **their next profile edit re-syncs** (see below) |
 | **Manual-follow-up notice** | alerts channel | a payroll admin finishes the item in EH by hand — foreign / working-holiday-maker tax scale, add the SMSF, enter the overseas address, **or set the award / pay-run defaults for a record EH marked `Incomplete`** — re-posted at most once per ~12 h per employee per reason-set |
-| **System alert** | alerts channel | check Employment Hero API status / credentials; once fixed, replay the dead-lettered job — re-posted at most once per hour per employee while the fault persists |
+| **System alert** | alerts channel | never the employee's data: check Employment Hero / Connecteam status and the API credentials; once fixed, **edit the employee's profile in Connecteam** to sync again (or replay the job, below) — re-posted at most once per hour per employee while the fault persists |
 | **Identity-collision alert** | alerts channel | two Connecteam people's EH records got merged into one (see below) — separate them directly in EH; re-posted at most once per hour per employee while it persists |
 | **Success message** | the employee (DM) | none. Sent once on their first successful sync, and once when a Correction is fixed (naming what was fixed). Off for a client with `"messages": { "employeeSuccess": false }` in `field-map.json`; on otherwise. Never sent for an ordinary edit |
 | **Admin success notice** | alerts channel | none. A ✅ naming the employee at the same two moments as the Success message; skipped when the sync lands as a Manual follow-up. Off with `"adminSuccess": false`; on otherwise. **On go-live every existing employee syncs at once**, so for a large client set it to `false` for the first run and switch it on afterwards |
