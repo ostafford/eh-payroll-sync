@@ -3,7 +3,7 @@
  * the human can choose from, and how a choice is saved to field-picks.json.
  */
 import { compatibleType, resolveField, type FieldDef, type FieldPick, type FieldPicks, type OptionMap } from "./field-resolve.js";
-import { checkFields, liveOptions, renderFieldCheck, typeName, type CheckRow } from "./field-check.js";
+import { checkFields, liveOptions, renderFieldCheck, taxGuess, typeName, type CheckRow } from "./field-check.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec } from "./field-spec.js";
 
 export type Choice = { kind: "use"; field: FieldDef } | { kind: "profile" } | { kind: "create" } | { kind: "skip" };
@@ -120,13 +120,14 @@ export async function reviewFields(raw: any[], picks: FieldPicks, io: PickerIo):
     }
   };
 
-  /** A dropdown's options EH doesn't take: ask what each one sends. */
-  const fixOptions = async (spec: FieldSpec): Promise<void> => {
+  /** A dropdown's options EH doesn't take, or `reask`: ask what each one sends. */
+  const fixOptions = async (spec: FieldSpec, reask: string[] = []): Promise<void> => {
     if (!spec.ct.options) return;
     const r = resolveField(spec, fields, out);
     if (r.status !== "matched") return;
     const pick = out[spec.name];
-    const known = pick && "id" in pick && pick.id === r.field.id ? (pick.options ?? {}) : {};
+    const saved = pick && "id" in pick && pick.id === r.field.id ? (pick.options ?? {}) : {};
+    const known = Object.fromEntries(Object.entries(saved).filter(([o]) => !reask.includes(o)));
     const options = await mapOptions(spec, liveOptions(raw.find((x) => x?.id === r.field.id)), known, io);
     if (options) {
       out = { ...out, [spec.name]: { id: r.field.id, options } };
@@ -139,6 +140,7 @@ export async function reviewFields(raw: any[], picks: FieldPicks, io: PickerIo):
     const r = resolveField(spec, fields, out);
     const row = checkFields(raw, out).find((x) => x.name === spec.name)!;
     if (!change && row.result.status === "options") return fixOptions(spec);
+    if (!change && row.result.status === "taxGuess") return fixOptions(spec, row.result.guesses.map((g) => g.option));
     const current = r.status === "matched" ? r.field : undefined;
     await decide(spec, current && change ? `matched "${current.name}"` : whyAsk(r, spec), current);
     await fixOptions(spec);
@@ -214,7 +216,17 @@ async function mapOptions(spec: FieldSpec, live: string[], known: OptionMap, io:
     for (;;) {
       const n = Number((await io.ask(`${p.eh(spec.name)}: ${p.ct(`"${o}"`)} -> `)).trim());
       if (Number.isInteger(n) && n >= 1 && n <= values.length + 1) {
-        options[o] = n <= values.length ? values[n - 1]!.value : null;
+        const sent = n <= values.length ? values[n - 1]!.value : null;
+        // A tax answer that doesn't say Yes or No, sent as one, is a declaration the employee didn't make.
+        if (spec.target.kind === "taxDeclaration" && sent && taxGuess(o, sent)) {
+          const as = sent === "yes" ? "Yes" : "No";
+          io.print(
+            `  ${p.change(`"${o}" doesn't say Yes or No.`)} Sending it as ${as} tells Employment Hero the employee declared ${as},` +
+              ` and tax is withheld on that. "Not synced" asks them instead.`,
+          );
+          if ((await io.ask(`Send "${o}" as ${as} anyway? [y/N] `)).trim().toLowerCase() !== "y") continue;
+        }
+        options[o] = sent;
         break;
       }
       io.print(`  Type a number from 1 to ${values.length + 1}.`);

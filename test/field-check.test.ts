@@ -181,6 +181,40 @@ describe("checkFields", () => {
     expect(renderFieldCheck(rows, { color: false })).toMatch(/Legal First Name\s+profile "First name"\s+profile name/);
   });
 
+  describe("tax answers that don't say Yes or No, sent as Yes or No", () => {
+    const opts = ["Yes, claim tax free threshold", "No", "N/A", "TBC"].map((value) => ({ value, isDeleted: false }));
+    const raw = () => replace("Claim tax-free threshold?", { dropdownOptions: opts });
+    const pick = (options: Record<string, string | null>) => ({ "Claim tax-free threshold?": { id: 42923276, options } });
+
+    it("is a warning to check, not a block, naming each guessed answer", () => {
+      const rows = checkFields(raw(), pick({ "Yes, claim tax free threshold": "yes", No: "no", "N/A": "no", TBC: "no" }));
+      expect(row(rows, "Claim tax-free threshold?")).toMatchObject({
+        blocking: false,
+        result: { status: "taxGuess", guesses: [{ option: "N/A", sent: "no" }, { option: "TBC", sent: "no" }] },
+      });
+      const out = renderFieldCheck(rows, { color: false });
+      expect(out).toMatch(/\[!\] Claim tax-free threshold\?\s+"Claim tax-free threshold\?"\s+2 answers to check/);
+      expect(out.replace(/\n {8}(?![\[WF])/g, " ")).toMatch(/Why: "N\/A" and "TBC" are sent as "No"/);
+      expect(out.trim().split("\n").at(-1)).toMatch(/· 1 to check/);
+    });
+
+    it("plain Yes / No mappings and Not synced are fine", () => {
+      const rows = checkFields(raw(), pick({ "Yes, claim tax free threshold": "yes", No: "no", "N/A": null, TBC: null }));
+      expect(row(rows, "Claim tax-free threshold?").result.status).toBe("found");
+    });
+
+    it("an answer sent as the opposite of what it says is a guess too", () => {
+      const rows = checkFields(raw(), pick({ "Yes, claim tax free threshold": "no", No: "yes", "N/A": null, TBC: null }));
+      expect(row(rows, "Claim tax-free threshold?").result).toEqual({
+        status: "taxGuess",
+        guesses: [
+          { option: "Yes, claim tax free threshold", sent: "no" },
+          { option: "No", sent: "yes" },
+        ],
+      });
+    });
+  });
+
   it("warns when employees can edit the award field", () => {
     const rows = checkFields(replace("EH Pay Rate Template", { isEditableForUsers: true }));
     expect(row(rows, "EH Pay Rate Template")).toMatchObject({ level: "admin", blocking: false, result: { status: "userEditable" } });

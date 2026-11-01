@@ -28,7 +28,9 @@ export type CheckResult =
   /** The human chose not to use it (never a required field). */
   | { status: "skipped" }
   /** Picked as "create": create-fields makes it (blocking until it exists, if required). */
-  | { status: "toCreate" };
+  | { status: "toCreate" }
+  /** A tax answer that doesn't say Yes or No ("TBC", "N/A") sent as one: a declaration the employee didn't make. */
+  | { status: "taxGuess"; guesses: Array<{ option: string; sent: string }> };
 
 export interface CheckRow {
   group: Group | "Award";
@@ -57,6 +59,13 @@ const levelOf = (spec: FieldSpec): Level =>
 const notUsed = (r: CheckRow): boolean =>
   r.result.status === "skipped" || (r.level === "optional" && r.result.status === "missing");
 
+/**
+ * A tax answer sent as Yes or No though it doesn't start with that word ("TBC" or
+ * "N/A" as No, "Yes, claim it" as No): EH records a declaration the employee didn't make.
+ */
+export const taxGuess = (option: string, sent: string): boolean =>
+  (sent === "yes" || sent === "no") && !new RegExp(`^\\s*${sent}\\b`, "i").test(option);
+
 export const liveOptions = (f: any): string[] =>
   (f?.dropdownOptions ?? []).filter((o: any) => !o.isDeleted).map((o: any) => String(o.value));
 
@@ -70,6 +79,13 @@ function checkOne(spec: FieldSpec, f: any, optionMap?: OptionMap): CheckResult {
     const reached = have.map((o) => optionMap[o]?.toLowerCase());
     const absent = spec.ct.allOptionsRequired ? spec.ct.options.filter((o) => !reached.includes(o.toLowerCase())) : [];
     if (unknown.length || absent.length) return { status: "options", unknown, absent };
+    if (spec.target.kind === "taxDeclaration") {
+      const guesses = have.flatMap((option) => {
+        const sent = optionMap[option];
+        return sent && taxGuess(option, sent) ? [{ option, sent }] : [];
+      });
+      if (guesses.length) return { status: "taxGuess", guesses };
+    }
   } else if (spec.ct.options) {
     // As the sync reads them: Yes/No answers in any case, mapped values exactly.
     const key = spec.target.kind === "taxDeclaration" ? (o: string) => o.trim().toLowerCase() : (o: string) => o;
@@ -200,6 +216,17 @@ function explain(r: CheckRow): { why: string; fix: string } {
         fix: `Map each option in this check (npm run field-check, in a terminal). Or in Connecteam, ${parts.join("; and ")}.`,
       };
     }
+    case "taxGuess": {
+      const said = (sent: string) => res.guesses.filter((g) => g.sent === sent).map((g) => `"${g.option}"`);
+      const parts = ["yes", "no"].flatMap((sent) => {
+        const opts = said(sent);
+        return opts.length ? [`${opts.join(" and ")} ${opts.length === 1 ? "is" : "are"} sent as "${sent === "yes" ? "Yes" : "No"}"`] : [];
+      });
+      return {
+        why: `${parts.join("; ")}, so EH records a declaration the employee didn't make, and tax is withheld on it.`,
+        fix: 'Change the row in this check (npm run field-check, in a terminal) and choose "Not synced", so the employee is asked instead.',
+      };
+    }
     case "ambiguous":
       return {
         why: `More than one of your fields could be it (${res.candidates.map((c) => `"${c.name}"`).join(", ")}), so the sync won't guess.`,
@@ -305,6 +332,8 @@ export function renderFieldCheck(rows: CheckRow[], opts: RenderOptions): string 
         return c(r.blocking ? "31" : "33", "picked field deleted");
       case "userEditable":
         return c("33", "editable by employees");
+      case "taxGuess":
+        return c("33", `${res.guesses.length} answer${res.guesses.length === 1 ? "" : "s"} to check`);
     }
   };
 
