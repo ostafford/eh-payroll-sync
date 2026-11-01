@@ -589,6 +589,7 @@ effect). Holding and expiry are from Cloudflare's Queues docs.
 | `ops.webhookAccepted` | `user_updated` deliveries accepted (`202`) | still `0` long after go-live = the webhook isn't reaching the Worker |
 | `ops.webhookRejected` | `user_updated` deliveries rejected (`401`) | anything `> 0` = a `secretKey` mismatch |
 | `ops.ready` / `ops.waitingEmployee` / `ops.waitingAdmin` / `ops.broken` | sync-status roster counts — see below | `waitingAdmin` or `broken` staying above `0` for a while |
+| `ops.leftOut` | employees left out of the sync by choice (`rules.exclude`, e.g. Employee Status `PBV`): no EH record, no message | nothing to act on; a jump nobody expected = check the field map's `rules.exclude` |
 
 Full request / queue / sweep detail is in the Cloudflare **Workers Logs** for the
 Worker — one JSON line per event, every line passed through `src/redact.ts` first.

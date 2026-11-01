@@ -31,6 +31,7 @@ describe("/health (in workerd, real D1)", () => {
       waitingEmployee: 0,
       waitingAdmin: 0,
       broken: 0,
+      leftOut: 0,
     });
     expect(body.d1).toBe("ok");
   });
@@ -55,6 +56,7 @@ describe("/health (in workerd, real D1)", () => {
       waitingEmployee: 0,
       waitingAdmin: 0,
       broken: 0,
+      leftOut: 0,
     });
   });
 

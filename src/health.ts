@@ -41,6 +41,8 @@ export interface Health {
     waitingEmployee: number;
     waitingAdmin: number;
     broken: number;
+    /** Left out of the sync by choice (`rules.exclude`): nothing to act on, never counted as broken. */
+    leftOut: number;
   } | null;
 }
 
@@ -96,6 +98,7 @@ async function readOps(env: HealthEnv): Promise<Health["ops"]> {
       waitingEmployee: counts.waitingEmployee,
       waitingAdmin: counts.waitingAdmin,
       broken: counts.broken,
+      leftOut: counts.leftOut,
     };
   } catch {
     return null;
