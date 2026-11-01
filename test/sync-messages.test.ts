@@ -200,7 +200,7 @@ describe("followUpNoticeMessage", () => {
 });
 
 describe("systemAlertMessage", () => {
-  it("names the user, includes the detail, and says no employee action is possible", () => {
+  it("names the user, includes the detail, says no employee action is possible, and how to retry", () => {
     const msg = systemAlertMessage("EH 503: service unavailable", { ctUserId: 42 });
     expect(msg.length).toBeLessThanOrEqual(500);
     expect(msg).toMatchInlineSnapshot(`
@@ -208,7 +208,9 @@ describe("systemAlertMessage", () => {
 
       Detail: EH 503: service unavailable
 
-      No employee action is possible - check the Employment Hero API status and credentials."
+      No employee action is possible - check the Employment Hero API status and credentials.
+
+      Once fixed, edit their profile in Connecteam to sync again."
     `);
   });
 
