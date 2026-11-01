@@ -89,6 +89,7 @@ describe("buildHealth", () => {
       waitingEmployee: 0,
       waitingAdmin: 0,
       broken: 0,
+      leftOut: 0,
     });
   });
 
@@ -104,6 +105,7 @@ describe("buildHealth", () => {
       waitingEmployee: 0,
       waitingAdmin: 0,
       broken: 0,
+      leftOut: 0,
     });
   });
 
@@ -117,10 +119,12 @@ describe("buildHealth", () => {
             { ctUserId: 2, ehEmployeeId: "2", failureCycleCount: 1, lastOutcome: "correction", latestOutcome: "correction", latestDetail: "correction: taxFileNumber" },
             { ctUserId: 3, ehEmployeeId: "3", failureCycleCount: 0, lastOutcome: "follow_up", latestOutcome: "follow_up", latestDetail: "follow_up: pay-run defaults" },
             { ctUserId: 4, ehEmployeeId: null, failureCycleCount: null, lastOutcome: null, latestOutcome: "dead_letter", latestDetail: "retries exhausted" },
+            { ctUserId: 5, ehEmployeeId: null, failureCycleCount: 0, lastOutcome: "excluded", latestOutcome: "excluded", latestDetail: "excluded: customField 42920839 (Employee Status)" },
           ],
         ),
       }),
     );
-    expect(h.ops).toMatchObject({ ready: 1, waitingEmployee: 1, waitingAdmin: 1, broken: 1 });
+    // Left out by choice (rules.exclude) is its own count, never "broken".
+    expect(h.ops).toMatchObject({ ready: 1, waitingEmployee: 1, waitingAdmin: 1, broken: 1, leftOut: 1 });
   });
 });
