@@ -211,9 +211,9 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
     it("Y asks about each option that isn't an EH value; exact matches map themselves", async () => {
       // Employee Status: 1 FullTime, 2 PartTime, 3 Casual, 4 LabourHire, 5 not synced.
       // Tax question:    1 Yes, 2 No, 3 not synced.
-      const { result, asked, out } = await run(client(), {}, ["y", "1", "2", "5", "5", "1", "3", "3", ""]);
+      const { result, asked, out } = await run(client(), {}, ["y", "1", "2", "5", "", "5", "", "1", "3", "", "3", "", ""]);
       expect(asked[0]).toBe(fixPrompt(2));
-      expect(asked.slice(1, -1)).toEqual([
+      expect(asked.slice(1, -1).filter((q) => !q.startsWith("Keep "))).toEqual([
         'Employee Status: "Full-time" -> ',
         'Employee Status: "Part-time" -> ',
         'Employee Status: "PBV" -> ',
@@ -236,7 +236,7 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
 
     it("warns when a tax answer that doesn't say Yes or No is sent as one; n asks again, y keeps it", async () => {
       // Employee Status as before; then the tax question: Yes / No / not synced = 1 / 2 / 3.
-      const answers = ["y", "1", "2", "5", "5", "1", "2", "n", "3", "2", "y", "done"];
+      const answers = ["y", "1", "2", "5", "", "5", "", "1", "2", "n", "3", "", "2", "y", "done"];
       const { result, asked, out } = await run(client(), {}, answers);
       const tax = asked.filter((q) => q.startsWith("Claim tax-free threshold?") || q.startsWith("Send "));
       expect(tax).toEqual([
@@ -260,17 +260,43 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
         "Employee Status": { id: 42920839, options: { "Full-time": "FullTime", "Part-time": "PartTime", Casual: "Casual", PBV: null, Contractor: null } },
         "Claim tax-free threshold?": { id: 42923276, options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": "no", TBC: "no" } },
       };
-      const { result, asked } = await run(client(), picks, ["y", "3", "3", ""]);
+      const { result, asked } = await run(client(), picks, ["y", "3", "", "3", "", ""]);
       expect(asked).toEqual([
         fixPrompt(1),
         'Claim tax-free threshold?: "N/A" -> ',
+        'Keep "Not synced" for "N/A"? [Y/n] ',
         'Claim tax-free threshold?: "TBC" -> ',
+        'Keep "Not synced" for "TBC"? [Y/n] ',
         ALL_GOOD,
       ]);
       expect(result["Claim tax-free threshold?"]).toEqual({
         id: 42923276,
         options: { "Yes, claim tax free threshold": "yes", No: "no", "N/A": null, TBC: null },
       });
+    });
+
+    it("Employee Status can leave employees out: no EH record, no message", async () => {
+      // Employee Status: 1-4 EH values, 5 not synced, 6 leave out. Tax: 1 Yes, 2 No, 3 not synced (+ Enter to confirm).
+      const { result, out } = await run(client(), {}, ["y", "1", "2", "6", "6", "1", "3", "", "3", "", ""]);
+      expect(out).toContain("6) Leave these employees out (no EH record, no message)");
+      expect(result["Employee Status"]).toEqual({
+        id: 42920839,
+        options: { "Full-time": "FullTime", "Part-time": "PartTime", Casual: "Casual", PBV: null, Contractor: null },
+        exclude: ["PBV", "Contractor"],
+      });
+      // Not offered for the tax question.
+      expect(out.slice(out.indexOf("Claim tax-free threshold?: some"))).not.toContain("Leave these employees out");
+    });
+
+    it("Not synced shows the employee's message and confirms; n asks again", async () => {
+      const answers = ["y", "1", "2", "5", "", "5", "", "1", "3", "n", "2", "y", "3", "", "done"];
+      const { result, asked, out } = await run(client(), {}, answers);
+      expect(out).toContain('Employees who answer "N/A" won\'t be synced. They\'ll be sent:');
+      expect(out).toContain('"You answered "N/A" to "Claim tax-free threshold?" - please change it to Yes or No."');
+      expect(out).not.toContain("**");
+      expect(asked).toContain('Keep "Not synced" for "N/A"? [Y/n] ');
+      expect(out).toContain('"You answered "PBV" to "Employee Status" - please choose a different option."');
+      expect(result["Claim tax-free threshold?"]).toMatchObject({ options: { "N/A": "no", TBC: null } });
     });
 
     it("asks only about an option added since the last run", async () => {

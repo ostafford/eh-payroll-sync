@@ -34,11 +34,13 @@ describe("first client's setup, replayed", () => {
       [/^Gender: /, "3"], // Indeterminate (EH leaves it blank)
       [/^Employee Status: "Full-time"/, "1"],
       [/^Employee Status: "Part-time"/, "2"],
-      [/^Employee Status: "(PBV|Contractor)"/, "5"], // not synced
+      [/^Employee Status: "PBV"/, "6"], // left out: the client says PBV staff don't go into EH
+      [/^Employee Status: "Contractor"/, "5"], // not synced (still to confirm with the client)
       [/^Pick .* for Claim tax-free threshold\?/, numberOf("Claim Tax Free Threshold?")],
       [/^Claim tax-free threshold\?: "Yes, claim/, "1"],
       [/^Claim tax-free threshold\?: "(N\/A|TBC)"/, "3"], // not synced
       [/^Pick .* for Have a HELP/, numberOf(raw.find((f) => f.name.startsWith("Higher Education"))!.name)],
+      [/^Keep "Not synced" for /, ""],
       [/^Everything's in place/, ""],
     ];
     const asked: string[] = [];
@@ -54,7 +56,10 @@ describe("first client's setup, replayed", () => {
       print: (...lines) => screen.push(...lines),
     });
 
-    expect(asked).toHaveLength(1 + 3 + 4 + 1 + 3 + 1 + 1);
+    // Fix prompt, Gender 3, Employee Status 4 (+1 confirm), pick the threshold question, its 3 answers (+2 confirms), pick HELP, finish.
+    expect(asked).toHaveLength(1 + 3 + 4 + 1 + 1 + 3 + 2 + 1 + 1);
     expect(summarise(checkFields(raw, picks))).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1, toCreate: 0 });
+    expect(picks["Employee Status"]).toMatchObject({ exclude: ["PBV"], options: { PBV: null, Contractor: null } });
+    expect(picks["Claim tax-free threshold?"]).toMatchObject({ options: { "N/A": null, TBC: null } });
   });
 });

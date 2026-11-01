@@ -82,6 +82,8 @@ function fakeGateway(
         lastSyncedTs: patch.lastSyncedTs,
         lastPayloadHash: patch.lastPayloadHash,
         failureCycleCount: prev?.failureCycleCount ?? 0,
+        // As the real store does (issue #43).
+        ...(patch.lastOutcome !== undefined ? { lastOutcome: patch.lastOutcome } : {}),
       });
     },
     async getFailureCount(id) {
@@ -125,6 +127,8 @@ type CtFake = SyncDeps["ct"] & {
   channels: Array<{ id: string; text: string }>;
   /** Recipient (user id or channel id) -> how many more sends to it fail as `retryable`. */
   failSends: Map<number | string, number>;
+  /** Which DM attempts (1st, 2nd, ... across the fake's life) fail as `retryable`. */
+  failDmAttempts: Set<number>;
 };
 type EhFake = SyncDeps["eh"] & {
   upserts: Array<{ externalId: string; payload: Record<string, unknown>; current?: unknown }>;
@@ -135,6 +139,8 @@ function fakeCt(user: ConnecteamUser | null, userOutcome: "ok" | "retryable" | "
   const dms: Array<{ userId: number; text: string }> = [];
   const channels: Array<{ id: string; text: string }> = [];
   const failSends = new Map<number | string, number>();
+  const failDmAttempts = new Set<number>();
+  let dmAttempts = 0;
   // A failed send never reaches `dms`/`channels` - it didn't go out.
   const failing = (to: number | string): boolean => {
     const left = failSends.get(to) ?? 0;
@@ -146,12 +152,14 @@ function fakeCt(user: ConnecteamUser | null, userOutcome: "ok" | "retryable" | "
     dms,
     channels,
     failSends,
+    failDmAttempts,
     async getUser() {
       if (userOutcome === "retryable") return { outcome: "retryable", status: 503, detail: "down" };
       if (userOutcome === "error") return { outcome: "error", status: 500, detail: "bad" };
       return { outcome: "ok", data: user };
     },
     async sendDirectMessage(userId: number, text: string) {
+      if (failDmAttempts.has(++dmAttempts)) return down;
       if (failing(userId)) return down;
       dms.push({ userId, text });
       return { outcome: "ok", data: null };
@@ -283,6 +291,55 @@ describe("runSyncJob - ordering and idempotency", () => {
     expect(out.status).toBe("synced");
     expect(eh.upserts).toHaveLength(2);
     expect(store.rows.get(17760356)!.lastSyncedTs).toBe(2000);
+  });
+});
+
+describe("runSyncJob - left out of the sync by choice (rules.exclude)", () => {
+  const STATUS_FIELD = 42920839; // Employee Status in the example map
+  const leaveOutPbv = parseFieldMap({ ...fieldMap, rules: { ...fieldMap.rules, exclude: [{ customFieldId: STATUS_FIELD, values: ["PBV"] }] } });
+  const withStatus = (value: string) => {
+    const u = cloneUser();
+    u.customFields.find((f) => f.customFieldId === STATUS_FIELD)!.value = [{ id: 9, value }];
+    return u;
+  };
+
+  it("never writes to EH or messages anyone, and records it once without the answer", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh();
+    const ct = fakeCt(withStatus("PBV"));
+
+    const out = await runSyncJob(job(), deps({ store, eh, ct: ct as never, fieldMap: leaveOutPbv }));
+
+    expect(out).toMatchObject({ status: "excluded" });
+    expect(eh.upserts).toHaveLength(0);
+    expect(eh.gets).toBe(0);
+    expect(ct.dms).toEqual([]);
+    expect(ct.channels).toEqual([]);
+    expect(store.log).toEqual([{ ctUserId: 17760356, at: 1_000_000, outcome: "excluded", detail: "excluded: customField 42920839 (Employee Status)" }]);
+    expect(store.log[0]!.detail).not.toContain("PBV");
+    expect(store.rows.get(17760356)?.lastOutcome).toBe("excluded");
+
+    // Another delivery while still left out: nothing new recorded.
+    const again = await runSyncJob(job({ eventTimestamp: 2000 }), deps({ store, eh, ct: ct as never, fieldMap: leaveOutPbv }));
+    expect(again).toMatchObject({ status: "skipped" });
+    expect(store.log).toHaveLength(1);
+  });
+
+  it("syncs everyone else as normal", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh();
+    const out = await runSyncJob(job(), deps({ store, eh, ct: fakeCt(withStatus("FullTime")) as never, fieldMap: leaveOutPbv }));
+    expect(out.status).toBe("synced");
+    expect(eh.upserts).toHaveLength(1);
+  });
+
+  it("syncs someone who stops being left out", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh();
+    await runSyncJob(job(), deps({ store, eh, ct: fakeCt(withStatus("PBV")) as never, fieldMap: leaveOutPbv }));
+    const out = await runSyncJob(job({ eventTimestamp: 2000 }), deps({ store, eh, ct: fakeCt(withStatus("FullTime")) as never, fieldMap: leaveOutPbv }));
+    expect(out.status).toBe("synced");
+    expect(eh.upserts).toHaveLength(1);
   });
 });
 
@@ -673,6 +730,48 @@ describe("runSyncJob - a failed Connecteam send is retried, not lost (issue #89)
     expect(second.status).toBe("correction");
     expect(ct.dms.map((d) => d.userId)).toEqual([17760356]);
     expect(store.rows.get(17760356)!.failureCycleCount).toBe(1);
+  });
+
+  describe("a Correction too long for one message (#112)", () => {
+    // Five answers the sync can't use: each is named back to the employee, so it won't fit in 500 characters.
+    const unusable = () => {
+      const u = cloneUser();
+      const set = (id: number, value: string) => (u.customFields.find((f) => f.customFieldId === id)!.value = [{ id: 9, value }]);
+      set(42923276, "TBC");
+      set(42923315, "Not sure");
+      set(42923316, "Maybe");
+      set(42920839, "Contractor");
+      set(25145119, "Unknown");
+      return u;
+    };
+
+    it("is sent as numbered parts, each within the limit, counted as one Correction", async () => {
+      const store = fakeGateway();
+      const ct = fakeCt(unusable());
+      const out = await runSyncJob(job(), deps({ store, ct: ct as never }));
+      expect(out.status).toBe("correction");
+      expect(ct.dms.length).toBeGreaterThan(1);
+      expect(ct.dms[0]!.text).toMatch(new RegExp(`^\\(1 of ${ct.dms.length}\\) ✏️ Hi - `));
+      for (const d of ct.dms) expect(d.text.length).toBeLessThanOrEqual(500);
+      const all = ct.dms.map((d) => d.text).join("\n");
+      for (const answer of ["TBC", "Not sure", "Maybe", "Contractor", "Unknown"]) expect(all).toContain(`"${answer}"`);
+      expect(store.rows.get(17760356)!.failureCycleCount).toBe(1);
+    });
+
+    it("if a later part fails, the retry sends only that part, and the cycle counts once", async () => {
+      const store = fakeGateway();
+      const ct = fakeCt(unusable());
+      ct.failDmAttempts.add(2);
+      const attempt = () => runSyncJob(job(), deps({ store, ct: ct as never }));
+
+      expect((await attempt()).status).toBe("retry");
+      expect(ct.dms).toHaveLength(1);
+      expect(store.rows.get(17760356)?.failureCycleCount ?? 0).toBe(0);
+
+      expect((await attempt()).status).toBe("correction");
+      expect(ct.dms.map((d) => d.text.slice(0, 8))).toEqual(["(1 of 2)", "(2 of 2)"]);
+      expect(store.rows.get(17760356)!.failureCycleCount).toBe(1);
+    });
   });
 
   it("a failed manager escalation retries without re-DMing the employee or re-bumping the cycle", async () => {
@@ -1334,6 +1433,6 @@ describe("runSyncJob - employee success message (issue #71)", () => {
       write: { outcome: "validation", status: 400, issues: [{ field: "taxFileNumber", reason: "invalid" }] },
     });
     await runSyncJob(job(), deps({ ct: ct as never, eh, fieldMap: custom }));
-    expect(dmsTo(ct)[0]).toContain("To fix: go to Profile > Payroll Details and update it.");
+    expect(dmsTo(ct)[0]).toContain("➡️ To fix: go to **Profile > Payroll Details** and update it.");
   });
 });

@@ -15,7 +15,9 @@ export type SyncOutcomeLabel =
   | "retry"
   | "dead_letter"
   | "resolved"
-  | "collision";
+  | "collision"
+  /** Left out of the sync by choice (`rules.exclude`): no EH write, no message. */
+  | "excluded";
 
 /** One row of `employee_map`, as the consumer reads it. */
 export interface EmployeeLink {

@@ -13,17 +13,21 @@ import type { ConnecteamClient } from "../connecteam/client.js";
 import type { StatusGateway } from "../sync/gateway.js";
 import {
   deriveRosterEntry,
+  leftOutLabel,
   summarizeRoster,
   type RosterCounts,
   type RosterEntry,
 } from "./roster.js";
 import { digestMessages, type DigestEmployee } from "./digest.js";
+import type { FieldMap } from "../mapping/schema.js";
 import { logEvent } from "../log.js";
 
 export interface StatusDeps {
   store: StatusGateway;
   ct: Pick<ConnecteamClient, "getUser" | "sendChannelMessage">;
   adminChannelId: string;
+  /** The field map's `rules.exclude`, to label people left out by choice ("Employee Status: PBV"). */
+  exclude?: NonNullable<NonNullable<FieldMap["rules"]>["exclude"]>;
 }
 
 export interface StatusEmployee extends RosterEntry {
@@ -44,7 +48,7 @@ export interface StatusRoster {
  * request for a name nobody asked to see (the state + reasons + ids are enough
  * for a fully-synced person).
  */
-export async function buildStatusRoster(deps: Pick<StatusDeps, "store" | "ct">): Promise<StatusRoster> {
+export async function buildStatusRoster(deps: Pick<StatusDeps, "store" | "ct" | "exclude">): Promise<StatusRoster> {
   const rows = await deps.store.listRosterRows();
   const entries = rows.map(deriveRosterEntry);
 
@@ -52,6 +56,11 @@ export async function buildStatusRoster(deps: Pick<StatusDeps, "store" | "ct">):
   for (const entry of entries) {
     if (entry.state === "ready") {
       employees.push(entry);
+      continue;
+    }
+    // Left out by choice: shown as a count, so no name is looked up.
+    if (entry.state === "left_out") {
+      employees.push({ ...entry, reasons: entry.reasons.map((r) => leftOutLabel(r, deps.exclude)) });
       continue;
     }
     const name = await personName(deps.ct, entry.ctUserId);

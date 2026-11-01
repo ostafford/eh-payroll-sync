@@ -43,6 +43,11 @@ function checkStatusAuth(c: Context<{ Bindings: Env }>): boolean {
   return token.length > 0 && timingSafeEqual(token, expected);
 }
 
+/** The field map's "left out by choice" rules, to label those people in the status roster and digest. */
+function excludeRules(env: Env) {
+  return loadFieldMap(env.FIELD_MAP_CLIENT).rules?.exclude ?? [];
+}
+
 function buildCt(env: Env): ConnecteamClient {
   return new ConnecteamClient({ apiKey: env.CT_API_KEY, customPublisherId: Number(env.CT_CUSTOM_PUBLISHER_ID) });
 }
@@ -56,7 +61,7 @@ function buildCt(env: Env): ConnecteamClient {
  */
 app.get("/status", async (c) => {
   if (!checkStatusAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const roster = await buildStatusRoster({ store: new SyncStore(c.env.DB), ct: buildCt(c.env) });
+  const roster = await buildStatusRoster({ store: new SyncStore(c.env.DB), ct: buildCt(c.env), exclude: excludeRules(c.env) });
   return c.json(redact(roster));
 });
 
@@ -67,6 +72,7 @@ app.post("/status/digest", async (c) => {
     store: new SyncStore(c.env.DB),
     ct: buildCt(c.env),
     adminChannelId: c.env.ADMIN_CONNECTEAM_CHANNEL_ID,
+    exclude: excludeRules(c.env),
   });
   // 502: Connecteam, upstream of us, didn't take a message (issue #94).
   if (result.outcome === "failed") {
@@ -204,6 +210,7 @@ async function maybeRunStatusDigest(
     store,
     ct,
     adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID,
+    exclude: excludeRules(env),
     ...(env.STATUS_DIGEST_DAY !== undefined ? { digestDay: env.STATUS_DIGEST_DAY } : {}),
   });
   if (result !== "skipped") logEvent({ evt: "status_digest", result });

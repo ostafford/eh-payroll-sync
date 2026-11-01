@@ -5,6 +5,7 @@
 import { compatibleType, resolveField, type FieldDef, type FieldPick, type FieldPicks, type OptionMap } from "./field-resolve.js";
 import { checkFields, liveOptions, renderFieldCheck, taxGuess, typeName, type CheckRow } from "./field-check.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec } from "./field-spec.js";
+import { answerLine } from "../../src/sync/messages.js";
 
 export type Choice = { kind: "use"; field: FieldDef } | { kind: "profile" } | { kind: "create" } | { kind: "skip" };
 
@@ -126,11 +127,12 @@ export async function reviewFields(raw: any[], picks: FieldPicks, io: PickerIo):
     const r = resolveField(spec, fields, out);
     if (r.status !== "matched") return;
     const pick = out[spec.name];
-    const saved = pick && "id" in pick && pick.id === r.field.id ? (pick.options ?? {}) : {};
-    const known = Object.fromEntries(Object.entries(saved).filter(([o]) => !reask.includes(o)));
-    const options = await mapOptions(spec, liveOptions(raw.find((x) => x?.id === r.field.id)), known, io);
-    if (options) {
-      out = { ...out, [spec.name]: { id: r.field.id, options } };
+    const same = pick && "id" in pick && pick.id === r.field.id ? pick : undefined;
+    const known = Object.fromEntries(Object.entries(same?.options ?? {}).filter(([o]) => !reask.includes(o)));
+    const leftOut = (same?.exclude ?? []).filter((o) => !reask.includes(o));
+    const mapped = await mapOptions(spec, r.field.name, liveOptions(raw.find((x) => x?.id === r.field.id)), known, leftOut, io);
+    if (mapped) {
+      out = { ...out, [spec.name]: { id: r.field.id, options: mapped.options, ...(mapped.exclude.length ? { exclude: mapped.exclude } : {}) } };
       changed.add(spec.name);
     }
   };
@@ -178,6 +180,7 @@ export async function reviewFields(raw: any[], picks: FieldPicks, io: PickerIo):
 }
 
 const NOT_SYNCED = "Not synced: the employee gets a Correction message";
+const LEAVE_OUT = "Leave these employees out (no EH record, no message)";
 
 /** What the sync can send for this field: EH's values, or Yes/No for a tax question. */
 function ehValues(spec: FieldSpec): Array<{ value: string; label: string }> {
@@ -200,39 +203,74 @@ function autoOption(spec: FieldSpec, option: string): string | undefined {
  * Asks about each live option not yet decided. Returns the full option map to
  * save, or undefined when nothing needed asking (the default mapping holds).
  */
-async function mapOptions(spec: FieldSpec, live: string[], known: OptionMap, io: PickerIo): Promise<OptionMap | undefined> {
+/**
+ * Asks about each live option not yet decided: an EH value, "Not synced" (the
+ * employee is asked to change it, and shown here what they'll be sent), or, for
+ * a field that allows it, leaving those employees out of the sync. Returns the
+ * full map to save, or undefined when nothing needed asking.
+ */
+async function mapOptions(
+  spec: FieldSpec,
+  question: string,
+  live: string[],
+  known: OptionMap,
+  leftOut: string[],
+  io: PickerIo,
+): Promise<{ options: OptionMap; exclude: string[] } | undefined> {
   const todo = live.filter((o) => !(o in known) && autoOption(spec, o) === undefined);
   if (!todo.length) return undefined;
 
   const values = ehValues(spec);
   const options: OptionMap = { ...known };
+  const exclude = [...leftOut];
   for (const o of live) if (!(o in options) && !todo.includes(o)) options[o] = autoOption(spec, o)!;
+  const notSynced = values.length + 1;
+  const leaveOut = spec.ct.canLeaveOut ? values.length + 2 : undefined;
+  const last = leaveOut ?? notSynced;
 
   const p = palette(io.color === true);
   io.print("", `${p.eh(spec.name)}: some of your Connecteam options aren't values Employment Hero takes. Choose what each one sends:`);
   values.forEach((v, i) => io.print(`  ${String(i + 1).padStart(2)}) ${p.eh(v.label)}`));
-  io.print(`  ${String(values.length + 1).padStart(2)}) ${NOT_SYNCED}`);
+  io.print(`  ${String(notSynced).padStart(2)}) ${NOT_SYNCED}`);
+  if (leaveOut) io.print(`  ${String(leaveOut).padStart(2)}) ${LEAVE_OUT}`);
   for (const o of todo) {
     for (;;) {
       const n = Number((await io.ask(`${p.eh(spec.name)}: ${p.ct(`"${o}"`)} -> `)).trim());
-      if (Number.isInteger(n) && n >= 1 && n <= values.length + 1) {
-        const sent = n <= values.length ? values[n - 1]!.value : null;
-        // A tax answer that doesn't say Yes or No, sent as one, is a declaration the employee didn't make.
-        if (spec.target.kind === "taxDeclaration" && sent && taxGuess(o, sent)) {
-          const as = sent === "yes" ? "Yes" : "No";
-          io.print(
-            `  ${p.change(`"${o}" doesn't say Yes or No.`)} Sending it as ${as} tells Employment Hero the employee declared ${as},` +
-              ` and tax is withheld on that. "Not synced" asks them instead.`,
-          );
-          if ((await io.ask(`Send "${o}" as ${as} anyway? [y/N] `)).trim().toLowerCase() !== "y") continue;
-        }
-        options[o] = sent;
+      if (!Number.isInteger(n) || n < 1 || n > last) {
+        io.print(`  Type a number from 1 to ${last}.`);
+        continue;
+      }
+      if (n === leaveOut) {
+        options[o] = null;
+        if (!exclude.includes(o)) exclude.push(o);
+        io.print(`  Employees who answer ${p.ct(`"${o}"`)} won't be synced or messaged; the status digest counts them.`);
         break;
       }
-      io.print(`  Type a number from 1 to ${values.length + 1}.`);
+      const sent = n <= values.length ? values[n - 1]!.value : null;
+      if (sent === null) {
+        // Show exactly what those employees will be sent, from the sync's own wording.
+        const line = answerLine({ question, value: o, kind: spec.target.kind === "taxDeclaration" ? "yesNo" : "option" });
+        // Connecteam shows **text** as bold: show it as bold here too, not as asterisks.
+        const shown = line.replace(/\*\*(.+?)\*\*/g, (_, t: string) => p.bold(t));
+        io.print(`  Employees who answer ${p.ct(`"${o}"`)} won't be synced. They'll be sent:`, `    "${shown}"`, "  and their record waits until they change it.");
+        if ((await io.ask(`Keep "Not synced" for "${o}"? [Y/n] `)).trim().toLowerCase() === "n") continue;
+      }
+      // A tax answer that doesn't say Yes or No, sent as one, is a declaration the employee didn't make.
+      if (spec.target.kind === "taxDeclaration" && sent && taxGuess(o, sent)) {
+        const as = sent === "yes" ? "Yes" : "No";
+        io.print(
+          `  ${p.change(`"${o}" doesn't say Yes or No.`)} Sending it as ${as} tells Employment Hero the employee declared ${as},` +
+            ` and tax is withheld on that. "Not synced" asks them instead.`,
+        );
+        if ((await io.ask(`Send "${o}" as ${as} anyway? [y/N] `)).trim().toLowerCase() !== "y") continue;
+      }
+      options[o] = sent;
+      const i = exclude.indexOf(o);
+      if (i !== -1) exclude.splice(i, 1);
+      break;
     }
   }
-  return options;
+  return { options, exclude };
 }
 
 /**

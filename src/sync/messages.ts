@@ -13,11 +13,17 @@
  * Messages to a person (1 and 4) end with a short "this is automated" note
  * (per-client `messages.automatedNote`), kept whole however long the rest runs.
  *
+ * Formatting: Connecteam chat shows `**text**` as bold and `__text__` as
+ * underlined, on the web and in the phone app (tested on the demo account,
+ * 2026-11-01; not in its API docs). `*text*` and HTML show as typed. Only `**`
+ * is used (underlining reads like a link), and never on a message's first line,
+ * which a phone's notification preview may show as typed.
+ *
  * Employment Hero's raw error text is NEVER placed in a message - it goes to the
  * audit log only. Each recognised field maps to a curated, actionable line;
  * anything unrecognised falls back to one generic-but-actionable instruction.
  */
-import type { EhFieldError } from "../eh/errors.js";
+import type { EhFieldError, UnusableAnswer } from "../eh/errors.js";
 
 const MAX_LEN = 500;
 
@@ -81,6 +87,25 @@ export function friendlyLine(err: EhFieldError): string {
 }
 
 /**
+ * The employee's own dropdown answer the sync can't use, named back to them
+ * (#112): they picked an option the client offered, so a generic "missing or
+ * inconsistent" would confuse them. The wizard previews exactly this line.
+ */
+export function answerLine(a: UnusableAnswer): string {
+  // Kept short: several have to fit in one 500-character message with the rest.
+  const need = a.kind === "yesNo" ? "please change it to Yes or No." : "please choose a different option.";
+  return `You answered "${a.value}" to **"${a.question}"** - ${need}`;
+}
+
+/**
+ * What an EH field is, as an employee would name it ("bank details"), for the
+ * admin digest's reasons; undefined when the field isn't a recognised one.
+ */
+export function correctionTopic(field: string): string | undefined {
+  return curated({ field, reason: "" })?.topic.name;
+}
+
+/**
  * The distinct topics behind a Correction's field errors, in the order asked
  * (#71). A field with no curated line has no topic, so an all-unknown
  * Correction yields `[]`.
@@ -134,10 +159,11 @@ export function adminCorrectionFixedMessage(ref: PersonRef, topics: readonly str
   return clamp(`✅ ${personLabel(ref)} fixed their ${what} and has now synced to Employment Hero.`);
 }
 
-function friendlyLines(fields: EhFieldError[]): string[] {
+/** `toEmployee`: name the employee's own answer where there is one (never in a manager's copy). */
+function friendlyLines(fields: EhFieldError[], toEmployee = false): string[] {
   const out: string[] = [];
   for (const f of fields) {
-    const line = friendlyLine(f);
+    const line = toEmployee && f.answer ? answerLine(f.answer) : friendlyLine(f);
     if (!out.includes(line)) out.push(line);
   }
   if (out.length === 0) return [GENERIC_CORRECTION];
@@ -145,20 +171,80 @@ function friendlyLines(fields: EhFieldError[]): string[] {
   return out.length > 1 ? out.filter((l) => l !== GENERIC_CORRECTION) : out;
 }
 
+// The employee's Correction (style picked on the demo account, 2026-11-01): ✏️ opens it,
+// ❗ marks each problem, ➡️ says where to fix it.
+const CORRECTION_HEAD = "✏️ Hi - a few of the details you entered need a quick fix before they can be saved to Employment Hero:";
+const CORRECTION_MARK = "❗";
+/** A Correction never runs to more messages than this; past it, bullets are counted ("...and 2 more"). */
+const MAX_CORRECTION_PARTS = 3;
+/** Room for a part's "(1 of 3) " label. */
+const PART_LABEL = "(9 of 9) ".length;
+
+function correctionFoot(lines: readonly string[], profilePath: string, note: string): string[] {
+  return [
+    `➡️ To fix: go to **${profilePath}** and update ${lines.length === 1 ? "it" : "them"}.\nWe'll sync again automatically once you save.`,
+    ...noteLines(note),
+  ];
+}
+
 /**
- * Correction message -> the employee who entered the bad data. Ends with where
- * to fix it (`profilePath`, per client: sections are the client's choice).
+ * Correction message -> the employee who entered the bad data, as one message.
+ * Ends with where to fix it (`profilePath`, per client: sections are the
+ * client's choice). The sync sends {@link correctionMessages}, which is this
+ * when it fits.
  */
 export function correctionMessage(fields: EhFieldError[], profilePath: string, note: string): string {
-  const lines = friendlyLines(fields);
-  return fitList(
-    ["Hi - a few of the details you entered need a quick fix before they can be saved to Employment Hero:"],
-    lines,
-    [
-      `To fix: go to ${profilePath} and update ${lines.length === 1 ? "it" : "them"}.\nWe'll sync again automatically once you save.`,
-      ...noteLines(note),
-    ],
-  );
+  const lines = friendlyLines(fields, true);
+  return fitList([CORRECTION_HEAD], lines, correctionFoot(lines, profilePath, note), CORRECTION_MARK);
+}
+
+/**
+ * The Correction as the employee is sent it: one message when everything fits,
+ * otherwise "(1 of 2)", "(2 of 2)"... (at most {@link MAX_CORRECTION_PARTS}),
+ * each within the cap, so no problem is hidden (#112: answers named back to the
+ * employee are long). The greeting opens the first part; "To fix" and the
+ * automated note close the last.
+ */
+export function correctionMessages(fields: EhFieldError[], profilePath: string, note: string): string[] {
+  const lines = friendlyLines(fields, true);
+  const foot = correctionFoot(lines, profilePath, note);
+  const whole = sections(CORRECTION_HEAD, bulletList(lines, CORRECTION_MARK), ...foot);
+  if (whole.length <= MAX_LEN) return [whole];
+
+  const body = (first: boolean, items: string[], last: boolean, more = 0) =>
+    sections(
+      first ? CORRECTION_HEAD : "",
+      bulletList([...items, ...(more > 0 ? [`...and ${more} more`] : [])], CORRECTION_MARK),
+      ...(last ? foot : []),
+    );
+  const fits = (first: boolean, items: string[], last: boolean, more = 0) => PART_LABEL + body(first, items, last, more).length <= MAX_LEN;
+
+  // Fill parts with bullets in order; the closing lines go in the last part, or one of their own.
+  const parts: string[][] = [[]];
+  for (const line of lines) {
+    const cur = parts.at(-1)!;
+    if (cur.length && !fits(parts.length === 1, [...cur, line], false)) parts.push([line]);
+    else cur.push(line);
+  }
+  // No room for the closing lines: the last bullet moves on with them, so no part is just "To fix".
+  const last = parts.at(-1)!;
+  if (!fits(parts.length === 1, last, true)) parts.push(last.length > 1 ? [last.pop()!] : []);
+
+  let more = 0;
+  if (parts.length > MAX_CORRECTION_PARTS) {
+    parts.length = MAX_CORRECTION_PARTS - 1;
+    const rest = lines.slice(parts.flat().length);
+    let keep = rest.length;
+    while (keep > 0 && !fits(false, rest.slice(0, keep), true, rest.length - keep)) keep--;
+    parts.push(rest.slice(0, keep));
+    more = rest.length - keep;
+  }
+
+  const n = parts.length;
+  return parts.map((items, i) => {
+    const text = body(i === 0, items, i === n - 1, i === n - 1 ? more : 0);
+    return clamp(i === 0 ? `(1 of ${n}) ${text}` : `(${i + 1} of ${n})\n${text}`);
+  });
 }
 
 /**
@@ -180,7 +266,7 @@ export function personLabel(ref: PersonRef): string {
 
 /** Correction message -> the Direct manager, on the 3rd failed cycle in a row. */
 export function managerEscalationMessage(fields: EhFieldError[], ref: PersonRef | undefined, note: string): string {
-  const who = ref ? ` (${personLabel(ref)})` : "";
+  const who = ref ? `, ${personLabel(ref)},` : "";
   return fitList(
     [
       `Heads up: an employee you manage${who} has had their details fail to sync to Employment Hero three times in a row.`,
@@ -263,8 +349,8 @@ function sections(...parts: string[]): string {
   return parts.filter((p) => p.trim()).join(GAP);
 }
 
-export function bulletList(items: readonly string[]): string {
-  return items.map((l) => `• ${l}`).join("\n");
+export function bulletList(items: readonly string[], mark = "•"): string {
+  return items.map((l) => `${mark} ${l}`).join("\n");
 }
 
 /**
@@ -272,10 +358,10 @@ export function bulletList(items: readonly string[]): string {
  * say what to do next, so bullets are dropped from the end (with a count of
  * how many) rather than the whole text being cut short.
  */
-function fitList(head: string[], items: string[], foot: string[]): string {
+function fitList(head: string[], items: string[], foot: string[], mark = "•"): string {
   const render = (kept: string[]) => {
     const more = items.length - kept.length;
-    return sections(...head, bulletList([...kept, ...(more > 0 ? [`...and ${more} more`] : [])]), ...foot);
+    return sections(...head, bulletList([...kept, ...(more > 0 ? [`...and ${more} more`] : [])], mark), ...foot);
   };
   let kept = items;
   while (kept.length > 1 && render(kept).length > MAX_LEN) kept = kept.slice(0, -1);

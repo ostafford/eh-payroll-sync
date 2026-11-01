@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   correctionMessage,
+  correctionMessages,
   managerEscalationMessage,
   followUpNoticeMessage,
   systemAlertMessage,
@@ -63,6 +64,50 @@ describe("friendlyLine - curated EH-error -> plain language", () => {
   });
 });
 
+describe("correctionMessage - naming the employee's own answer", () => {
+  const tbc = { field: "claimTaxFreeThreshold", reason: "x", answer: { question: "Claim Tax Free Threshold?", value: "TBC", kind: "yesNo" as const } };
+  const contractor = { field: "employmentType", reason: "x", answer: { question: "Employee Status", value: "Contractor", kind: "option" as const } };
+
+  it("says which question and what they answered, and what's needed", () => {
+    const msg = correctionMessage([tbc, contractor], "Profile > Payroll", "");
+    expect(msg).toContain('❗ You answered "TBC" to **"Claim Tax Free Threshold?"** - please change it to Yes or No.');
+    expect(msg).toContain('❗ You answered "Contractor" to **"Employee Status"** - please choose a different option.');
+    expect(msg).not.toContain("missing or inconsistent");
+  });
+
+  it("splits into numbered parts when it won't fit, hiding nothing", () => {
+    const bsb = { field: "bankAccount1_BSB", reason: "x" };
+    const parts = correctionMessages([tbc, contractor, bsb], "Profile > Personal Information", DEFAULT_AUTOMATED_NOTE);
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toMatch(/^\(1 of 2\) ✏️ Hi - a few of the details you entered need a quick fix/);
+    expect(parts[1]).toMatch(/^\(2 of 2\)\n❗ /);
+    expect(parts[1]!.endsWith(`We'll sync again automatically once you save.\n\n${DEFAULT_AUTOMATED_NOTE}`)).toBe(true);
+    for (const p of parts) expect(p.length).toBeLessThanOrEqual(500);
+    const all = parts.join("\n");
+    for (const s of ['"TBC"', '"Contractor"', "BSB"]) expect(all).toContain(s);
+    expect(all).not.toContain("more");
+  });
+
+  it("is one unlabelled message when it fits", () => {
+    expect(correctionMessages([tbc], "Profile > Payroll", DEFAULT_AUTOMATED_NOTE)).toEqual([
+      correctionMessage([tbc], "Profile > Payroll", DEFAULT_AUTOMATED_NOTE),
+    ]);
+    expect(correctionMessage([tbc], "Profile > Payroll", "")).not.toMatch(/^\(1 of/);
+  });
+
+  it("never bolds the first line, which a phone's notification preview shows as typed", () => {
+    for (const parts of [correctionMessages([tbc, contractor], "Profile > Payroll", ""), [managerEscalationMessage([tbc], { ctUserId: 1, firstName: "Sam", lastName: "Rivera" }, "")]]) {
+      for (const p of parts) expect(p.split("\n")[0]).not.toContain("**");
+    }
+  });
+
+  it("keeps the plain wording in the manager's copy", () => {
+    const msg = managerEscalationMessage([tbc], undefined, "");
+    expect(msg).not.toContain("You answered");
+    expect(msg).toContain("tax declaration answers");
+  });
+});
+
 describe("correctionMessage", () => {
   it("names each distinct field once, in plain language, under 500 chars", () => {
     const msg = correctionMessage([
@@ -72,12 +117,12 @@ describe("correctionMessage", () => {
     ], PATH, "");
     expect(msg.length).toBeLessThanOrEqual(500);
     expect(msg).toMatchInlineSnapshot(`
-      "Hi - a few of the details you entered need a quick fix before they can be saved to Employment Hero:
+      "✏️ Hi - a few of the details you entered need a quick fix before they can be saved to Employment Hero:
 
-      • Your bank BSB doesn't look right - check it's the 6-digit branch number for your account.
-      • Your Tax File Number doesn't appear to be valid - re-check the 9 digits.
+      ❗ Your bank BSB doesn't look right - check it's the 6-digit branch number for your account.
+      ❗ Your Tax File Number doesn't appear to be valid - re-check the 9 digits.
 
-      To fix: go to Profile > Personal Information and update them.
+      ➡️ To fix: go to **Profile > Personal Information** and update them.
       We'll sync again automatically once you save."
     `);
   });
@@ -94,6 +139,15 @@ describe("correctionMessage", () => {
   it("uses the generic line alone when nothing is recognised", () => {
     const msg = correctionMessage([{ field: "mysteryField", reason: "nope" }], PATH, "");
     expect(msg).toContain(GENERIC_CORRECTION);
+  });
+});
+
+describe("managerEscalationMessage - naming the employee", () => {
+  it("names them once, without doubled brackets", () => {
+    const msg = managerEscalationMessage([{ field: "taxFileNumber", reason: "invalid" }], { ctUserId: 17760356, firstName: "Sam", lastName: "Rivera" }, "");
+    expect(msg.split("\n")[0]).toBe(
+      "Heads up: an employee you manage, Sam Rivera (17760356), has had their details fail to sync to Employment Hero three times in a row.",
+    );
   });
 });
 
@@ -197,11 +251,14 @@ describe("length clamping", () => {
       { field: "emergencyContact1_Name", reason: "bad" },
       { field: "surname", reason: "bad" },
     ];
-    const msg = correctionMessage(many, PATH, NOTE);
-    expect(msg.length).toBeLessThanOrEqual(500);
-    // Bullets are dropped, not the closing line: the employee still learns where to go.
-    expect(msg).toMatch(/\n• \.\.\.and \d+ more\n/);
-    expect(msg.endsWith(`To fix: go to ${PATH} and update them.\nWe'll sync again automatically once you save.\n\n${NOTE}`)).toBe(true);
+    const parts = correctionMessages(many, PATH, NOTE);
+    // At most 3 parts, each within the cap; past that, bullets are dropped (with a
+    // count), not the closing line: the employee still learns where to go.
+    expect(parts).toHaveLength(3);
+    for (const p of parts) expect(p.length).toBeLessThanOrEqual(500);
+    const last = parts.at(-1)!;
+    expect(last).toMatch(/\n❗ \.\.\.and \d+ more\n/);
+    expect(last.endsWith(`➡️ To fix: go to **${PATH}** and update them.\nWe'll sync again automatically once you save.\n\n${NOTE}`)).toBe(true);
   });
 });
 

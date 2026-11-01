@@ -19,7 +19,7 @@
  */
 import type { SyncJob } from "./job.js";
 import type { FieldMap } from "../mapping/schema.js";
-import { applyFieldMap, type ConnecteamUser as MappingUser } from "../mapping/apply.js";
+import { applyFieldMap, leftOutBy, type ConnecteamUser as MappingUser } from "../mapping/apply.js";
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { CtResult, PayRate } from "../connecteam/types.js";
 import type { EhPayrollClient } from "../eh/client.js";
@@ -33,7 +33,7 @@ import {
   type ReadBackResult,
 } from "./decide.js";
 import {
-  correctionMessage,
+  correctionMessages,
   managerEscalationMessage,
   followUpNoticeMessage,
   systemAlertMessage,
@@ -75,7 +75,7 @@ export interface SyncDeps {
   onSystemAlert?: (info: { ctUserId: number; reason: string }) => Promise<void>;
 }
 
-export type SyncJobStatus = "synced" | "correction" | "follow_up" | "skipped" | "retry" | "collision";
+export type SyncJobStatus = "synced" | "correction" | "follow_up" | "skipped" | "retry" | "collision" | "excluded";
 
 export interface SyncJobOutcome {
   status: SyncJobStatus;
@@ -117,6 +117,24 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   if (userRes.outcome === "error") return { status: "retry", reason: `connecteam error ${userRes.status}` };
   if (userRes.data === null) return { status: "skipped", reason: "connecteam user no longer exists" };
   const user = userRes.data;
+
+  // Left out of the sync by choice (rules.exclude), e.g. an employee type that
+  // isn't paid through payroll: no EH call, no message. Recorded once, by field
+  // name only (never the answer), so the status digest can count them.
+  const excludedBy = leftOutBy(user as unknown as MappingUser, deps.fieldMap);
+  if (excludedBy) {
+    if (link?.lastOutcome === "excluded") return { status: "skipped", reason: "left out of the sync by choice" };
+    const detail = `excluded: ${excludedBy}`;
+    await deps.store.saveEmployeeLink({
+      ctUserId,
+      ehEmployeeId: link?.ehEmployeeId ?? null,
+      lastSyncedTs: eventTimestamp,
+      lastPayloadHash: null,
+      lastOutcome: "excluded",
+    });
+    await deps.store.appendSyncLog({ ctUserId, at: now(), outcome: "excluded", detail });
+    return { status: "excluded", reason: detail };
+  }
 
   // Per-employee pay rate (issue #42): only when the client opted in via
   // `employmentHero.perEmployeeRate`. `applyFieldMap` is pure, so the network
@@ -274,13 +292,20 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     // own Correction message. The employee and the Direct manager each have
     // their own claim, so a failed manager DM can be retried without DMing the
     // employee twice (issue #89).
-    const employeeKey = await noticeKey("correction", ctUserId, [hash]);
-    let escalate: boolean;
-    if (await shouldPostNotice(deps.store, employeeKey, CORRECTION_NOTICE_DEDUPE_MS, now())) {
-      const sent = await sendClaimed(deps.store, employeeKey, ctUserId, "correction", () =>
-        deps.ct.sendDirectMessage(ctUserId, correctionMessage(decision.fields, deps.fieldMap.messages.profilePath, deps.fieldMap.messages.automatedNote)),
-      );
+    // A Correction too long for one message goes as numbered parts, each with
+    // its own claim (the first keeps the single-message key), so a retry after
+    // a failed later part sends only what's missing.
+    const parts = correctionMessages(decision.fields, deps.fieldMap.messages.profilePath, deps.fieldMap.messages.automatedNote);
+    let sentPart = false;
+    for (const [i, text] of parts.entries()) {
+      const key = await noticeKey("correction", ctUserId, i === 0 ? [hash] : [hash, `part ${i + 1}`]);
+      if (!(await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, now()))) continue;
+      const sent = await sendClaimed(deps.store, key, ctUserId, "correction", () => deps.ct.sendDirectMessage(ctUserId, text));
       if (!sent) return sendFailed("correction");
+      sentPart = true;
+    }
+    let escalate: boolean;
+    if (sentPart) {
       // Bumped only once the employee has the message, so a failed send leaves
       // nothing to undo. The cycle count is saved before the manager DM, so a
       // retry of a failed manager DM reads it back below.

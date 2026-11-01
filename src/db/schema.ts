@@ -16,7 +16,7 @@ export const employeeMap = sqliteTable("employee_map", {
   lastPayloadHash: text("last_payload_hash"),
   /** The `sync_log.outcome` of the most recent attempt - lets the recheck pass (#43) find every follow_up row without scanning sync_log. */
   lastOutcome: text("last_outcome", {
-    enum: ["ok", "correction", "follow_up", "retry", "dead_letter", "resolved", "collision"],
+    enum: ["ok", "correction", "follow_up", "retry", "dead_letter", "resolved", "collision", "excluded"],
   }),
   updatedAt: integer("updated_at").notNull(),
 });
@@ -42,7 +42,7 @@ export const syncLog = sqliteTable(
     ctUserId: integer("ct_user_id").notNull(),
     at: integer("at").notNull(),
     outcome: text("outcome", {
-      enum: ["ok", "correction", "follow_up", "retry", "dead_letter", "resolved", "collision"],
+      enum: ["ok", "correction", "follow_up", "retry", "dead_letter", "resolved", "collision", "excluded"],
     }).notNull(),
     detail: text("detail"),
   },

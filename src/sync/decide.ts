@@ -236,7 +236,7 @@ export function correctionFieldsFromAudit(detail: string | null): string[] {
 }
 
 function issueToFieldError(i: MappingIssue): EhFieldError {
-  return { field: i.ehField, reason: i.reason };
+  return { field: i.ehField, reason: i.reason, ...(i.answer ? { answer: i.answer } : {}) };
 }
 
 /** A short, punctuation-free tag from an EH reason for the audit row. */

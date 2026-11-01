@@ -60,13 +60,6 @@ fills them in but nothing reads them.
 | Claim tax-free threshold? | 42923276 | `claimTaxFreeThreshold` | Yes → true |
 | Australian resident for tax purposes? | 42923315 | `australianResident` | Yes → true; No → false + manual follow-up (EH has no `isNonResident`; tax scale / WHM is a payroll decision) |
 | Have a HELP/STSL study debt? | 42923316 | `helpDebt` **and** `stslDebt` | one combined Yes/No → both flags (over-report is harmless, under-report under-withholds) |
-
-A client whose tax questions use their own wording (e.g. `Yes, claim tax free
-threshold | No | N/A | TBC`) gets an `options` map on that `rules.taxDeclaration`
-entry (#112): `{ "customFieldId": 61, "options": { "Yes, claim tax free threshold": "yes", "No": "no" } }`.
-With `options`, only the listed answers count; any other answer (`N/A`, `TBC`,
-even a plain `Yes`) is held for a Correction message. The wizard's field picker
-writes it.
 | Name on Bank Account | 42921173 | `bankAccount1_AccountName` | |
 | BSB | 42923223 | `bankAccount1_BSB` | string; zero-pad to 6 |
 | Account Number | 42921172 | `bankAccount1_AccountNumber` | |
@@ -76,6 +69,30 @@ writes it.
 | Member Number | 42920804 | `superFund1_MemberNumber` | required on the APRA path |
 | Super Fund Name | 42920782 | `superFund1_FundName` | |
 | Super Fund ABN | 42920783 | *(not sent)* | USI blank + ABN present → **SMSF → do NOT sync super**, manual follow-up to the admin channel |
+
+A client whose tax questions use their own wording (e.g. `Yes, claim tax free
+threshold | No | N/A | TBC`) gets an `options` map on that `rules.taxDeclaration`
+entry (#112): `{ "customFieldId": 61, "options": { "Yes, claim tax free threshold": "yes", "No": "no" } }`.
+With `options`, only the listed answers count; any other answer (`N/A`, `TBC`,
+even a plain `Yes`) is held for a Correction message. The wizard's field picker
+writes it.
+
+## Leaving employees out by choice (`rules.exclude`)
+
+Some answers mean an employee isn't paid through payroll at all, e.g. the first
+client's Employee Status `PBV`. Those are listed in `rules.exclude`:
+`[{ "customFieldId": 42920839, "values": ["PBV"] }]`. The sync then skips anyone
+with that answer before mapping: no EH record, no Correction, no admin notice.
+It records them once as `excluded` (the field name only, never the answer), and
+the status digest shows a count: "⚪ Left out by choice: 3 (Employee Status: PBV)".
+Someone already in EH who changes to an excluded answer keeps their EH record;
+it just stops being updated. Picked in the field check (Employee Status only).
+
+"Not synced" is different: the employee *is* meant to be in EH, so they're sent
+a Correction naming their answer ("You answered "TBC" to "Claim Tax Free
+Threshold?" - please change it to Yes or No.") and their record waits until they
+change it. A Correction too long for one message (500 characters) goes as
+numbered parts, "(1 of 2)", "(2 of 2)", at most 3.
 
 ## Data quality resolved
 

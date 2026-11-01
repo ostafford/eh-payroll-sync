@@ -44,6 +44,8 @@ export interface DraftResult {
       taxDeclaration: Record<string, { customFieldId: number; options?: Record<string, string> }>;
       /** Absent when super is skipped in the picker: entered in EH by hand (#117). */
       super?: Record<string, number | "TODO">;
+      /** Answers that leave an employee out of the sync entirely (picked in the field check). */
+      exclude?: Array<{ customFieldId: number; values: string[] }>;
       constants: Record<string, unknown>;
     };
   };
@@ -102,6 +104,10 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
     } else if (t.kind === "super") ruleConsumed.add(id);
     else specNotSynced.add(id);
   }
+  const exclude = FIELD_SPEC.flatMap((spec) => {
+    const pick = input.picks?.[spec.name];
+    return pick && "id" in pick && pick.exclude?.length && idOf(spec) === pick.id ? [{ customFieldId: pick.id, values: pick.exclude }] : [];
+  });
   const used = new Set([...mapped.flatMap((r) => (typeof r.from.customFieldId === "number" ? [r.from.customFieldId] : [])), ...ruleConsumed, ...specNotSynced]);
 
   const draft: DraftResult["draft"] = {
@@ -121,6 +127,7 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
     rules: {
       taxDeclaration,
       ...(superSkipped ? {} : { super: superFields }),
+      ...(exclude.length ? { exclude } : {}),
       constants: { bankAccount1_AllocatedPercentage: 100, bankAccount1: "Electronic" },
     },
   };
