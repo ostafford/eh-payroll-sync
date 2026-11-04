@@ -11,6 +11,10 @@
  *   B  Choices first, stacked pairs: the ambiguous cards come first (while the
  *      admin is fresh), then Matched as two-line pairs (Connecteam line over EH
  *      line) - never wide, so nothing wraps on a narrow terminal.
+ *   D  One table of everyone, like the field check (default; the integrator's
+ *      ask after trying A-C): matches ticked, problems marked inline, then
+ *      "Check the N now? [Y / number to change a row / done]". Changing a row
+ *      opens a picker: likely EH employees first, or type to search all of EH.
  *   C  Chunked by surname: the list in alphabetical chunks of ~20, each mixing
  *      its matched rows and its choices, confirmed one chunk at a time with
  *      "chunk 3 of 9" progress.
@@ -30,9 +34,9 @@ const arg = (name: string, dflt: string) => {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
 };
-const VARIANTS = ["A", "B", "C"] as const;
+const VARIANTS = ["D", "A", "B", "C"] as const;
 type Variant = (typeof VARIANTS)[number];
-let variant = arg("variant", "A").toUpperCase() as Variant;
+let variant = arg("variant", "D").toUpperCase() as Variant;
 const SIZE = Number(arg("size", "180"));
 const SEED = Number(arg("seed", "1"));
 
@@ -41,7 +45,7 @@ const tty = process.stdout.isTTY === true;
 const on = tty && !process.env.NO_COLOR;
 const c = (code: string) => (s: string) => (on ? `\u001b[${code}m${s}\u001b[0m` : s);
 const p = { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1"), ok: c("32"), bad: c("31") };
-const mark = { ok: on ? p.ok("✓") : "[ok]", warn: on ? p.change("⚠") : "[!]", no: on ? p.bad("✗") : "[x]" };
+const mark = { ok: on ? p.ok("✓") : "[ok]", warn: on ? p.change("⚠") : "[!] ", no: on ? p.bad("✗") : "[x] " };
 const MW = on ? 1 : 4; // width of a mark: "✓" vs "[ok]"
 const W = () => process.stdout.columns ?? 100;
 const H = () => process.stdout.rows ?? 30;
@@ -87,7 +91,7 @@ function build(size: number) {
     if (r < 0.8) rows.push({ kind: "matched", ct, eh: eh(ct) });
     else if (r < 0.95) {
       const k = Math.floor(rnd() * 5);
-      if (k === 0) rows.push({ kind: "choice", ct, candidates: [{ eh: eh({ ...ct, first: ct.first.slice(0, 3) }), reason: "name differs" }] });
+      if (k === 0) rows.push({ kind: "choice", ct, candidates: [{ eh: eh({ ...ct, first: `${ct.first[0]}.` }), reason: "name differs" }] });
       else if (k === 1) rows.push({ kind: "choice", ct, candidates: [{ eh: eh(ct), reason: "same email on 2 EH employees" }, { eh: eh({ ...ct, first: pick(FIRST) }), reason: "same email on 2 EH employees" }] });
       else if (k === 2) rows.push({ kind: "choice", ct, candidates: [{ eh: eh({ ...ct, email: ct.email.replace(/@.*/, "@example.net") }), reason: "name only, email differs" }] });
       else if (k === 3) rows.push({ kind: "choice", ct, candidates: [{ eh: eh(ct, { payrollId: `P${String(Math.floor(rnd() * 9000 + 100)).padStart(4, "0")}` }), reason: "already has Payroll ID" }] });
@@ -95,7 +99,11 @@ function build(size: number) {
     } else rows.push({ kind: "new", ct });
   }
   rows.sort((a, b) => `${a.ct.last} ${a.ct.first}`.localeCompare(`${b.ct.last} ${b.ct.first}`));
-  return { rows, ehOnly: Math.round(size * 0.08) };
+  // EH-only employees, some of them a near-miss of a new hire (different email), so search can find them.
+  const ehOnlyRecs: EhRec[] = [];
+  for (const r of rows) if (r.kind === "new" && rnd() < 0.5) ehOnlyRecs.push(eh({ ...r.ct, email: r.ct.email.replace(/@.*/, "@personal.example.net") }));
+  while (ehOnlyRecs.length < Math.round(size * 0.08)) ehOnlyRecs.push(eh(person()));
+  return { rows, ehOnly: ehOnlyRecs.length, ehOnlyRecs };
 }
 const data = build(SIZE);
 const matched = data.rows.filter((r): r is Extract<Row, { kind: "matched" }> => r.kind === "matched");
@@ -312,13 +320,154 @@ async function variantC() {
   }
 }
 
+// ── variant D: one table of everyone, like the field check ──────────────────
+// Each row is one Connecteam user. `choice` undefined = untouched (the proposal
+// stands), null = "don't link", an EhRec = linked by the admin.
+type DRow = { ct: Person; proposed?: EhRec; candidates: { eh: EhRec; reason: Reason }[]; choice?: EhRec | null; note?: string };
+const dRows: DRow[] = data.rows.map((r) =>
+  r.kind === "matched"
+    ? { ct: r.ct, proposed: r.eh, candidates: [] }
+    : r.kind === "choice"
+      ? { ct: r.ct, candidates: r.candidates }
+      : { ct: r.ct, candidates: [] },
+);
+const allEh: EhRec[] = [...matched.map((m) => m.eh), ...choices.flatMap((x) => x.candidates.map((k) => k.eh)), ...data.ehOnlyRecs];
+const linkOf = (r: DRow) => (r.choice !== undefined ? r.choice : r.proposed);
+const unsettled = (r: DRow) => r.choice === undefined && !r.proposed && r.candidates.length > 0;
+const linkedRow = (eh: EhRec) => dRows.findIndex((r) => linkOf(r)?.id === eh.id);
+
+function dTable(from: number, to: number): string[] {
+  const numW = String(dRows.length).length + 2;
+  const nameW = 22;
+  const emailW = Math.max(5, ...dRows.map((r) => r.ct.email.length));
+  const lines = [
+    " ".repeat(numW + 1 + MW) + p.bold(p.ct(pad("Connecteam user", nameW + 1 + emailW))) + "   " + p.bold(p.eh(pad("Employment Hero employee", nameW + 10))) + p.bold("Status"),
+    " ".repeat(numW + 1 + MW) + p.dim("─".repeat(Math.min(W() - numW - 2 - MW, nameW * 2 + emailW + 34))),
+  ];
+  for (let i = from; i < to; i++) {
+    const r = dRows[i], link = linkOf(r);
+    let m: string, ehCol: string, status: string;
+    if (r.choice === null) [m, ehCol, status] = [pad(p.dim("–"), MW), p.dim("(won't link)"), p.change(r.note ?? "changed")];
+    else if (r.choice) [m, ehCol, status] = [mark.ok, p.eh(`${cut(name(r.choice), nameW)}`) + p.dim(` ${r.choice.id}`), p.change(r.note ?? "changed")];
+    else if (link) [m, ehCol, status] = [mark.ok, p.eh(cut(name(link), nameW)) + p.dim(` ${link.id}`), p.dim("matched by email")];
+    else if (r.candidates.length > 1) [m, ehCol, status] = [mark.warn, p.dim(`(${r.candidates.length} EH employees match)`), p.change("pick one")];
+    else if (r.candidates.length === 1) {
+      const k = r.candidates[0];
+      [m, ehCol, status] = [mark.warn, p.change(`${cut(name(k.eh), nameW)} ?`) + p.dim(` ${k.eh.id}`), p.change(k.reason)];
+    } else [m, ehCol, status] = [pad(p.dim("–"), MW), p.dim("(no match: new hire)"), p.dim("new hire")];
+    lines.push(`${String(i + 1).padStart(numW - 2)}) ${m} ${p.ct(pad(cut(name(r.ct), nameW), nameW))} ${pad(r.ct.email, emailW)} → ${pad(ehCol, nameW + 7)} ${status}`);
+  }
+  return lines;
+}
+
+function dCounts() {
+  const linked = dRows.filter((r) => linkOf(r)).length;
+  const toCheck = dRows.filter(unsettled).length;
+  const newH = dRows.length - linked - toCheck;
+  return { linked, toCheck, newH, text: `${p.ok(`${linked} to link`)} · ${p.change(`${toCheck} to check`)} · ${newH} new hires / not linked` };
+}
+
+/** The picker: likely EH employees first, then search all of EH by name or email. */
+async function dPick(i: number) {
+  const r = dRows[i];
+  const show = (list: EhRec[], why: (e: EhRec) => string) =>
+    list.forEach((e, k) => {
+      const nm = name(e) !== name(r.ct) ? p.change(name(e)) : p.eh(name(e));
+      const em = e.email !== r.ct.email ? p.change(e.email) : e.email;
+      const st = e.terminated ? p.change("Terminated") : p.dim("Active");
+      const pid = e.payrollId ? `  ${p.change(`Payroll ID ${e.payrollId}`)}` : "";
+      const other = linkedRow(e);
+      const taken = other >= 0 && other !== i ? `  ${p.dim(`linked to row ${other + 1}`)}` : "";
+      console.log(`    ${k + 1}) ${nm}   ${em}   ${p.eh(`EH ${e.id}`)}   ${st}${pid}${taken}${why(e) ? `\n       ${mark.warn} ${why(e)}` : ""}`);
+    });
+  let list: EhRec[] = r.proposed ? [r.proposed] : r.candidates.map((k) => k.eh);
+  let heading = list.length ? "Likely" : "No likely match";
+  for (;;) {
+    clear();
+    console.log(`${p.bold(`Row ${i + 1}`)}   ${p.ct(name(r.ct))}   ${r.ct.email}\n`);
+    console.log(`  ${p.eh(heading)}`);
+    show(list, (e) => r.candidates.find((k) => k.eh.id === e.id)?.reason ?? "");
+    console.log(`    0) Don't link ${p.dim("- they'll be checked again when you approve them")}\n`);
+    const a = await ask(`  Number to choose, or type part of a name or email to search all ${allEh.length} Employment Hero employees (Enter keeps it as is): `);
+    if (a === "") return;
+    const n = Number(a);
+    if (a === "0") return void ((r.choice = null), (r.note = "won't link"));
+    if (Number.isInteger(n) && n >= 1 && n <= list.length) {
+      const e = list[n - 1], other = linkedRow(e);
+      if (other >= 0 && other !== i) {
+        const y = await ask(`  ${p.eh(`EH ${e.id}`)} is linked to row ${other + 1} (${p.ct(name(dRows[other].ct))}). Move it here? [y/N] `, "n");
+        if (y.toLowerCase() !== "y") continue;
+        dRows[other].choice = null;
+        dRows[other].note = `moved to row ${i + 1}`;
+      }
+      r.choice = e;
+      r.note = "changed";
+      return;
+    }
+    const q = a.toLowerCase();
+    const hits = allEh.filter((e) => name(e).toLowerCase().includes(q) || e.email.toLowerCase().includes(q)).slice(0, 10);
+    list = hits;
+    heading = hits.length ? `Search "${a}": ${hits.length === 10 ? "first 10" : hits.length} found` : `Search "${a}": nothing found, try fewer letters`;
+  }
+}
+
+async function variantD() {
+  const perPage = Math.max(5, H() - 7);
+  for (;;) {
+    for (let from = 0; ; from += perPage) {
+      const to = Math.min(dRows.length, from + perPage);
+      clear();
+      console.log([summary()[0], "", ...dTable(from, to), "", dCounts().text + p.dim(`   rows ${from + 1}–${to} of ${dRows.length}`), ""].join("\n"));
+      const { toCheck } = dCounts();
+      const more = to < dRows.length;
+      const a = (
+        await ask(
+          (toCheck ? `Check the ${toCheck} now? [Y / number to change a row / ` : "Everything's in place. [Enter to finish / number to change a row / ") +
+            (more ? "Enter for more / " : "") + "done] ",
+          more ? "" : toCheck ? "done" : "",
+        )
+      ).toLowerCase();
+      if (a === "done" || (!more && !toCheck && a === "")) return;
+      if (a === "" && more) continue;
+      if (a === "y" || a === "") {
+        for (let i = 0; i < dRows.length; i++) if (unsettled(dRows[i])) await dPick(i);
+        break;
+      }
+      const n = Number(a);
+      if (Number.isInteger(n) && n >= 1 && n <= dRows.length) {
+        await dPick(n - 1);
+        from -= perPage; // redraw this page
+      }
+      if (to >= dRows.length) break;
+    }
+  }
+}
+
+function dFinal() {
+  const { linked, toCheck, newH } = dCounts();
+  clear();
+  console.log(
+    [
+      p.bold("Done") + p.dim("   (prototype: nothing written)"),
+      "",
+      `  ${mark.ok} ${linked} pending links would be saved`,
+      `  ${mark.warn} ${toCheck} left unchecked - not linked, checked again on approval`,
+      `  ${newH} new hires / won't link · ${data.ehOnly} EH-only ignored`,
+      "",
+      p.dim(`  changed rows: ${dRows.flatMap((r, i) => (r.choice !== undefined ? [`${i + 1}${r.choice ? `→EH ${r.choice.id}` : "→don't link"}`] : [])).join(", ") || "none"}`),
+    ].join("\n"),
+  );
+}
+
 // ── run, `v` restarts on the next variant ───────────────────────────────────
 for (;;) {
   dropped.clear();
   chosen.clear();
+  for (const r of dRows) (r.choice = undefined), (r.note = undefined);
   try {
-    await { A: variantA, B: variantB, C: variantC }[variant]();
-    finalState();
+    await { A: variantA, B: variantB, C: variantC, D: variantD }[variant]();
+    if (variant === "D") dFinal();
+    else finalState();
     break;
   } catch (e) {
     if (!(e instanceof SwitchVariant)) throw e;
