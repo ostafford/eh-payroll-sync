@@ -47,8 +47,8 @@ const c = (code: string) => (s: string) => (on ? `\u001b[${code}m${s}\u001b[0m` 
 const p = { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1"), ok: c("32"), bad: c("31") };
 const mark = { ok: on ? p.ok("✓") : "[ok]", warn: on ? p.change("⚠") : "[!] ", no: on ? p.bad("✗") : "[x] " };
 const MW = on ? 1 : 4; // width of a mark: "✓" vs "[ok]"
-const W = () => process.stdout.columns ?? 100;
-const H = () => process.stdout.rows ?? 30;
+const W = () => process.stdout.columns || 100;
+const H = () => process.stdout.rows || 30;
 // eslint-disable-next-line no-control-regex
 const vis = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, "").length;
 const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - vis(s)));
@@ -160,7 +160,7 @@ function matchedTable(from: number, to: number): string[] {
     p.bold(p.ct(pad("Connecteam user", nameW))) + " " +
     p.bold(p.eh(pad(cut(nameW >= 24 ? "Employment Hero employee" : "EH employee", nameW), nameW))) + " " +
     p.bold(pad("Email (same on both)", emailW)) + " " + p.bold(p.eh("EH id"));
-  const lines = [head, " ".repeat(numW + 1 + MW) + p.dim("─".repeat(Math.min(W() - numW - 4, nameW * 2 + emailW + idW + 3)))];
+  const lines = [head, " ".repeat(numW + 1 + MW) + p.dim("─".repeat(Math.max(10, Math.min(W() - numW - 4, nameW * 2 + emailW + idW + 3))))];
   for (let i = from; i < to; i++) {
     const m = matched[i], n = i + 1, gone = dropped.has(n);
     const row =
@@ -342,7 +342,7 @@ function dTable(from: number, to: number): string[] {
   const emailW = Math.max(5, ...dRows.map((r) => r.ct.email.length));
   const lines = [
     " ".repeat(numW + 1 + MW) + p.bold(p.ct(pad("Connecteam user", nameW + 1 + emailW))) + "   " + p.bold(p.eh(pad("Employment Hero employee", nameW + 10))) + p.bold("Status"),
-    " ".repeat(numW + 1 + MW) + p.dim("─".repeat(Math.min(W() - numW - 2 - MW, nameW * 2 + emailW + 34))),
+    " ".repeat(numW + 1 + MW) + p.dim("─".repeat(Math.max(10, Math.min(W() - numW - 2 - MW, nameW * 2 + emailW + 34)))),
   ];
   for (let i = from; i < to; i++) {
     const r = dRows[i], link = linkOf(r);
