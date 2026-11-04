@@ -58,6 +58,10 @@ One attempt to sync a user that ended in a Validation failure, plus the resultin
 **Payroll ID** / **External ID**:
 EH Payroll's `externalId` field on an employee (shown in the EH UI as "Payroll ID"). The sync sets it to the Connecteam `userId` and uses it as the cross-system match key. Email is only a fallback for the very first match.
 
+**Pre-existing employee**:
+A person who already has an EH employee record, created outside the sync (e.g. entered by hand and already paid), before the client's go-live. An admin confirms each one's match at setup. On their approval the sync only links them (sets their Payroll ID) and writes nothing else; their later Connecteam edits sync as normal. Anyone hired after go-live is not pre-existing.
+_Avoid_: legacy employee, manual employee
+
 **In-scope fields**:
 Everything the employee can enter in the onboarding pack: personal, address, emergency contact, structural fields EH needs (name, start date, employment type, job title), **and** tax file number, bank account(s), superannuation, and tax-declaration answers. All flow Connecteam → EH via the API — no EH self-setup (see ADR-0001). Pay rate / award / classification stay a manual EH task for v1.
 
