@@ -501,9 +501,22 @@ async function variantE() {
     return Math.min(cursor + 1, v.length - 1);
   };
 
+  const EMAIL_W = 34;
+  const colNameW = () => Math.max(10, Math.min(22, Math.floor((W() - 70) / 2)));
+  /** Column headings over the list, in each column's colour, fixed while the list scrolls. */
+  function headings(): string[] {
+    const nameW = colNameW();
+    const lead = " ".repeat(2) + pad("#", String(dRows.length).length) + " " + " ".repeat(MW) + " ";
+    return [
+      lead + p.bold(p.ct(pad("Connecteam user", nameW))) + " " + p.bold(p.ct(pad("Connecteam email", EMAIL_W))) + "   " +
+        p.bold(p.eh(pad("Employment Hero match", nameW + 7))) + " " + p.bold("Status"),
+      " ".repeat(vis(lead)) + p.dim(`${"─".repeat(nameW)} ${"─".repeat(EMAIL_W)}   ${"─".repeat(nameW + 7)} ${"─".repeat(24)}`),
+    ];
+  }
+
   function line(i: number, isSel: boolean): string {
     const r = dRows[i], link = linkOf(r);
-    const nameW = Math.max(10, Math.min(22, Math.floor((W() - 70) / 2)));
+    const nameW = colNameW();
     let m: string, ehCol: string, status: string;
     if (r.choice === null) [m, ehCol, status] = [pad(p.dim("–"), MW), p.dim("(won't link)"), p.change(r.note ?? "won't link")];
     else if (r.choice) [m, ehCol, status] = [mark.ok, p.eh(cut(name(r.choice), nameW)) + p.dim(` ${r.choice.id}`), p.change(r.note ?? "linked")];
@@ -515,7 +528,7 @@ async function variantE() {
     const ptr = isSel ? (on ? p.ct("▶") : ">") : " ";
     const num = String(i + 1).padStart(String(dRows.length).length);
     const nm = p.ct(pad(cut(name(r.ct), nameW), nameW));
-    const body = `${ptr} ${num} ${m} ${isSel ? p.bold(nm) : nm} ${pad(cut(r.ct.email, 34), 34)} → ${pad(ehCol, nameW + 7)} ${status}`;
+    const body = `${ptr} ${num} ${m} ${isSel ? p.bold(nm) : nm} ${pad(cut(r.ct.email, EMAIL_W), EMAIL_W)} → ${pad(ehCol, nameW + 7)} ${status}`;
     return body; // emails cut at 34 here; the panel always shows them in full
   }
 
@@ -594,6 +607,7 @@ async function variantE() {
       `${p.bold("Link Pre-existing employees")}${p.dim("   prototype · variant E · fake data")}`,
       `${p.bold(`Reviewed ${done} of ${total}`)}  ${bar}   ${p.ok(`${linked} to link`)} · ${p.change(`${wont} won't link`)} · ${newH - wont} new hires     ${tabs}`,
       p.dim("─".repeat(Math.max(10, W() - 1))),
+      ...headings(),
     ];
     const pnl = panel(), leg = legend();
     const listH = Math.max(3, H() - head.length - 1 - 7 - 1);
