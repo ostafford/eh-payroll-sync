@@ -18,7 +18,8 @@
     "validate-field-map": "tsx scripts/validate-field-map.ts",
     "provision-classification-field": "tsx scripts/provision-award-classification-field.ts",
     "test:integration": "vitest run --project integration",
-    "test:all": "vitest run"
+    "test:all": "vitest run",
+    "prototype:link-list": "tsx scripts/PROTOTYPE-link-list.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
