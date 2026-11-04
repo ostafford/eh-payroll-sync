@@ -15,6 +15,10 @@
  *      ask after trying A-C): matches ticked, problems marked inline, then
  *      "Check the N now? [Y / number to change a row / done]". Changing a row
  *      opens a picker: likely EH employees first, or type to search all of EH.
+ *   E  Full-screen list (default; the integrator's ask after D): the whole list
+ *      stays on screen, Tab narrows it to the rows to review, ↑↓ moves, the
+ *      bottom panel shows the selected row's suggestion, Enter links it and the
+ *      cursor moves on. "Reviewed X of N" with a bar at the top; c confirms.
  *   C  Chunked by surname: the list in alphabetical chunks of ~20, each mixing
  *      its matched rows and its choices, confirmed one chunk at a time with
  *      "chunk 3 of 9" progress.
@@ -27,6 +31,7 @@
  * Not in a terminal, every prompt takes its default (Enter / 0), so the whole
  * screen prints.
  */
+import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 
 // ── args ────────────────────────────────────────────────────────────────────
@@ -34,9 +39,9 @@ const arg = (name: string, dflt: string) => {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
 };
-const VARIANTS = ["D", "A", "B", "C"] as const;
+const VARIANTS = ["E", "D", "A", "B", "C"] as const;
 type Variant = (typeof VARIANTS)[number];
-let variant = arg("variant", "D").toUpperCase() as Variant;
+let variant = arg("variant", "E").toUpperCase() as Variant;
 const SIZE = Number(arg("size", "180"));
 const SEED = Number(arg("seed", "1"));
 
@@ -116,9 +121,12 @@ const dropped = new Set<number>(); // Matched row numbers the admin dropped
 const chosen = new Map<number, number>(); // choice index -> candidate (0 = don't link)
 
 // ── prompts ─────────────────────────────────────────────────────────────────
-const rl = tty ? createInterface({ input: process.stdin, output: process.stdout }) : null;
+// Created on first use, so variant E can own the keyboard (raw mode) without it.
+let rlInst: ReturnType<typeof createInterface> | null = null;
+const getRl = () => (tty ? (rlInst ??= createInterface({ input: process.stdin, output: process.stdout })) : null);
 class SwitchVariant extends Error {}
 async function ask(q: string, dflt = ""): Promise<string> {
+  const rl = getRl();
   if (!rl) {
     console.log(`${q}${p.dim(`(auto: ${dflt || "Enter"})`)}`);
     return dflt;
@@ -459,14 +467,259 @@ function dFinal() {
   );
 }
 
+// ── variant E: a full-screen list you move through (integrator's ask after D) ─
+// The list stays on screen; ↑↓ moves, the bottom panel shows the selected row's
+// suggestion, Enter links it and the cursor moves on. "Reviewed X of N" at the
+// top. Tab narrows to the rows to review or shows everyone.
+async function variantE() {
+  if (!tty) {
+    console.log(p.dim("Variant E needs a terminal (it reads single keys). Showing the list only.\n"));
+    console.log(dTable(0, dRows.length).join("\n"));
+    return;
+  }
+  const review = new Set(dRows.flatMap((r, i) => (unsettled(r) ? [i] : [])));
+  const reviewed = () => [...review].filter((i) => dRows[i].choice !== undefined).length;
+  let showAll = false;
+  let cursor = 0; // index into the visible list
+  let top = 0;
+  let mode: "list" | "search" = "list";
+  let query = "";
+  let hits: EhRec[] = [];
+  let hit = 0;
+  let pendingMove: EhRec | null = null;
+  let message = "";
+  let confirming = false;
+
+  const visible = () => (showAll ? dRows.map((_, i) => i) : [...review].sort((a, b) => a - b));
+  const sel = () => visible()[cursor];
+  const nextUnreviewed = () => {
+    const v = visible();
+    for (let k = 1; k <= v.length; k++) {
+      const j = (cursor + k) % v.length;
+      if (review.has(v[j]) && dRows[v[j]].choice === undefined) return j;
+    }
+    return Math.min(cursor + 1, v.length - 1);
+  };
+
+  function line(i: number, isSel: boolean): string {
+    const r = dRows[i], link = linkOf(r);
+    const nameW = Math.max(10, Math.min(22, Math.floor((W() - 70) / 2)));
+    let m: string, ehCol: string, status: string;
+    if (r.choice === null) [m, ehCol, status] = [pad(p.dim("–"), MW), p.dim("(won't link)"), p.change(r.note ?? "won't link")];
+    else if (r.choice) [m, ehCol, status] = [mark.ok, p.eh(cut(name(r.choice), nameW)) + p.dim(` ${r.choice.id}`), p.change(r.note ?? "linked")];
+    else if (link) [m, ehCol, status] = [mark.ok, p.eh(cut(name(link), nameW)) + p.dim(` ${link.id}`), p.dim("matched by email")];
+    else if (r.note) [m, ehCol, status] = [mark.warn, p.dim("(none)"), p.change(r.note)];
+    else if (r.candidates.length > 1) [m, ehCol, status] = [mark.warn, p.dim(`(${r.candidates.length} EH employees)`), p.change("pick one")];
+    else if (r.candidates.length === 1) [m, ehCol, status] = [mark.warn, p.change(`${cut(name(r.candidates[0].eh), nameW)} ?`), p.change(r.candidates[0].reason)];
+    else [m, ehCol, status] = [pad(p.dim("–"), MW), p.dim("(no match)"), p.dim("new hire")];
+    const ptr = isSel ? (on ? p.ct("▶") : ">") : " ";
+    const num = String(i + 1).padStart(String(dRows.length).length);
+    const nm = p.ct(pad(cut(name(r.ct), nameW), nameW));
+    const body = `${ptr} ${num} ${m} ${isSel ? p.bold(nm) : nm} ${pad(cut(r.ct.email, 34), 34)} → ${pad(ehCol, nameW + 7)} ${status}`;
+    return body; // emails cut at 34 here; the panel always shows them in full
+  }
+
+  /** Suggestions for the selected row: the proposal, or its candidates. */
+  const suggestions = (i: number): { eh: EhRec; reason: string }[] => {
+    const r = dRows[i];
+    if (r.proposed) return [{ eh: r.proposed, reason: "" }];
+    return r.candidates;
+  };
+
+  function panel(): string[] {
+    const i = sel();
+    if (i === undefined) return [p.ok("  Nothing to review.")];
+    const r = dRows[i];
+    const out = [`  ${p.bold(`Row ${i + 1}`)}  ${p.ct(name(r.ct))}  ${r.ct.email}`];
+    const ehLine = (e: EhRec, k: number | null, reason: string, chosen = false) => {
+      const nm = name(e) !== name(r.ct) ? p.change(name(e)) : p.eh(name(e));
+      const em = e.email !== r.ct.email ? p.change(e.email) : e.email;
+      const st = e.terminated ? p.change("Terminated") : p.dim("Active");
+      const pid = e.payrollId ? `  ${p.change(`Payroll ID ${e.payrollId}`)}` : "";
+      const other = linkedRow(e);
+      const taken = other >= 0 && other !== i ? `  ${p.dim(`linked to row ${other + 1}`)}` : "";
+      const lead = k === null ? "    " : chosen ? `  ${p.ct("▶")} ` : `  ${k}) `;
+      return `${lead}${nm}  ${em}  ${p.eh(`EH ${e.id}`)}  ${st}${pid}${taken}${reason ? `  ${mark.warn} ${reason}` : ""}`;
+    };
+    if (mode === "search") {
+      out.push(`  ${p.eh("Search Employment Hero:")} ${query}${on ? "▏" : "_"}  ${p.dim(hits.length ? `${hits.length === 8 ? "first 8" : hits.length} found` : query ? "nothing found" : "type part of a name or email")}`);
+      hits.forEach((e, k) => out.push(ehLine(e, k + 1, "", k === hit)));
+    } else {
+      const link = linkOf(r);
+      if (r.choice === null) out.push(`    ${p.change("Won't link")} ${p.dim("- checked again when they're approved")}`);
+      else if (link) out.push(`  ${p.dim("Linked to")}`, ehLine(link, null, ""));
+      else {
+        const sug = suggestions(i);
+        if (sug.length) {
+          out.push(`  ${p.dim(sug.length > 1 ? "Suggestions" : "Suggested")}`);
+          sug.forEach((s, k) => out.push(ehLine(s.eh, sug.length > 1 ? k + 1 : null, s.reason)));
+        } else out.push(`    ${p.dim("No Employment Hero match: syncs as a new hire. Search if they're already in EH.")}`);
+      }
+    }
+    if (pendingMove) out.push(`  ${p.change(`EH ${pendingMove.id} is linked to row ${linkedRow(pendingMove) + 1}. Enter again to move it here, Esc to cancel.`)}`);
+    if (message) out.push(`  ${message}`);
+    return out;
+  }
+
+  function legend(): string {
+    const k = (key: string, what: string) => `${p.bold(key)} ${p.dim(what)}`;
+    if (confirming) return `  ${k("y", "save and continue")}   ${k("n", "back to the list")}`;
+    if (mode === "search") return `  ${k("↑↓", "choose")}   ${k("Enter", "link")}   ${k("Esc", "back")}`;
+    const i = sel();
+    const r = i === undefined ? undefined : dRows[i];
+    const parts = [k("↑↓", "move")];
+    if (r && !linkOf(r) && r.choice !== null) {
+      const n = suggestions(i!).length;
+      if (n === 1) parts.push(k("Enter", "link"));
+      else if (n > 1) parts.push(k(`1–${n}`, "link"));
+    }
+    parts.push(k("/", "search EH"));
+    if (r && r.choice !== null) parts.push(k("x", "don't link"));
+    if (r && r.choice !== undefined) parts.push(k("u", "undo"));
+    parts.push(k("Tab", showAll ? "show to review" : "show everyone"), k("c", "confirm"));
+    return "  " + parts.join("   ");
+  }
+
+  function draw() {
+    const total = review.size, done = reviewed();
+    const barW = 20, fill = total ? Math.round((done / total) * barW) : barW;
+    const bar = on ? p.ok("█".repeat(fill)) + p.dim("░".repeat(barW - fill)) : `[${"#".repeat(fill)}${".".repeat(barW - fill)}]`;
+    const { linked, newH } = dCounts();
+    const wont = dRows.filter((r) => r.choice === null).length;
+    if (done === total && !message && !confirming) message = p.ok(`All ${total} reviewed. Press c to confirm and save.`);
+    const tabs = showAll
+      ? `${p.dim(`To review (${total})`)}  ${p.bold(p.ct(`[Everyone (${dRows.length})]`))}`
+      : `${p.bold(p.ct(`[To review (${total})]`))}  ${p.dim(`Everyone (${dRows.length})`)}`;
+    const head = [
+      `${p.bold("Link Pre-existing employees")}${p.dim("   prototype · variant E · fake data")}`,
+      `${p.bold(`Reviewed ${done} of ${total}`)}  ${bar}   ${p.ok(`${linked} to link`)} · ${p.change(`${wont} won't link`)} · ${newH - wont} new hires     ${tabs}`,
+      p.dim("─".repeat(Math.max(10, W() - 1))),
+    ];
+    const pnl = panel(), leg = legend();
+    const listH = Math.max(3, H() - head.length - 1 - 7 - 1);
+    const v = visible();
+    if (cursor < top) top = cursor;
+    if (cursor >= top + listH) top = cursor - listH + 1;
+    const body: string[] = [];
+    for (let k = top; k < Math.min(v.length, top + listH); k++) body.push(line(v[k], k === cursor));
+    while (body.length < listH) body.push("");
+    const more = v.length > listH ? p.dim(`  ${top + 1}–${Math.min(v.length, top + listH)} of ${v.length}`) : "";
+    const confirmText = confirming
+      ? [
+          p.bold("  Save these links?"),
+          `  ${p.ok(`${linked} pending links`)} · ${reviewed() < total ? p.change(`${total - reviewed()} not reviewed - left unlinked, checked again on approval`) : p.ok("everything reviewed")}`,
+        ]
+      : [];
+    const bottom = [p.dim("─".repeat(Math.max(10, W() - 1))) + more, ...(confirming ? confirmText : pnl)];
+    while (bottom.length < 8) bottom.push("");
+    process.stdout.write("\u001b[H\u001b[2J" + [...head, ...body, ...bottom.slice(0, 8), leg].join("\n"));
+  }
+
+  const link = (i: number, e: EhRec) => {
+    const other = linkedRow(e);
+    if (other >= 0 && other !== i) {
+      if (pendingMove?.id !== e.id) return void (pendingMove = e);
+      const o = dRows[other];
+      o.choice = undefined;
+      o.proposed = undefined;
+      o.candidates = [];
+      o.note = `match moved to row ${i + 1}`;
+      review.add(other);
+    }
+    pendingMove = null;
+    dRows[i].choice = e;
+    dRows[i].note = dRows[i].proposed?.id === e.id ? undefined : "linked";
+    message = `${p.ok("✓")} Row ${i + 1} linked to ${p.eh(name(e))} ${p.dim(`EH ${e.id}`)}`;
+    mode = "list";
+    if (!showAll) cursor = nextUnreviewed();
+  };
+
+  process.stdout.write("\u001b[?1049h\u001b[?25l"); // alternate screen, hide cursor
+  const restore = () => process.stdout.write("\u001b[?25h\u001b[?1049l");
+  emitKeypressEvents(process.stdin);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  const onResize = () => draw();
+  process.stdout.on("resize", onResize);
+
+  await new Promise<void>((resolve, reject) => {
+    const finish = (err?: Error) => {
+      process.stdin.off("keypress", onKey);
+      process.stdout.off("resize", onResize);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      restore();
+      err ? reject(err) : resolve();
+    };
+    function onKey(str: string | undefined, key: { name?: string; ctrl?: boolean; sequence?: string }) {
+      if (key.ctrl && key.name === "c") return finish(new Error("cancelled"));
+      const v = visible(), i = sel();
+      if (confirming) {
+        if (str === "y") return finish();
+        if (str === "n" || key.name === "escape") confirming = false;
+        return draw();
+      }
+      if (mode === "search") {
+        if (key.name === "escape") (mode = "list"), (pendingMove = null);
+        else if (key.name === "up") hit = Math.max(0, hit - 1);
+        else if (key.name === "down") hit = Math.min(hits.length - 1, hit + 1);
+        else if (key.name === "return") hits[hit] && link(i, hits[hit]);
+        else {
+          if (key.name === "backspace") query = query.slice(0, -1);
+          else if (str && str.length === 1 && str >= " ") query += str;
+          const q = query.toLowerCase();
+          // Closest first: same name as this row, then not linked elsewhere.
+          const rank = (e: EhRec) => (name(e) === name(dRows[i].ct) ? 0 : 2) + (linkedRow(e) >= 0 && linkedRow(e) !== i ? 1 : 0);
+          hits = q.length < 2 ? [] : allEh.filter((e) => name(e).toLowerCase().includes(q) || e.email.toLowerCase().includes(q)).sort((a, b) => rank(a) - rank(b)).slice(0, 8);
+          hit = 0;
+          pendingMove = null;
+        }
+        return draw();
+      }
+      message = "";
+      if (key.name === "escape") pendingMove = null;
+      else if (key.name === "up") (cursor = Math.max(0, cursor - 1)), (pendingMove = null);
+      else if (key.name === "down") (cursor = Math.min(v.length - 1, cursor + 1)), (pendingMove = null);
+      else if (key.name === "pageup") cursor = Math.max(0, cursor - 10);
+      else if (key.name === "pagedown") cursor = Math.min(v.length - 1, cursor + 10);
+      else if (key.name === "tab") {
+        const keep = i;
+        showAll = !showAll;
+        const nv = visible();
+        cursor = Math.max(0, nv.indexOf(keep));
+        top = 0;
+      } else if (str === "v") return finish(new SwitchVariant());
+      else if (str === "c") confirming = true;
+      else if (i !== undefined && str === "/") (mode = "search"), (query = ""), (hits = []), (hit = 0);
+      else if (i !== undefined && str === "x" && dRows[i].choice !== null) {
+        dRows[i].choice = null;
+        dRows[i].note = "won't link";
+        message = `${p.change("–")} Row ${i + 1} won't be linked`;
+        if (!showAll) cursor = nextUnreviewed();
+      } else if (i !== undefined && str === "u") {
+        dRows[i].choice = undefined;
+        dRows[i].note = undefined;
+        message = `Row ${i + 1} back to how it was`;
+      } else if (i !== undefined && !linkOf(dRows[i]) && dRows[i].choice !== null) {
+        const sug = suggestions(i);
+        if (key.name === "return" && sug.length === 1) link(i, sug[0].eh);
+        else if (str && /^[1-9]$/.test(str) && Number(str) <= sug.length) link(i, sug[Number(str) - 1].eh);
+      }
+      draw();
+    }
+    process.stdin.on("keypress", onKey);
+    draw();
+  });
+}
+
 // ── run, `v` restarts on the next variant ───────────────────────────────────
 for (;;) {
   dropped.clear();
   chosen.clear();
   for (const r of dRows) (r.choice = undefined), (r.note = undefined);
   try {
-    await { A: variantA, B: variantB, C: variantC, D: variantD }[variant]();
-    if (variant === "D") dFinal();
+    await { A: variantA, B: variantB, C: variantC, D: variantD, E: variantE }[variant]();
+    if (variant === "D" || variant === "E") dFinal();
     else finalState();
     break;
   } catch (e) {
@@ -474,4 +727,4 @@ for (;;) {
     variant = VARIANTS[(VARIANTS.indexOf(variant) + 1) % VARIANTS.length];
   }
 }
-rl?.close();
+rlInst?.close();
