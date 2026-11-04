@@ -271,3 +271,35 @@ Total: about 15 writes. Run them against the rehearsal account only.
    just the one TFN being checked. Don't hold a whole-business TFN list.
 6. **`""` doesn't clear on update** (tested). A "changed fields only" push has
    to send `"(clear)"` when an employee empties a field.
+
+## Write test results (#135, 2026-11-05, rehearsal account, **tested**)
+
+These ran on throwaway `Zztest` employees. TFNs had valid checksums and were checked as unused first. All 7 employees were deleted afterwards (DELETE 200).
+
+**Test A: link-only and partial PUT**
+
+| Step | Result |
+| --- | --- |
+| A1 `POST ?matchType=None` | 201; status `Incomplete`, `externalId` null |
+| A2 `PUT {externalId}` | 200. Changed only `externalId` **and `leaveYearStart`** (null → the start date: EH fills a default on save). Status unchanged; nothing else re-validated or cleared. |
+| A3 `PUT {mobilePhone}` | 200; only `mobilePhone` changed |
+| A4 `PUT {bankAccount1_AccountNumber}` alone | **400**: "Account Name / BSB / Allocated Percentage is required if any bank account details are supplied". The bank account is written as a **whole group**: a partial bank write is rejected, though nothing changes. |
+| A5a `PUT {residentialSuburb: ""}` | 200; ignored (unchanged) |
+| A5b `PUT {residentialSuburb: "(clear)"}` | 200, but **does not clear**. EH treated "(clear)" as a suburb and re-resolved the address (suburb → "CAPE CLEAR", plus state and postcode changed). **Never send `"(clear)"` to address fields.** |
+
+**Test B: matching**
+
+| Step | Result |
+| --- | --- |
+| B2 default POST, other person + A's TFN | 200, **A's id**: A relabelled (`externalId`) and its name overwritten. The TFN merge is confirmed. |
+| B3 default POST, A's name + DOB + email, new TFN | 200, **A's id**. The second merge key is confirmed. |
+| B4 `matchType=None` + duplicate TFN | **201, new id**. EH creates a duplicate rather than rejecting it. |
+| B5 POST `id`=A + another employee's TFN | 200, A's id; the other employee unchanged. **`id` wins over TFN.** |
+| B6 two default POSTs with `333333333` | 201 + 201, distinct ids. The placeholder TFN isn't a match key. |
+| B7 terminated employees | **Not tested.** `PUT {endDate}` → 400 "A termination reason must be provided"; adding `terminationReason` didn't satisfy it. Whether terminated employees are matched is still unknown. |
+
+**Design consequences**
+- Linking: `PUT /employee/unstructured/{id}` with only `externalId` is safe. Expect `leaveYearStart` to be filled if it was empty.
+- The "changed since link" push must send **whole groups** (at least bank account 1, which is all-or-nothing). Treat address the same way, since EH re-resolves it.
+- Clearing a field: there's no safe general way. `""` is ignored and `"(clear)"` breaks addresses.
+- `matchType=None` turns the silent overwrite into a **visible duplicate**, so the pre-create check is what prevents duplicates.
