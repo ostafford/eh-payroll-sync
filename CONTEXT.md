@@ -85,6 +85,10 @@ _Avoid_: blocked employee, collision
 **Existing-match notice**:
 The admin-channel message saying someone is a Held employee: which EH employees they may be, and which details matched or disagreed. It never shows the values themselves. Distinct from a Manual-follow-up notice, which means EH needs something done by hand.
 
+**Link notice**:
+The admin-channel line saying a Pre-existing employee is now a Linked employee, and that only their Payroll ID was set. Posted in place of the Admin success notice; the employee gets no Success message, since nothing new reached EH for them.
+_Avoid_: link confirmation, welcome
+
 **In-scope fields**:
 Everything the employee can enter in the onboarding pack: personal, address, emergency contact, structural fields EH needs (name, start date, employment type, job title), **and** tax file number, bank account(s), superannuation, and tax-declaration answers. All flow Connecteam → EH via the API — no EH self-setup (see ADR-0001). Pay rate / award / classification stay a manual EH task for v1.
 
