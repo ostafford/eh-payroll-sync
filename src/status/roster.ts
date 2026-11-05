@@ -7,7 +7,8 @@
  *                          or the daily recheck pass, #43, found it resolved).
  *   - waiting_on_employee  the employee has an open Correction cycle.
  *   - waiting_on_admin     synced with safe defaults but EH still needs manual admin
- *                          setup (pay-run defaults, non-resident tax scale, SMSF, ...).
+ *                          setup (pay-run defaults, non-resident tax scale, SMSF, ...),
+ *                          or a Held employee the Pre-create check stopped (ADR-0010).
  *   - broken               a job for this person dead-lettered, or their sync landed
  *                          on an EH employee id already linked to a different
  *                          Connecteam user (an identity collision - see
@@ -24,6 +25,7 @@
  * the redaction-safe strings already written by auditDetail() (sync/decide.ts).
  */
 import type { SyncOutcomeLabel } from "../sync/gateway.js";
+import { heldCandidateIds } from "../sync/precheck.js";
 
 /** `left_out`: left out of the sync by choice (`rules.exclude`) - nothing to act on. */
 export type RosterState = "ready" | "waiting_on_employee" | "waiting_on_admin" | "broken" | "left_out";
@@ -123,6 +125,8 @@ export function deriveRosterEntry(row: RosterRow): RosterEntry {
         state: "waiting_on_admin",
         reasons: splitDetail(row.latestDetail, FOLLOW_UP_PREFIX, "|"),
       };
+    case "existing_match":
+      return { ...base, state: "waiting_on_admin", reasons: [heldReason(row.latestDetail)] };
     // "ok" | "resolved" -> genuinely ready. "retry" is never persisted to
     // employee_map (runSyncJob returns before saveEmployeeLink) and null means
     // no employee_map row and no dead-letter either, which cannot happen given
@@ -130,6 +134,13 @@ export function deriveRosterEntry(row: RosterRow): RosterEntry {
     default:
       return { ...base, state: "ready", reasons: [] };
   }
+}
+
+/** A Held employee's reason (#143 item 1), naming the EH ids their check found. */
+export function heldReason(detail: string | null): string {
+  const ids = heldCandidateIds(detail);
+  const as = ids.length ? ` as ${ids.length === 1 ? ids[0] : `${ids.slice(0, -1).join(", ")} or ${ids.at(-1)}`}` : "";
+  return `held on approval: may already be in EH${as}; resolve it in the setup wizard's link stage`;
 }
 
 function splitDetail(detail: string | null, prefix: string, sep: string): string[] {

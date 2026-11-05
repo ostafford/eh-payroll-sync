@@ -13,7 +13,7 @@ import {
 } from "../src/sync/consumer.js";
 import { CORRECTION_NOTICE_DEDUPE_MS } from "../src/sync/notices.js";
 import type { SyncJob } from "../src/sync/job.js";
-import type { EmployeeLink, EmployeeLinkPatch, SyncGateway, SyncLogEntry } from "../src/sync/gateway.js";
+import type { EmployeeLink, EmployeeLinkPatch, PendingLink, SyncLogEntry } from "../src/sync/gateway.js";
 import type { CtResult, PayRate } from "../src/connecteam/types.js";
 
 const fieldMap = parseFieldMap(
@@ -29,11 +29,12 @@ const cloneUser = (): ConnecteamUser => structuredClone(syntheticUser);
 function fakeGateway(
   seed: Partial<EmployeeLink> = {},
   approved = true,
-): SyncGateway & {
+): SyncDeps["store"] & {
   rows: Map<number, EmployeeLink>;
   log: SyncLogEntry[];
   counters: Map<string, number>;
   meta: Map<string, number>;
+  pending: Map<number, PendingLink>;
 } {
   const rows = new Map<number, EmployeeLink>();
   if (seed.ctUserId !== undefined) {
@@ -48,11 +49,16 @@ function fakeGateway(
   const log: SyncLogEntry[] = [];
   const counters = new Map<string, number>();
   const meta = new Map<string, number>();
+  const pending = new Map<number, PendingLink>();
   return {
     rows,
     log,
     counters,
     meta,
+    pending,
+    async getPendingLink(id: number) {
+      return pending.get(id) ?? null;
+    },
     async bumpCounter(key: string, delta: number) {
       counters.set(key, (counters.get(key) ?? 0) + delta);
     },
@@ -120,6 +126,10 @@ interface EhStub {
   current?: Record<string, unknown>;
   /** Forced result for every getByExternalId call (e.g. EH down). */
   get?: unknown;
+  /** Pre-create check: rows returned for a `$filter` starting with this field name (none by default). */
+  existing?: Partial<Record<"emailAddress" | "taxFileNumber" | "firstName", Array<Record<string, unknown>>>>;
+  /** Forced result for every findEmployees call. */
+  find?: unknown;
 }
 
 type CtFake = SyncDeps["ct"] & {
@@ -133,6 +143,8 @@ type CtFake = SyncDeps["ct"] & {
 type EhFake = SyncDeps["eh"] & {
   upserts: Array<{ externalId: string; payload: Record<string, unknown>; current?: unknown }>;
   gets: number;
+  /** Every `$filter` the Pre-create check sent. */
+  finds: string[];
 };
 
 function fakeCt(user: ConnecteamUser | null, userOutcome: "ok" | "retryable" | "error" = "ok"): CtFake {
@@ -176,9 +188,17 @@ function fakeEh(stub: EhStub = {}): EhFake {
   // Like EH: a key left off a write keeps its earlier value.
   let last: Record<string, unknown> = { ...(stub.current ?? {}) };
   const upserts: Array<{ externalId: string; payload: Record<string, unknown>; current?: unknown }> = [];
+  const finds: string[] = [];
   return {
     upserts,
     gets: 0,
+    finds,
+    async findEmployees(filter: string) {
+      finds.push(filter);
+      if (stub.find) return stub.find;
+      const field = filter.split(" ")[0] as keyof NonNullable<EhStub["existing"]>;
+      return { outcome: "ok", data: stub.existing?.[field] ?? [] };
+    },
     async upsertByExternalId(externalId: string, payload: Record<string, unknown>, current?: unknown) {
       upserts.push({ externalId, payload, current });
       last = { ...last, ...payload };
@@ -378,6 +398,135 @@ describe("runSyncJob - pre-approval webhook gate (ADR-0002)", () => {
 
     expect(out.status).toBe("synced");
     expect(eh.upserts).toHaveLength(1);
+  });
+});
+
+describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
+  /** No EH record carries the Payroll ID yet, so the job would create one. */
+  const NONE = { outcome: "ok", data: null };
+  const inEh = (id: number, over: Record<string, unknown> = {}) => ({
+    id,
+    externalId: null,
+    firstName: "Samuel",
+    surname: "Rivera",
+    dateOfBirth: "1992-04-07T00:00:00",
+    emailAddress: "sam.rivera@example.com",
+    taxFileNumber: "876543217",
+    status: "Active",
+    ...over,
+  });
+
+  it("holds someone already in EH: no write, one admin notice, nothing to the employee", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)], firstName: [inEh(40213)] } });
+    const ct = fakeCt(cloneUser());
+
+    const out = await runSyncJob(job(), deps({ store, eh, ct }));
+
+    expect(out).toMatchObject({ status: "held" });
+    expect(eh.finds).toHaveLength(3);
+    expect(eh.upserts).toHaveLength(0);
+    expect(ct.dms).toHaveLength(0);
+    expect(ct.channels).toHaveLength(1);
+    expect(ct.channels[0]!.text).toContain("⚠️ Held: Sam Rivera (17760356)");
+    expect(ct.channels[0]!.text).toContain("EH 40213: email and name + date of birth match; TFN differs");
+    expect(store.rows.get(17760356)).toMatchObject({ ehEmployeeId: null, lastOutcome: "existing_match" });
+    expect(store.log).toEqual([
+      { ctUserId: 17760356, at: 1_000_000, outcome: "existing_match", detail: "existing_match: EH 40213 (email, nameDob; tfn differs)" },
+    ]);
+    // A hold isn't a failed Correction cycle.
+    expect(store.rows.get(17760356)!.failureCycleCount).toBe(0);
+  });
+
+  it("names a terminated candidate in the notice", async () => {
+    const eh = fakeEh({ get: NONE, existing: { taxFileNumber: [inEh(40377, { status: "Terminated" })] } });
+    const ct = fakeCt(cloneUser());
+    await runSyncJob(job(), deps({ eh, ct }));
+    expect(ct.channels[0]!.text).toContain("EH 40377 (Terminated in EH): TFN matches");
+  });
+
+  it("sends no second notice when the same job runs again", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
+    const ct = fakeCt(cloneUser());
+
+    await runSyncJob(job(), deps({ store, eh, ct }));
+    // A redelivery after a crash that lost the rows: the check runs again, and its claim holds.
+    store.rows.clear();
+    const again = await runSyncJob(job(), deps({ store, eh, ct }));
+
+    expect(again).toMatchObject({ status: "held" });
+    expect(ct.channels).toHaveLength(1);
+    expect(eh.upserts).toHaveLength(0);
+  });
+
+  it("retries a failed notice and writes no rows until it goes out", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
+    const ct = fakeCt(cloneUser());
+    ct.failSends.set("chan-1", 1);
+
+    expect(await runSyncJob(job(), deps({ store, eh, ct }))).toMatchObject({ status: "retry" });
+    expect(store.rows.size).toBe(0);
+    expect(store.log).toHaveLength(0);
+
+    expect(await runSyncJob(job(), deps({ store, eh, ct }))).toMatchObject({ status: "held" });
+    expect(ct.channels).toHaveLength(1);
+  });
+
+  it("creates when the check is clear", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh({ get: NONE, id: 555, created: true });
+
+    const out = await runSyncJob(job(), deps({ store, eh }));
+
+    expect(out).toMatchObject({ status: "synced", ehEmployeeId: "555" });
+    expect(eh.finds).toEqual([
+      "emailAddress eq 'sam.rivera@example.com'",
+      "taxFileNumber eq '123456782'",
+      "firstName eq 'Samuel' and surname eq 'Rivera' and dateOfBirth eq datetime'1992-04-07T00:00:00'",
+    ]);
+    expect(eh.upserts).toHaveLength(1);
+    expect(eh.upserts[0]!.current).toBeNull();
+  });
+
+  it("skips the check for a pending link with no EH id (New hire, not this person)", async () => {
+    const store = fakeGateway();
+    store.pending.set(17760356, { ctUserId: 17760356, ehEmployeeId: null, confirmedAt: 1 });
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] }, id: 555, created: true });
+
+    const out = await runSyncJob(job(), deps({ store, eh }));
+
+    expect(out.status).toBe("synced");
+    expect(eh.finds).toHaveLength(0);
+    expect(eh.upserts).toHaveLength(1);
+  });
+
+  it("still runs the check for a pending link that names an EH employee", async () => {
+    const store = fakeGateway();
+    store.pending.set(17760356, { ctUserId: 17760356, ehEmployeeId: "40213", confirmedAt: 1 });
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
+
+    expect(await runSyncJob(job(), deps({ store, eh }))).toMatchObject({ status: "held" });
+    expect(eh.upserts).toHaveLength(0);
+  });
+
+  it("doesn't run on an update: the Payroll ID already finds their record", async () => {
+    const eh = fakeEh({ existing: { emailAddress: [inEh(40213)] } });
+    expect((await runSyncJob(job(), deps({ eh }))).status).toBe("synced");
+    expect(eh.finds).toHaveLength(0);
+  });
+
+  it("retries a rate-limited check without writing anything", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh({ get: NONE, find: { outcome: "retryable", status: 429, detail: "rate limited" } });
+
+    const out = await runSyncJob(job(), deps({ store, eh }));
+
+    expect(out).toMatchObject({ status: "retry" });
+    expect(out.reason).toContain("rate limited");
+    expect(eh.upserts).toHaveLength(0);
+    expect(store.rows.size).toBe(0);
   });
 });
 

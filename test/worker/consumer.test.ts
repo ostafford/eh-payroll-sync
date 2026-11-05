@@ -9,6 +9,7 @@ import { loadFieldMap } from "../../src/mapping/loader.js";
 import { EhPayrollClient } from "../../src/eh/client.js";
 import { ConnecteamClient } from "../../src/connecteam/client.js";
 import { SyncStore } from "../../src/db/store.js";
+import { deriveRosterEntry } from "../../src/status/roster.js";
 import { runSyncJob, dispatchBatch, retryDelaySeconds, type SyncDeps } from "../../src/sync/consumer.js";
 import type { SyncJob } from "../../src/sync/job.js";
 import { syntheticUser } from "../fixtures/connecteam-user.js";
@@ -26,6 +27,8 @@ interface WorldOpts {
   ehDetailedStatus?: string | null;
   /** Connecteam's user lookup answers 503, so the job asks for a retry. */
   ctDown?: boolean;
+  /** What every Pre-create check filter returns (default: nobody). */
+  existing?: Array<Record<string, unknown>>;
 }
 
 /** A tiny in-memory Employment Hero + Connecteam, driven through the real clients. */
@@ -43,7 +46,10 @@ function world(opts: WorldOpts = {}) {
     if (u.includes("/employee/unstructured/externalid/")) {
       return record ? json(200, record) : json(404, { message: "not found" });
     }
-    if (method === "POST" && u.endsWith("/employee/unstructured")) {
+    if (method === "GET" && u.includes("/employee/unstructured?$filter=")) {
+      return json(200, opts.existing ?? []);
+    }
+    if (method === "POST" && u.endsWith("/employee/unstructured?matchType=None")) {
       if (opts.ehValidationMessage) return json(400, { message: opts.ehValidationMessage });
       record = { id: 987, ...bodyJson, status: opts.ehStatus ?? "Active" };
       return json(201, {
@@ -128,6 +134,28 @@ describe("queue consumer (in workerd, real D1)", () => {
       .bind(syntheticUser.userId)
       .all<{ outcome: string }>();
     expect(audit.results.map((r) => r.outcome)).toEqual(["ok"]);
+  });
+
+  it("holds someone the Pre-create check finds already in EH, and /status shows them waiting on admin (#149)", async () => {
+    const w = world({ existing: [{ id: 40213, emailAddress: "sam.rivera@example.com", status: "Terminated" }] });
+    const out = await runSyncJob(job(), w.deps);
+
+    expect(out.status).toBe("held");
+    expect(w.record).toBeNull(); // nothing POSTed
+    expect(w.sent.dms).toEqual([]);
+    expect(w.sent.channels).toHaveLength(1);
+    expect(w.sent.channels[0]!.text).toContain("EH 40213 (Terminated in EH)");
+
+    const row = await env.DB.prepare("SELECT eh_employee_id, last_outcome FROM employee_map WHERE ct_user_id = ?")
+      .bind(syntheticUser.userId)
+      .first<{ eh_employee_id: string | null; last_outcome: string }>();
+    expect(row).toEqual({ eh_employee_id: null, last_outcome: "existing_match" });
+
+    const [entry] = (await new SyncStore(env.DB).listRosterRows()).map(deriveRosterEntry);
+    expect(entry).toMatchObject({
+      state: "waiting_on_admin",
+      reasons: ["held on approval: may already be in EH as 40213; resolve it in the setup wizard's link stage"],
+    });
   });
 
   it("detects an EH identity collision (two Connecteam users resolving to the same EH employee id)", async () => {

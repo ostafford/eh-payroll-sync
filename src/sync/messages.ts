@@ -9,6 +9,8 @@
  *      when a Correction is fixed (#71; per-client `messages.employeeSuccess`).
  *   5. Admin success notice     -> the admin channel, at the same two moments
  *      (per-client `messages.adminSuccess`).
+ *   6. Existing-match notice    -> the admin channel, when the Pre-create check
+ *      holds someone (ADR-0010).
  *
  * Messages to a person (1 and 4) end with a short "this is automated" note
  * (per-client `messages.automatedNote`), kept whole however long the rest runs.
@@ -24,6 +26,7 @@
  * anything unrecognised falls back to one generic-but-actionable instruction.
  */
 import type { EhFieldError, UnusableAnswer } from "../eh/errors.js";
+import type { ExistingMatch, MatchKey } from "./precheck.js";
 
 const MAX_LEN = 500;
 
@@ -323,6 +326,60 @@ export function collisionAlertMessage(ehEmployeeId: string, ref: PersonRef, othe
       "No employee action is possible - a payroll admin must check and separate these two records directly in Employment Hero.",
     ),
   );
+}
+
+const MATCH_KEY_NAMES: Record<MatchKey, string> = {
+  email: "email",
+  tfn: "TFN",
+  nameDob: "name + date of birth",
+};
+
+/** "EH 40213 (Terminated in EH): email and TFN match; name + date of birth differs". Key names only, never values. */
+export function existingMatchLine(m: ExistingMatch): string {
+  const names = (keys: readonly MatchKey[]) => topicList(keys.map((k) => MATCH_KEY_NAMES[k]));
+  const matched = `${names(m.matched)} ${m.matched.length === 1 ? "matches" : "match"}`;
+  const differs = m.differs.length ? `; ${names(m.differs)} ${m.differs.length === 1 ? "differs" : "differ"}` : "";
+  return `EH ${m.ehEmployeeId}${m.terminated ? " (Terminated in EH)" : ""}: ${matched}${differs}`;
+}
+
+const EXISTING_MATCH_FOOT = [
+  "➡️ To fix: re-run the setup wizard's link stage and either link them to the right employee or mark them **New hire, not this person**.",
+  "They'll sync at the next daily recheck, or straight away when their profile is edited.",
+];
+
+/**
+ * Existing-match notice -> the admin channel, when the Pre-create check holds
+ * someone (ADR-0010, #143 item 8): each possible EH match with the keys that
+ * matched or disagreed, never their values, and how to fix it. One message
+ * when it fits, otherwise numbered parts, each within the cap: the heading
+ * opens the first, "To fix" closes the last.
+ */
+export function existingMatchMessages(ref: PersonRef, matches: readonly ExistingMatch[]): string[] {
+  const head = [
+    `⚠️ Held: ${personLabel(ref)} may already be in Employment Hero, so nothing was written for them.`,
+    matches.length === 1 ? "Possible match:" : "Possible matches:",
+  ];
+  const lines = matches.map(existingMatchLine);
+  const body = (first: boolean, items: readonly string[], last: boolean) =>
+    sections(...(first ? head : []), bulletList(items), ...(last ? EXISTING_MATCH_FOOT : []));
+  const whole = body(true, lines, true);
+  if (whole.length <= MAX_LEN) return [whole];
+
+  const fits = (first: boolean, items: readonly string[], last: boolean) => PART_LABEL + body(first, items, last).length <= MAX_LEN;
+  const parts: string[][] = [[]];
+  for (const line of lines) {
+    const cur = parts.at(-1)!;
+    if (cur.length && !fits(parts.length === 1, [...cur, line], false)) parts.push([line]);
+    else cur.push(line);
+  }
+  const last = parts.at(-1)!;
+  if (!fits(parts.length === 1, last, true)) parts.push(last.length > 1 ? [last.pop()!] : []);
+
+  const n = parts.length;
+  return parts.map((items, i) => {
+    const text = body(i === 0, items, i === n - 1);
+    return clamp(i === 0 ? `(1 of ${n}) ${text}` : `(${i + 1} of ${n})\n${text}`);
+  });
 }
 
 /**

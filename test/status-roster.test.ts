@@ -35,6 +35,21 @@ describe("deriveRosterEntry", () => {
     expect(deriveRosterEntry(r).state).toBe("ready");
   });
 
+  it("is waiting_on_admin for a Held employee, naming the EH ids (#149)", () => {
+    const r = row({
+      ehEmployeeId: null,
+      lastOutcome: "existing_match",
+      latestOutcome: "existing_match",
+      latestDetail: "existing_match: EH 40213 (email) | EH 40377 terminated (tfn)",
+    });
+    expect(deriveRosterEntry(r)).toEqual({
+      ctUserId: 100,
+      ehEmployeeId: null,
+      state: "waiting_on_admin",
+      reasons: ["held on approval: may already be in EH as 40213 or 40377; resolve it in the setup wizard's link stage"],
+    });
+  });
+
   it("is waiting_on_employee for an open correction cycle, with field names and cycle count", () => {
     const r = row({
       lastOutcome: "correction",

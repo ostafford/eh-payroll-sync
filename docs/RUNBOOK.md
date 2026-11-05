@@ -649,7 +649,7 @@ Each entry is one of:
 |---|---|
 | `ready` | Employment Hero reports the record `Complete` |
 | `waiting_on_employee` | an open Correction cycle — `reasons` names the field(s), `cycleCount` counts attempts |
-| `waiting_on_admin` | synced with safe defaults, but EH still needs a payroll admin to finish something by hand |
+| `waiting_on_admin` | synced with safe defaults, but EH still needs a payroll admin to finish something by hand; or a **Held employee** — `reasons` reads "held on approval: may already be in EH as N; resolve it in the setup wizard's link stage" |
 | `broken` | a job for this person dead-lettered — `reasons` says it isn't the employee's data, points to the System alert, and says to retry by editing their profile in Connecteam; or an identity collision — `reasons` carries the collision detail |
 
 **Honest limit.** `ready` means EH **accepted** every value sent and reports the
@@ -680,6 +680,7 @@ minutes for the rest of the digest day (UTC). The Worker logs
 | **Correction message** | the employee (DM); + Direct manager on the 3rd failed attempt in a row | the employee fixes the named field(s) in Connecteam; **their next profile edit re-syncs** (see below) |
 | **Manual-follow-up notice** | alerts channel | a payroll admin finishes the item in EH by hand — foreign / working-holiday-maker tax scale, add the SMSF, enter the overseas address, **or set the award / pay-run defaults for a record EH marked `Incomplete`** — re-posted at most once per ~12 h per employee per reason-set |
 | **System alert** | alerts channel | never the employee's data: check Employment Hero / Connecteam status and the API credentials; once fixed, **edit the employee's profile in Connecteam** to sync again (or replay the job, below) — re-posted at most once per hour per employee while the fault persists |
+| **Existing-match notice** | alerts channel | "⚠️ Held…": the Pre-create check found someone about to be created who may already be in EH (ADR-0010), so **nothing was written**. It lists each possible EH employee and which keys matched or disagreed (email, TFN, name + date of birth; never the values), and "Terminated in EH" for a rehire. Re-run the setup wizard's link stage and link them, or mark them "New hire, not this person". The employee gets nothing. Re-posted at most once per ~12 h for the same candidates |
 | **Identity-collision alert** | alerts channel | two Connecteam people's EH records got merged into one (see below) — separate them directly in EH; re-posted at most once per hour per employee while it persists |
 | **Success message** | the employee (DM) | none. Sent once on their first successful sync, and once when a Correction is fixed (naming what was fixed). Off for a client with `"messages": { "employeeSuccess": false }` in `field-map.json`; on otherwise. Never sent for an ordinary edit |
 | **Admin success notice** | alerts channel | none. A ✅ naming the employee at the same two moments as the Success message; skipped when the sync lands as a Manual follow-up. Off with `"adminSuccess": false`; on otherwise. **On go-live every existing employee syncs at once**, so for a large client set it to `false` for the first run and switch it on afterwards |
@@ -695,7 +696,10 @@ ends: "This is an automated message from the Employment Hero sync." That
 default suits any client; set `"messages": { "automatedNote": "..." }` for
 their own wording, or `""` for none. Admin-channel messages don't carry it.
 
-> **Identity-collision alert.** Employment Hero's unstructured-employee endpoint
+> **Identity-collision alert.** Now a backstop: every create runs the
+> Pre-create check and goes out with `matchType=None`, which turns EH's merge
+> off (ADR-0010), so this should no longer fire. By default, Employment Hero's
+> unstructured-employee endpoint
 > matches/merges by **Tax File Number**, not by the `externalId` this sync sends
 > — so if two people ever share a TFN (a data-entry mistake, a placeholder value
 > nobody replaced), the second person's sync silently lands on and overwrites
