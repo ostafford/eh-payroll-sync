@@ -41,6 +41,8 @@ export interface RosterRow {
   /** The outcome of this person's most recent `sync_log` row, if any. */
   latestOutcome: SyncOutcomeLabel | null;
   latestDetail: string | null;
+  /** `employee_map.linked_at`: set for a Linked employee (ADR-0009). */
+  linkedAt?: number | null;
 }
 
 export interface RosterEntry {
@@ -54,6 +56,8 @@ export interface RosterEntry {
   reasons: string[];
   /** Correction-cycle count; only meaningful for waiting_on_employee. */
   cycleCount?: number;
+  /** A Linked employee (ADR-0009, #143 item 2); absent for everyone else. */
+  linked?: true;
 }
 
 /**
@@ -79,7 +83,8 @@ SELECT
   employee_map.failure_cycle_count AS failureCycleCount,
   employee_map.last_outcome AS lastOutcome,
   latest.outcome AS latestOutcome,
-  latest.detail AS latestDetail
+  latest.detail AS latestDetail,
+  employee_map.linked_at AS linkedAt
 FROM ids
 LEFT JOIN employee_map ON employee_map.ct_user_id = ids.ct_user_id
 LEFT JOIN latest ON latest.ct_user_id = ids.ct_user_id
@@ -100,7 +105,11 @@ export const DEAD_LETTER_REASON =
   "sync failed repeatedly (not the employee's data): see the System alert, and once it's fixed, edit their profile in Connecteam to retry";
 
 export function deriveRosterEntry(row: RosterRow): RosterEntry {
-  const base = { ctUserId: row.ctUserId, ehEmployeeId: row.ehEmployeeId };
+  const base = {
+    ctUserId: row.ctUserId,
+    ehEmployeeId: row.ehEmployeeId,
+    ...(row.linkedAt != null ? { linked: true as const } : {}),
+  };
 
   if (row.latestOutcome === "dead_letter") {
     return { ...base, state: "broken", reasons: [DEAD_LETTER_REASON] };
@@ -190,5 +199,6 @@ export function parseRosterRows(results: readonly unknown[]): RosterRow[] {
     lastOutcome: (r.lastOutcome as SyncOutcomeLabel | null | undefined) ?? null,
     latestOutcome: (r.latestOutcome as SyncOutcomeLabel | null | undefined) ?? null,
     latestDetail: (r.latestDetail as string | null | undefined) ?? null,
+    linkedAt: r.linkedAt === null || r.linkedAt === undefined ? null : Number(r.linkedAt),
   }));
 }

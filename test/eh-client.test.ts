@@ -79,6 +79,33 @@ describe("EhPayrollClient.findEmployees", () => {
   });
 });
 
+describe("EhPayrollClient.getEmployee", () => {
+  it("returns the employee by EH id, or null on 404", async () => {
+    const f = fakeFetch({
+      "GET /employee/unstructured/987": { status: 200, body: EMP },
+      "GET /employee/unstructured/404": { status: 404, body: { message: "Not found" } },
+    });
+    const c = new EhPayrollClient(cfg(f));
+    expect(await c.getEmployee("987")).toEqual({ outcome: "ok", data: EMP });
+    expect(await c.getEmployee("404")).toEqual({ outcome: "ok", data: null });
+  });
+});
+
+describe("EhPayrollClient.setExternalId", () => {
+  it("PUTs the Payroll ID and nothing else to the EH id (ADR-0009)", async () => {
+    const f = fakeFetch({ "PUT /employee/unstructured/40213": { status: 200, body: { id: 40213, status: "Active" } } });
+    expect(await new EhPayrollClient(cfg(f)).setExternalId("40213", "17760356")).toEqual({ outcome: "ok", data: null });
+    const [url, init] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(String(url)).toBe("https://eh.test/api/v2/business/555455/employee/unstructured/40213");
+    expect(JSON.parse(init.body as string)).toEqual({ externalId: "17760356" });
+  });
+
+  it("classifies a 503 as retryable", async () => {
+    const f = fakeFetch({ "PUT /employee/unstructured/40213": { status: 503, body: "down" } });
+    expect(await new EhPayrollClient(cfg(f)).setExternalId("40213", "1")).toMatchObject({ outcome: "retryable" });
+  });
+});
+
 describe("EhPayrollClient.upsertByExternalId", () => {
   const CREATE_ENVELOPE = { id: 987, status: "Incomplete", detailedStatus: "Basic Details are incomplete", operationType: "Create" };
 

@@ -13,7 +13,7 @@ import {
 } from "../src/sync/consumer.js";
 import { CORRECTION_NOTICE_DEDUPE_MS } from "../src/sync/notices.js";
 import type { SyncJob } from "../src/sync/job.js";
-import type { EmployeeLink, EmployeeLinkPatch, PendingLink, SyncLogEntry } from "../src/sync/gateway.js";
+import type { Baseline, EmployeeLink, EmployeeLinkPatch, PendingLink, SyncLogEntry } from "../src/sync/gateway.js";
 import type { CtResult, PayRate } from "../src/connecteam/types.js";
 
 const fieldMap = parseFieldMap(
@@ -58,6 +58,20 @@ function fakeGateway(
     pending,
     async getPendingLink(id: number) {
       return pending.get(id) ?? null;
+    },
+    async completeLink(patch: EmployeeLinkPatch, linkedAt: number, baseline: Baseline) {
+      const prev = rows.get(patch.ctUserId);
+      rows.set(patch.ctUserId, {
+        ctUserId: patch.ctUserId,
+        ehEmployeeId: patch.ehEmployeeId,
+        lastSyncedTs: patch.lastSyncedTs,
+        lastPayloadHash: patch.lastPayloadHash,
+        failureCycleCount: prev?.failureCycleCount ?? 0,
+        lastOutcome: patch.lastOutcome ?? null,
+        linkedAt,
+        baseline,
+      });
+      pending.delete(patch.ctUserId);
     },
     async bumpCounter(key: string, delta: number) {
       counters.set(key, (counters.get(key) ?? 0) + delta);
@@ -238,6 +252,7 @@ function deps(over: Partial<SyncDeps> & { now?: () => number } = {}): SyncDeps {
     store: over.store ?? fakeGateway(),
     fieldMap: over.fieldMap ?? fieldMap,
     adminChannelId: "chan-1",
+    baselineKey: "test-baseline-key",
     now: over.now ?? (() => 1_000_000),
   };
 }
@@ -527,15 +542,6 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
     expect(eh.upserts).toHaveLength(1);
   });
 
-  it("still runs the check for a pending link that names an EH employee", async () => {
-    const store = fakeGateway();
-    store.pending.set(17760356, { ctUserId: 17760356, ehEmployeeId: "40213", confirmedAt: 1 });
-    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
-
-    expect(await runSyncJob(job(), deps({ store, eh }))).toMatchObject({ status: "held" });
-    expect(eh.upserts).toHaveLength(0);
-  });
-
   it("doesn't run on an update: the Payroll ID already finds their record", async () => {
     const eh = fakeEh({ existing: { emailAddress: [inEh(40213)] } });
     expect((await runSyncJob(job(), deps({ eh }))).status).toBe("synced");
@@ -552,6 +558,303 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
     expect(out.reason).toContain("rate limited");
     expect(eh.upserts).toHaveLength(0);
     expect(store.rows.size).toBe(0);
+  });
+});
+
+describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
+  const ME = 17760356;
+  const TARGET = "40213";
+
+  /**
+   * A small stateful EH: one hand-entered employee (TARGET) and, optionally,
+   * others. Records every call, so a test can prove the only write was the
+   * Payroll ID.
+   */
+  function linkEh(employees: Record<string, Record<string, unknown>> = { [TARGET]: { externalId: null } }) {
+    const db = new Map<string, Record<string, unknown>>(
+      Object.entries(employees).map(([id, r]) => [id, { id: Number(id), status: "Active", ...r }]),
+    );
+    const calls: string[] = [];
+    const puts: Array<{ id: string; body: Record<string, unknown> }> = [];
+    const fail = { put: 0 };
+    return {
+      db,
+      calls,
+      puts,
+      fail,
+      async getByExternalId(externalId: string) {
+        calls.push(`GET externalid/${externalId}`);
+        return { outcome: "ok", data: [...db.values()].find((r) => r.externalId === externalId) ?? null };
+      },
+      async getEmployee(id: string) {
+        calls.push(`GET ${id}`);
+        return { outcome: "ok", data: db.get(id) ?? null };
+      },
+      async setExternalId(id: string, externalId: string) {
+        calls.push(`PUT ${id}`);
+        if (fail.put > 0) {
+          fail.put--;
+          return { outcome: "retryable", status: 503, detail: "down" };
+        }
+        puts.push({ id, body: { externalId } });
+        db.set(id, { ...db.get(id)!, externalId });
+        return { outcome: "ok", data: null };
+      },
+      async upsertByExternalId() {
+        calls.push("UPSERT");
+        throw new Error("a link must not run the full upsert");
+      },
+      async findEmployees() {
+        calls.push("FIND");
+        throw new Error("a link must not run the Pre-create check");
+      },
+    };
+  }
+
+  function linking(seed: Partial<EmployeeLink> = {}) {
+    const store = fakeGateway(seed);
+    store.pending.set(ME, { ctUserId: ME, ehEmployeeId: TARGET, confirmedAt: 1 });
+    return store;
+  }
+
+  // Both success messages on, so a test can show the link sends neither.
+  const loud = parseFieldMap({ ...fieldMap, messages: { employeeSuccess: true, adminSuccess: true } });
+  const run = (store: ReturnType<typeof linking>, eh: ReturnType<typeof linkEh>, ct: CtFake, j = job()) =>
+    runSyncJob(j, deps({ store, eh: eh as unknown as SyncDeps["eh"], ct, fieldMap: loud }));
+
+  it("sets only the Payroll ID, records the Linked employee and posts one Link notice", async () => {
+    const store = linking();
+    const eh = linkEh();
+    const ct = fakeCt(cloneUser());
+
+    const out = await run(store, eh, ct);
+
+    expect(out).toEqual({ status: "synced", reason: "linked: Payroll ID only", ehEmployeeId: TARGET });
+    // The only EH write is a PUT with just the Payroll ID.
+    expect(eh.puts).toEqual([{ id: TARGET, body: { externalId: String(ME) } }]);
+    expect(eh.calls.filter((c) => !c.startsWith("GET"))).toEqual([`PUT ${TARGET}`]);
+
+    const row = store.rows.get(ME)!;
+    expect(row).toMatchObject({ ehEmployeeId: TARGET, lastOutcome: "ok", lastSyncedTs: 1000, linkedAt: 1_000_000 });
+    expect(row.lastPayloadHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(store.pending.has(ME)).toBe(false);
+    expect(store.log).toEqual([{ ctUserId: ME, at: 1_000_000, outcome: "ok", detail: "linked: Payroll ID only" }]);
+
+    // One Link notice; no employee DM, no Success message, no Admin success notice.
+    expect(ct.dms).toEqual([]);
+    expect(ct.channels).toEqual([
+      {
+        id: "chan-1",
+        text:
+          "🔗 Sam Rivera (17760356) is now linked to Employment Hero employee 40213.\n\n" +
+          "Only the Payroll ID was set. From now on, only what they change in Connecteam is synced.",
+      },
+    ]);
+  });
+
+  it("stores a Baseline of fingerprints and the key id, never a value", async () => {
+    const store = linking();
+    await run(store, linkEh(), fakeCt(cloneUser()));
+
+    const baseline = store.rows.get(ME)!.baseline!;
+    expect(baseline.keyId).toMatch(/^[0-9a-f]{16}$/);
+    expect(Object.keys(baseline.units)).toEqual(
+      expect.arrayContaining(["firstName", "taxFileNumber", "bankAccount1", "residentialAddress", "super", "taxDeclaration"]),
+    );
+    for (const fp of Object.values(baseline.units)) expect(fp).toMatch(/^[0-9a-f]{64}$/);
+    const stored = JSON.stringify(baseline);
+    for (const value of ["123456782", "Samuel", "Rivera", "sam.rivera@example.com", "00123456", "012345", "Coburg", "HOS0100AU"]) {
+      expect(stored).not.toContain(value);
+    }
+  });
+
+  it("writes nothing when the EH employee already carries this Payroll ID", async () => {
+    const store = linking();
+    const eh = linkEh({ [TARGET]: { externalId: String(ME) } });
+    const ct = fakeCt(cloneUser());
+
+    const out = await run(store, eh, ct);
+
+    expect(out).toMatchObject({ status: "synced", ehEmployeeId: TARGET });
+    expect(eh.puts).toEqual([]);
+    expect(store.rows.get(ME)).toMatchObject({ ehEmployeeId: TARGET, linkedAt: 1_000_000 });
+    expect(ct.channels).toHaveLength(1);
+    expect(ct.channels[0]!.text).toContain("is now linked");
+  });
+
+  it("writes nothing and alerts the admin when the EH employee has a different Payroll ID", async () => {
+    const store = linking();
+    const eh = linkEh({ [TARGET]: { externalId: "99999" } });
+    const ct = fakeCt(cloneUser());
+
+    const out = await run(store, eh, ct);
+
+    expect(out).toEqual({ status: "collision", reason: "can't link: EH employee 40213 has a different Payroll ID" });
+    expect(eh.puts).toEqual([]);
+    expect(store.rows.has(ME)).toBe(false);
+    expect(store.pending.has(ME)).toBe(true);
+    expect(store.log).toEqual([
+      { ctUserId: ME, at: 1_000_000, outcome: "collision", detail: "can't link: EH employee 40213 has a different Payroll ID" },
+    ]);
+    expect(ct.dms).toEqual([]);
+    expect(ct.channels).toHaveLength(1);
+    expect(ct.channels[0]!.text).toContain("Can't link Sam Rivera (17760356) to Employment Hero employee 40213");
+    expect(ct.channels[0]!.text).toContain("already has a different Payroll ID, so it belongs to someone else");
+    expect(ct.channels[0]!.text).not.toContain("99999");
+  });
+
+  it("writes nothing when the Payroll ID is already on a different EH employee", async () => {
+    const store = linking();
+    const eh = linkEh({ [TARGET]: { externalId: null }, "40500": { externalId: String(ME) } });
+    const ct = fakeCt(cloneUser());
+
+    expect(await run(store, eh, ct)).toMatchObject({ status: "collision" });
+    expect(eh.puts).toEqual([]);
+    expect(store.log[0]!.detail).toBe("can't link: EH employee 40213 isn't theirs: the Payroll ID is on EH employee 40500");
+  });
+
+  it("writes nothing when the EH employee is already linked to someone else in the sync", async () => {
+    const store = linking();
+    store.rows.set(555, { ctUserId: 555, ehEmployeeId: TARGET, lastSyncedTs: 1, failureCycleCount: 0, lastPayloadHash: null });
+    const eh = linkEh();
+    const ct = fakeCt(cloneUser());
+
+    expect(await run(store, eh, ct)).toMatchObject({ status: "collision" });
+    expect(eh.calls).toEqual([]);
+    expect(ct.channels[0]!.text).toContain("already linked to Connecteam user 555");
+  });
+
+  it("writes nothing when EH no longer has the employee", async () => {
+    const store = linking();
+    const eh = linkEh({});
+    expect(await run(store, eh, fakeCt(cloneUser()))).toMatchObject({
+      status: "collision",
+      reason: "can't link: EH employee 40213 no longer exists",
+    });
+    expect(eh.puts).toEqual([]);
+  });
+
+  it("posts a blocked link's alert once, however often the job re-runs", async () => {
+    const store = linking();
+    const eh = linkEh({ [TARGET]: { externalId: "99999" } });
+    const ct = fakeCt(cloneUser());
+    await run(store, eh, ct);
+    await run(store, eh, ct, job({ eventTimestamp: 2000 }));
+    expect(ct.channels).toHaveLength(1);
+    expect(store.log).toHaveLength(2);
+  });
+
+  describe("a retried job writes once and sends one Link notice (ADR-0007)", () => {
+    it("after a failed Link notice: the retry finds the Payroll ID set and doesn't write again", async () => {
+      const store = linking();
+      const eh = linkEh();
+      const ct = fakeCt(cloneUser());
+      ct.failSends.set("chan-1", 1);
+
+      expect(await run(store, eh, ct)).toMatchObject({ status: "retry", reason: "connecteam send failed: link" });
+      expect(store.rows.has(ME)).toBe(false);
+      expect(store.pending.has(ME)).toBe(true);
+
+      expect(await run(store, eh, ct)).toMatchObject({ status: "synced" });
+      expect(eh.puts).toHaveLength(1);
+      expect(ct.channels).toHaveLength(1);
+      expect(store.log).toHaveLength(1);
+    });
+
+    it("after a crash past the Link notice: the retry keeps its claim", async () => {
+      const store = linking();
+      const eh = linkEh();
+      const ct = fakeCt(cloneUser());
+      const complete = store.completeLink.bind(store);
+      store.completeLink = vi.fn().mockRejectedValueOnce(new Error("D1 down")).mockImplementation(complete);
+
+      await expect(run(store, eh, ct)).rejects.toThrow("D1 down");
+      expect(await run(store, eh, ct)).toMatchObject({ status: "synced" });
+
+      expect(eh.puts).toHaveLength(1);
+      expect(ct.channels).toHaveLength(1);
+      expect(store.rows.get(ME)).toMatchObject({ linkedAt: 1_000_000 });
+    });
+
+    it("after a failed write: nothing is recorded until the PUT goes through", async () => {
+      const store = linking();
+      const eh = linkEh();
+      eh.fail.put = 1;
+      const ct = fakeCt(cloneUser());
+
+      expect(await run(store, eh, ct)).toMatchObject({ status: "retry" });
+      expect(ct.channels).toHaveLength(0);
+      expect(store.rows.has(ME)).toBe(false);
+
+      expect(await run(store, eh, ct)).toMatchObject({ status: "synced" });
+      expect(eh.puts).toHaveLength(1);
+      expect(ct.channels).toHaveLength(1);
+    });
+
+    it("once linked, a redelivery or an identical edit does nothing", async () => {
+      const store = linking();
+      const eh = linkEh();
+      const ct = fakeCt(cloneUser());
+      await run(store, eh, ct);
+      const calls = eh.calls.length;
+
+      expect(await run(store, eh, ct)).toMatchObject({ status: "skipped", reason: "stale or duplicate event" });
+      expect(await run(store, eh, ct, job({ reason: "profile_update", eventTimestamp: 2000 }))).toMatchObject({
+        status: "skipped",
+        reason: "identical to the last processed state",
+      });
+      expect(eh.calls).toHaveLength(calls);
+      expect(ct.channels).toHaveLength(1);
+    });
+  });
+
+  it("never sends a Linked employee a full-profile sync", async () => {
+    const store = linking();
+    const eh = linkEh();
+    const ct = fakeCt(cloneUser());
+    await run(store, eh, ct);
+    const calls = eh.calls.length;
+
+    const edited = cloneUser();
+    edited.customFields.find((f) => f.customFieldId === 25145108)!.value = "Team Lead";
+    const out = await runSyncJob(
+      job({ reason: "profile_update", eventTimestamp: 2000 }),
+      deps({ store, eh: eh as unknown as SyncDeps["eh"], ct: fakeCt(edited), fieldMap: loud }),
+    );
+
+    expect(out).toMatchObject({ status: "skipped" });
+    expect(eh.calls).toHaveLength(calls);
+  });
+
+  it("links a Held employee once the admin confirms their link", async () => {
+    const store = linking({ ctUserId: ME, ehEmployeeId: null, lastSyncedTs: 500, lastOutcome: "existing_match" });
+    const eh = linkEh();
+
+    expect(await run(store, eh, fakeCt(cloneUser()))).toMatchObject({ status: "synced", ehEmployeeId: TARGET });
+    expect(store.rows.get(ME)).toMatchObject({ linkedAt: 1_000_000, lastOutcome: "ok" });
+  });
+
+  it("links even when the pack has a mapping issue: nothing from the pack is sent", async () => {
+    const user = cloneUser();
+    user.customFields = user.customFields.filter((f) => f.customFieldId !== 42923222); // no TFN (required)
+    const store = linking();
+    const eh = linkEh();
+    const ct = fakeCt(user);
+
+    expect(await run(store, eh, ct)).toMatchObject({ status: "synced" });
+    expect(ct.dms).toEqual([]);
+    expect(store.rows.get(ME)!.baseline!.units).not.toHaveProperty("taxFileNumber");
+  });
+
+  it("ignores a pending link for someone already synced the normal way", async () => {
+    const store = linking({ ctUserId: ME, ehEmployeeId: "987", lastSyncedTs: 500, lastOutcome: "ok" });
+    const eh = fakeEh();
+
+    const out = await runSyncJob(job(), deps({ store, eh }));
+
+    expect(out.status).toBe("synced");
+    expect(eh.upserts).toHaveLength(1);
+    expect(store.rows.get(ME)!.linkedAt).toBeUndefined();
   });
 });
 

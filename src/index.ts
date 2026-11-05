@@ -131,6 +131,7 @@ function buildDeps(env: Env): SyncDeps {
     store,
     fieldMap: loadFieldMap(env.FIELD_MAP_CLIENT),
     adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID,
+    baselineKey: env.BASELINE_KEY,
     ...(env.INTEGRATOR_ALERT_URL
       ? {
           onSystemAlert: async ({ ctUserId, reason }: { ctUserId: number; reason: string }) => {

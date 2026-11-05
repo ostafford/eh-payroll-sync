@@ -11,6 +11,9 @@
  *      (per-client `messages.adminSuccess`).
  *   6. Existing-match notice    -> the admin channel, when the Pre-create check
  *      holds someone (ADR-0010).
+ *   7. Link notice              -> the admin channel, when a first approval
+ *      links a Pre-existing employee (ADR-0009), or a System alert when a
+ *      confirmed link can't be made.
  *
  * Messages to a person (1 and 4) end with a short "this is automated" note
  * (per-client `messages.automatedNote`), kept whole however long the rest runs.
@@ -379,6 +382,52 @@ export function existingMatchMessages(ref: PersonRef, matches: readonly Existing
     matches.length === 1 ? "Possible match:" : "Possible matches:",
   ];
   return numberedParts(head, matches.map(existingMatchLine), EXISTING_MATCH_FOOT, "•", MAX_PARTS);
+}
+
+/**
+ * Link notice -> the admin channel, when a Pre-existing employee's first
+ * approval links them (ADR-0009, #143 item 6). It replaces the Admin success
+ * notice; the employee gets nothing. The name isn't bold, as it would be on
+ * the first line (see the module doc).
+ */
+export function linkNoticeMessage(ref: PersonRef, ehEmployeeId: string): string {
+  return clamp(
+    sections(
+      `🔗 ${personLabel(ref)} is now linked to Employment Hero employee ${ehEmployeeId}.`,
+      "Only the Payroll ID was set. From now on, only what they change in Connecteam is synced.",
+    ),
+  );
+}
+
+/** Why a confirmed link couldn't be made. EH ids and Connecteam ids only, never a value. */
+export type LinkBlock =
+  | { kind: "different_payroll_id" }
+  | { kind: "payroll_id_elsewhere"; ehEmployeeId: string }
+  | { kind: "linked_in_sync"; otherCtUserId: number }
+  | { kind: "not_found" };
+
+function linkBlockReason(ehEmployeeId: string, b: LinkBlock): string {
+  switch (b.kind) {
+    case "different_payroll_id":
+      return `Employment Hero employee ${ehEmployeeId} already has a different Payroll ID, so it belongs to someone else.`;
+    case "payroll_id_elsewhere":
+      return `Their Payroll ID is already on a different Employment Hero employee, ${b.ehEmployeeId}.`;
+    case "linked_in_sync":
+      return `Employment Hero employee ${ehEmployeeId} is already linked to Connecteam user ${b.otherCtUserId}.`;
+    case "not_found":
+      return `Employment Hero has no employee ${ehEmployeeId} any more.`;
+  }
+}
+
+/** System alert -> the admin channel, when a confirmed link can't be made: nothing was written. */
+export function linkBlockedMessage(ref: PersonRef, ehEmployeeId: string, block: LinkBlock): string {
+  return clamp(
+    sections(
+      `Can't link ${personLabel(ref)} to Employment Hero employee ${ehEmployeeId}, so nothing was written for them.`,
+      linkBlockReason(ehEmployeeId, block),
+      "➡️ To fix: check both records in Employment Hero, then re-run the setup wizard's link stage for them.",
+    ),
+  );
 }
 
 /**
