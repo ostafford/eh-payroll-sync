@@ -62,6 +62,10 @@ EH Payroll's `externalId` field on an employee (shown in the EH UI as "Payroll I
 A person who already has an EH employee record, created outside the sync (e.g. entered by hand and already paid), before the client's go-live. An admin confirms each one's match at setup. On their approval the sync only links them (sets their Payroll ID) and writes nothing else; their later Connecteam edits sync as normal. Anyone hired after go-live is not pre-existing.
 _Avoid_: legacy employee, manual employee
 
+**Link list**:
+The confirmed pairs of a Connecteam user and an existing EH employee, one per Pre-existing employee, which the admin approves during setup. A pair waits on the list until that person's onboarding pack is approved, and only then is the link made. Anyone left off the list is treated as a new hire.
+_Avoid_: match list, mapping
+
 **In-scope fields**:
 Everything the employee can enter in the onboarding pack: personal, address, emergency contact, structural fields EH needs (name, start date, employment type, job title), **and** tax file number, bank account(s), superannuation, and tax-declaration answers. All flow Connecteam → EH via the API — no EH self-setup (see ADR-0001). Pay rate / award / classification stay a manual EH task for v1.
 
