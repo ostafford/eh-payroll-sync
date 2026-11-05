@@ -200,6 +200,26 @@ export class SyncStore implements SyncGateway, LinkGateway {
     await this.#db.delete(pendingLink).where(eq(pendingLink.ctUserId, ctUserId));
   }
 
+  async completeLink(patch: EmployeeLinkPatch, linkedAt: number, baseline: Baseline): Promise<void> {
+    const now = Date.now();
+    const linked = {
+      ehEmployeeId: patch.ehEmployeeId,
+      lastSyncedTs: patch.lastSyncedTs,
+      lastPayloadHash: patch.lastPayloadHash,
+      lastOutcome: patch.lastOutcome ?? null,
+      linkedAt,
+      baseline: JSON.stringify(baseline),
+      updatedAt: now,
+    };
+    await this.#db.batch([
+      this.#db
+        .insert(employeeMap)
+        .values({ ctUserId: patch.ctUserId, ...linked })
+        .onConflictDoUpdate({ target: employeeMap.ctUserId, set: linked }),
+      this.#db.delete(pendingLink).where(eq(pendingLink.ctUserId, patch.ctUserId)),
+    ]);
+  }
+
   async markLinked(ctUserId: number, linkedAt: number, baseline: Baseline): Promise<void> {
     await this.#db
       .update(employeeMap)

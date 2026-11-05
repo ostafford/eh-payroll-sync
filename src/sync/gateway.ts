@@ -139,6 +139,13 @@ export interface LinkGateway {
   /** Add a pending link, or replace this person's existing one. */
   savePendingLink(link: PendingLink): Promise<void>;
   deletePendingLink(ctUserId: number): Promise<void>;
+  /**
+   * Record a link made on a first approval, in one D1 batch: the
+   * `employee_map` row (saved as {@link SyncGateway.saveEmployeeLink} would),
+   * marked linked with its first Baseline, and the `pending_link` row
+   * deleted. One batch, so no re-run finds the person synced but not linked.
+   */
+  completeLink(patch: EmployeeLinkPatch, linkedAt: number, baseline: Baseline): Promise<void>;
   /** Mark an existing `employee_map` row as a Linked employee, with their first Baseline. */
   markLinked(ctUserId: number, linkedAt: number, baseline: Baseline): Promise<void>;
   /** Replace a Linked employee's Baseline (it rolls forward unit by unit, ADR-0009). */

@@ -44,11 +44,15 @@ import {
   adminFirstSyncMessage,
   adminCorrectionFixedMessage,
   existingMatchMessages,
+  linkNoticeMessage,
+  linkBlockedMessage,
+  type LinkBlock,
   type PersonRef,
 } from "./messages.js";
 import { runPreCreateCheck, existingMatchDetail, type ExistingMatch } from "./precheck.js";
 import { advanceCycle, directManagerUserId, MANAGER_ESCALATION_CYCLE } from "./cycles.js";
 import { payloadHash } from "./canonical.js";
+import { takeBaseline } from "./baseline.js";
 import { logEvent } from "../log.js";
 import {
   noticeKey,
@@ -66,9 +70,14 @@ export interface SyncDeps {
     ConnecteamClient,
     "getUser" | "getPayRate" | "sendDirectMessage" | "sendChannelMessage"
   >;
-  eh: Pick<EhPayrollClient, "upsertByExternalId" | "getByExternalId" | "findEmployees">;
-  /** `getPendingLink`: a "New hire, not this person" row skips the Pre-create check. */
-  store: SyncGateway & Pick<LinkGateway, "getPendingLink">;
+  eh: Pick<EhPayrollClient, "upsertByExternalId" | "getByExternalId" | "findEmployees" | "getEmployee" | "setExternalId">;
+  /**
+   * `getPendingLink`: a confirmed link is made on the first approval, and a
+   * "New hire, not this person" row skips the Pre-create check.
+   */
+  store: SyncGateway & Pick<LinkGateway, "getPendingLink" | "completeLink">;
+  /** `BASELINE_KEY`: keys a Linked employee's Baseline fingerprints (ADR-0009). */
+  baselineKey: string;
   fieldMap: FieldMap;
   /** Connecteam conversation id for the "EH Sync Alerts" channel. */
   adminChannelId: string;
@@ -191,6 +200,29 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     return { status: "skipped", reason: "identical to the last processed state" };
   }
 
+  // A Linked employee never gets a full-profile sync (ADR-0009): that would
+  // overwrite what EH holds for them. Until the changed-units sync (#151)
+  // exists, their edits write nothing.
+  if (link?.linkedAt) return { status: "skipped", reason: "linked employee: changed-units sync not built yet" };
+
+  // A confirmed link (ADR-0009): someone never synced before, with a
+  // pending link to an EH employee, is linked on this approval. Only the
+  // Payroll ID is written; nothing else about them reaches EH.
+  const pending = await deps.store.getPendingLink(ctUserId);
+  if (pending?.ehEmployeeId && !hasSyncedBefore(link)) {
+    return linkOnApproval(deps, {
+      person: { ctUserId, firstName: user.firstName, lastName: user.lastName },
+      link,
+      ehEmployeeId: pending.ehEmployeeId,
+      externalId: mapped.externalId,
+      payload: mapped.payload,
+      unmapped: mapped.issues.map((i) => i.ehField),
+      hash,
+      eventTimestamp,
+      now: now(),
+    });
+  }
+
   let ehEmployeeId = link?.ehEmployeeId ?? undefined;
   let decision: SyncDecision;
 
@@ -228,7 +260,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     // About to create: no EH record carries this Payroll ID. Run the
     // Pre-create check first (ADR-0010) unless the admin already confirmed
     // them as "New hire, not this person" (a pending link with no EH id).
-    const confirmedNewHire = current === null && (await deps.store.getPendingLink(ctUserId))?.ehEmployeeId === null;
+    const confirmedNewHire = current === null && pending?.ehEmployeeId === null;
     if (current === null && !confirmedNewHire) {
       const check = await runPreCreateCheck(deps.eh, mapped.payload);
       if (check.outcome !== "ok") return ehRetry(check);
@@ -483,6 +515,143 @@ async function holdExisting(
   return { status: "held", reason: detail };
 }
 
+/**
+ * Make a confirmed link on the first approval (ADR-0009, #150): set the
+ * Payroll ID on the chosen EH employee and nothing else, then record them as
+ * a Linked employee with their first Baseline. The link counts as their first
+ * sync. Its one message is the Link notice: no Success message, no Admin
+ * success notice, nothing to the employee.
+ *
+ * Every step is safe to re-run (ADR-0007):
+ *   - the EH employee is re-checked first, so once a retry finds this Payroll
+ *     ID already on it, it skips the write;
+ *   - the Link notice is claimed before it goes out, and sent before the rows,
+ *     so a crash after it doesn't post it twice;
+ *   - the `employee_map` row, `linked_at`, Baseline and the `pending_link`
+ *     delete are one D1 batch, so no re-run can find the person synced but
+ *     not linked (which would send them a full sync).
+ *
+ * A link that can't be made writes nothing to EH and posts a System alert
+ * (claimed the same way). The pending link stays, for the admin to fix in
+ * the link stage.
+ */
+async function linkOnApproval(
+  deps: SyncDeps,
+  linking: {
+    person: PersonRef;
+    link: EmployeeLink | null;
+    ehEmployeeId: string;
+    externalId: string;
+    payload: Record<string, unknown>;
+    /** EH fields with a mapping issue: baselined as unmapped, so a later fix is sent. */
+    unmapped: readonly string[];
+    hash: string;
+    eventTimestamp: number;
+    now: number;
+  },
+): Promise<SyncJobOutcome> {
+  const { person, ehEmployeeId, externalId } = linking;
+  const { ctUserId } = person;
+  // Before any write, so a missing key can't leave a link without a Baseline.
+  const baseline = await takeBaseline(linking.payload, deps.fieldMap, deps.baselineKey, linking.unmapped);
+
+  const other = await deps.store.findByEhEmployeeId(ehEmployeeId);
+  if (other !== null && other !== ctUserId) {
+    return linkBlocked(deps, linking, { kind: "linked_in_sync", otherCtUserId: other });
+  }
+
+  const byPayrollId = await deps.eh.getByExternalId(externalId);
+  if (byPayrollId.outcome !== "ok") return ehRetry(byPayrollId);
+  if (byPayrollId.data && String(byPayrollId.data.id) !== ehEmployeeId) {
+    return linkBlocked(deps, linking, { kind: "payroll_id_elsewhere", ehEmployeeId: String(byPayrollId.data.id) });
+  }
+
+  // When the EH employee already carries this Payroll ID (a retry after the
+  // write, or set by hand), they're already synced: nothing to write. A
+  // marker set after our own write tells the two apart for the Link notice.
+  const wroteKey = `link_put:${ctUserId}:${ehEmployeeId}`;
+  if (!byPayrollId.data) {
+    const target = await deps.eh.getEmployee(ehEmployeeId);
+    if (target.outcome !== "ok") return ehRetry(target);
+    if (!target.data) return linkBlocked(deps, linking, { kind: "not_found" });
+    const theirs = String(target.data.externalId ?? "").trim();
+    if (theirs && theirs !== externalId) return linkBlocked(deps, linking, { kind: "different_payroll_id" });
+
+    if (!theirs) {
+      const put = await deps.eh.setExternalId(ehEmployeeId, externalId);
+      // A rejection won't change on a retry, so it goes to the admin now.
+      if (put.outcome === "validation") return linkBlocked(deps, linking, { kind: "payroll_id_rejected" });
+      if (put.outcome !== "ok") return ehRetry(put);
+      await deps.store.setMarker(wroteKey, linking.now);
+    }
+  }
+  const weSetIt = ((await deps.store.readMeta([wroteKey]))[wroteKey] ?? 0) > 0;
+
+  const key = await noticeKey("link", ctUserId, [ehEmployeeId]);
+  if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, linking.now)) {
+    const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
+      deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt)),
+    );
+    if (!sent) return sendFailed("link");
+  }
+
+  await deps.store.completeLink(
+    { ctUserId, ehEmployeeId, lastSyncedTs: linking.eventTimestamp, lastPayloadHash: linking.hash, lastOutcome: "ok" },
+    linking.now,
+    baseline,
+  );
+  if ((linking.link?.failureCycleCount ?? 0) > 0) await deps.store.setFailureCount(ctUserId, 0);
+  await deps.store.appendSyncLog({ ctUserId, at: linking.now, outcome: "ok", detail: LINKED_DETAIL });
+  return { status: "synced", reason: LINKED_DETAIL, ehEmployeeId };
+}
+
+/** The `sync_log` detail of a link (#143 item 2). */
+export const LINKED_DETAIL = "linked: Payroll ID only";
+
+/**
+ * A confirmed link that can't be made: nothing written to EH, one claimed
+ * System alert, and a `collision` audit row (EH and Connecteam ids only).
+ * Like a collision, no `employee_map` row is saved.
+ */
+async function linkBlocked(
+  deps: SyncDeps,
+  blocked: { person: PersonRef; ehEmployeeId: string; now: number },
+  block: LinkBlock,
+): Promise<SyncJobOutcome> {
+  const { ctUserId } = blocked.person;
+  const detail = linkBlockedDetail(blocked.ehEmployeeId, block);
+  // Keyed by what it says, so a later edit doesn't repost it within the window.
+  const key = await noticeKey("link_blocked", ctUserId, [detail]);
+  if (await shouldPostNotice(deps.store, key, FOLLOW_UP_NOTICE_DEDUPE_MS, blocked.now)) {
+    const sent = await sendClaimed(deps.store, key, ctUserId, "link_blocked", () =>
+      deps.ct.sendChannelMessage(deps.adminChannelId, linkBlockedMessage(blocked.person, blocked.ehEmployeeId, block)),
+    );
+    if (!sent) return sendFailed("link_blocked");
+  }
+  await deps.store.appendSyncLog({ ctUserId, at: blocked.now, outcome: "collision", detail });
+  return { status: "collision", reason: detail };
+}
+
+/** e.g. `can't link: EH employee 40213 has a different Payroll ID`. Ids only. */
+export function linkBlockedDetail(ehEmployeeId: string, b: LinkBlock): string {
+  return `can't link: EH employee ${ehEmployeeId} ${linkBlockedWhy(b)}`;
+}
+
+function linkBlockedWhy(b: LinkBlock): string {
+  switch (b.kind) {
+    case "different_payroll_id":
+      return "has a different Payroll ID";
+    case "payroll_id_elsewhere":
+      return `isn't theirs: the Payroll ID is on EH employee ${b.ehEmployeeId}`;
+    case "linked_in_sync":
+      return `is already linked to Connecteam user ${b.otherCtUserId}`;
+    case "not_found":
+      return "no longer exists";
+    case "payroll_id_rejected":
+      return "rejected the Payroll ID";
+  }
+}
+
 /** Minimal shape of a queue message / batch, so batch routing is runtime-agnostic. */
 export interface QueueMessageLike<B> {
   body: B;
@@ -660,7 +829,6 @@ type SuccessKind = { kind: "first" } | { kind: "fixed"; topics: string[] };
  * person's state BEFORE this job, or null for an ordinary edit:
  * - an open Correction cycle -> "fixed", with the topics it asked about
  * - never synced before -> "first"
- * A row saved before `lastOutcome` existed counts as synced if it has an EH id.
  */
 async function successKind(
   link: EmployeeLink | null,
@@ -670,10 +838,15 @@ async function successKind(
     const fields = correctionFieldsFromAudit(await store.latestCorrectionDetail(link.ctUserId));
     return { kind: "fixed", topics: correctionTopics(fields.map((field) => ({ field, reason: "" }))) };
   }
-  const syncedBefore =
+  return hasSyncedBefore(link) ? null : { kind: "first" };
+}
+
+/** Whether EH has accepted a sync for this person. A row saved before `lastOutcome` existed counts if it has an EH id. */
+function hasSyncedBefore(link: EmployeeLink | null): boolean {
+  return (
     link !== null &&
-    (link.lastOutcome != null ? SYNCED_BEFORE.includes(link.lastOutcome) : link.ehEmployeeId !== null);
-  return syncedBefore ? null : { kind: "first" };
+    (link.lastOutcome != null ? SYNCED_BEFORE.includes(link.lastOutcome) : link.ehEmployeeId !== null)
+  );
 }
 
 function employeeSuccessText(s: SuccessKind, note: string): string {
