@@ -22,7 +22,7 @@ import type { FieldMap } from "../mapping/schema.js";
 import { applyFieldMap, leftOutBy, type ConnecteamUser as MappingUser } from "../mapping/apply.js";
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { CtResult, PayRate } from "../connecteam/types.js";
-import type { EhPayrollClient } from "../eh/client.js";
+import type { EhPayrollClient, EhResult } from "../eh/client.js";
 import type { EhEmployee } from "../eh/types.js";
 import {
   decide,
@@ -201,8 +201,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   let current: EhEmployee | null | undefined;
   if (mapped.issues.length === 0) {
     const found = await deps.eh.getByExternalId(mapped.externalId);
-    if (found.outcome === "retryable") return { status: "retry", reason: `employment hero unavailable: ${found.detail}` };
-    if (found.outcome !== "ok") return { status: "retry", reason: `employment hero error ${found.status}` };
+    if (found.outcome !== "ok") return ehRetry(found);
     current = found.data;
     mapped = applyFieldMap(user as unknown as MappingUser, deps.fieldMap, { payRate, ehRecord: current });
   }
@@ -232,8 +231,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     const confirmedNewHire = current === null && (await deps.store.getPendingLink(ctUserId))?.ehEmployeeId === null;
     if (current === null && !confirmedNewHire) {
       const check = await runPreCreateCheck(deps.eh, mapped.payload);
-      if (check.outcome === "retryable") return { status: "retry", reason: `employment hero unavailable: ${check.detail}` };
-      if (check.outcome !== "ok") return { status: "retry", reason: `employment hero error ${check.status}` };
+      if (check.outcome !== "ok") return ehRetry(check);
       if (check.data.length > 0) {
         return holdExisting(deps, {
           person: { ctUserId, firstName: user.firstName, lastName: user.lastName },
@@ -250,8 +248,8 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     // Match order: stored link -> externalId (both handled by upsertByExternalId).
     // A create goes out with EH's own merge off (`matchType=None`).
     const write = await deps.eh.upsertByExternalId(mapped.externalId, mapped.payload, current);
-    if (write.outcome === "retryable") return { status: "retry", reason: `employment hero unavailable: ${write.detail}` };
-    if (write.outcome === "client_error") return { status: "retry", reason: `employment hero error ${write.status}` };
+    // A validation failure isn't retried: it's the employee's to fix (decide below).
+    if (write.outcome === "retryable" || write.outcome === "client_error") return ehRetry(write);
 
     let readBack: ReadBackResult | undefined;
     if (write.outcome === "ok") {
@@ -684,6 +682,13 @@ function employeeSuccessText(s: SuccessKind, note: string): string {
 
 function adminSuccessText(s: SuccessKind, person: PersonRef): string {
   return s.kind === "first" ? adminFirstSyncMessage(person) : adminCorrectionFixedMessage(person, s.topics);
+}
+
+/** The retry for a failed Employment Hero call. */
+function ehRetry(res: Exclude<EhResult<unknown>, { outcome: "ok" }>): SyncJobOutcome {
+  return res.outcome === "retryable"
+    ? { status: "retry", reason: `employment hero unavailable: ${res.detail}` }
+    : { status: "retry", reason: `employment hero error ${res.status}` };
 }
 
 function sendFailed(notice: NoticeKind): SyncJobOutcome {

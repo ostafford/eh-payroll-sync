@@ -156,6 +156,11 @@ describe("existingMatchDetail", () => {
   it("round-trips the EH ids for the roster", () => {
     expect(heldCandidateIds(existingMatchDetail(matches))).toEqual(["40213", "40377"]);
   });
+
+  it("reads no ids from any other detail", () => {
+    expect(heldCandidateIds("collision: EH employee 555 already linked to Connecteam user 9")).toEqual([]);
+    expect(heldCandidateIds(null)).toEqual([]);
+  });
 });
 
 describe("Existing-match notice", () => {
