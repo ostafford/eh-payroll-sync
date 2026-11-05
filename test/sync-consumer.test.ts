@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseFieldMap } from "../src/mapping/schema.js";
-import type { ConnecteamUser } from "../src/mapping/apply.js";
+import { applyFieldMap, type ConnecteamUser } from "../src/mapping/apply.js";
 import { syntheticUser } from "./fixtures/connecteam-user.js";
 import {
   runSyncJob,
@@ -12,6 +12,7 @@ import {
   type SyncDeps,
 } from "../src/sync/consumer.js";
 import { CORRECTION_NOTICE_DEDUPE_MS } from "../src/sync/notices.js";
+import { takeBaseline } from "../src/sync/baseline.js";
 import type { SyncJob } from "../src/sync/job.js";
 import type { Baseline, EmployeeLink, EmployeeLinkPatch, PendingLink, SyncLogEntry } from "../src/sync/gateway.js";
 import type { CtResult, PayRate } from "../src/connecteam/types.js";
@@ -576,7 +577,7 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
     );
     const calls: string[] = [];
     const puts: Array<{ id: string; body: Record<string, unknown> }> = [];
-    const fail = { put: 0 };
+    const fail = { put: 0, reject: false };
     return {
       db,
       calls,
@@ -592,6 +593,7 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
       },
       async setExternalId(id: string, externalId: string) {
         calls.push(`PUT ${id}`);
+        if (fail.reject) return { outcome: "validation", status: 400, issues: [] };
         if (fail.put > 0) {
           fail.put--;
           return { outcome: "retryable", status: 503, detail: "down" };
@@ -680,6 +682,24 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
     expect(store.rows.get(ME)).toMatchObject({ ehEmployeeId: TARGET, linkedAt: 1_000_000 });
     expect(ct.channels).toHaveLength(1);
     expect(ct.channels[0]!.text).toContain("is now linked");
+    // Nobody here set it, so the notice doesn't say so.
+    expect(ct.channels[0]!.text).toContain("Their Payroll ID was already in Employment Hero, so nothing was written.");
+    expect(ct.channels[0]!.text).not.toContain("Only the Payroll ID was set");
+  });
+
+  it("alerts the admin straight away when EH rejects the Payroll ID, instead of retrying", async () => {
+    const store = linking();
+    const eh = linkEh();
+    eh.fail.reject = true;
+    const ct = fakeCt(cloneUser());
+
+    expect(await run(store, eh, ct)).toEqual({
+      status: "collision",
+      reason: "can't link: EH employee 40213 rejected the Payroll ID",
+    });
+    expect(store.rows.has(ME)).toBe(false);
+    expect(store.pending.has(ME)).toBe(true);
+    expect(ct.channels[0]!.text).toContain("Employment Hero wouldn't accept their Payroll ID on employee 40213");
   });
 
   it("writes nothing and alerts the admin when the EH employee has a different Payroll ID", async () => {
@@ -759,6 +779,8 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
       expect(eh.puts).toHaveLength(1);
       expect(ct.channels).toHaveLength(1);
       expect(store.log).toHaveLength(1);
+      // The retry found the Payroll ID set, but knows this sync set it.
+      expect(ct.channels[0]!.text).toContain("Only the Payroll ID was set.");
     });
 
     it("after a crash past the Link notice: the retry keeps its claim", async () => {
@@ -836,14 +858,25 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
 
   it("links even when the pack has a mapping issue: nothing from the pack is sent", async () => {
     const user = cloneUser();
-    user.customFields = user.customFields.filter((f) => f.customFieldId !== 42923222); // no TFN (required)
+    user.customFields.find((f) => f.customFieldId === 42923222)!.value = "abc"; // a TFN that can't be mapped
     const store = linking();
     const eh = linkEh();
     const ct = fakeCt(user);
 
     expect(await run(store, eh, ct)).toMatchObject({ status: "synced" });
     expect(ct.dms).toEqual([]);
-    expect(store.rows.get(ME)!.baseline!.units).not.toHaveProperty("taxFileNumber");
+    expect(eh.puts).toHaveLength(1);
+
+    // The unmapped TFN is in the Baseline, so fixing it later reads as a
+    // change (sent), not a new unit (baselined without sending).
+    const linkedWithGap = store.rows.get(ME)!.baseline!.units.taxFileNumber;
+    const fixed = await takeBaseline(
+      applyFieldMap(cloneUser(), loud).payload,
+      loud,
+      "test-baseline-key",
+    );
+    expect(linkedWithGap).toMatch(/^[0-9a-f]{64}$/);
+    expect(fixed.units.taxFileNumber).not.toBe(linkedWithGap);
   });
 
   it("ignores a pending link for someone already synced the normal way", async () => {

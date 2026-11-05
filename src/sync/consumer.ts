@@ -216,6 +216,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
       ehEmployeeId: pending.ehEmployeeId,
       externalId: mapped.externalId,
       payload: mapped.payload,
+      unmapped: mapped.issues.map((i) => i.ehField),
       hash,
       eventTimestamp,
       now: now(),
@@ -542,6 +543,8 @@ async function linkOnApproval(
     ehEmployeeId: string;
     externalId: string;
     payload: Record<string, unknown>;
+    /** EH fields with a mapping issue: baselined as unmapped, so a later fix is sent. */
+    unmapped: readonly string[];
     hash: string;
     eventTimestamp: number;
     now: number;
@@ -550,7 +553,7 @@ async function linkOnApproval(
   const { person, ehEmployeeId, externalId } = linking;
   const { ctUserId } = person;
   // Before any write, so a missing key can't leave a link without a Baseline.
-  const baseline = await takeBaseline(linking.payload, deps.fieldMap, deps.baselineKey);
+  const baseline = await takeBaseline(linking.payload, deps.fieldMap, deps.baselineKey, linking.unmapped);
 
   const other = await deps.store.findByEhEmployeeId(ehEmployeeId);
   if (other !== null && other !== ctUserId) {
@@ -564,7 +567,9 @@ async function linkOnApproval(
   }
 
   // When the EH employee already carries this Payroll ID (a retry after the
-  // write, or set by hand), they're already synced: nothing to write.
+  // write, or set by hand), they're already synced: nothing to write. A
+  // marker set after our own write tells the two apart for the Link notice.
+  const wroteKey = `link_put:${ctUserId}:${ehEmployeeId}`;
   if (!byPayrollId.data) {
     const target = await deps.eh.getEmployee(ehEmployeeId);
     if (target.outcome !== "ok") return ehRetry(target);
@@ -574,17 +579,18 @@ async function linkOnApproval(
 
     if (!theirs) {
       const put = await deps.eh.setExternalId(ehEmployeeId, externalId);
-      if (put.outcome === "validation") {
-        return { status: "retry", reason: `employment hero rejected the Payroll ID (${put.status})` };
-      }
+      // A rejection won't change on a retry, so it goes to the admin now.
+      if (put.outcome === "validation") return linkBlocked(deps, linking, { kind: "payroll_id_rejected" });
       if (put.outcome !== "ok") return ehRetry(put);
+      await deps.store.setMarker(wroteKey, linking.now);
     }
   }
+  const weSetIt = ((await deps.store.readMeta([wroteKey]))[wroteKey] ?? 0) > 0;
 
   const key = await noticeKey("link", ctUserId, [ehEmployeeId]);
   if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, linking.now)) {
     const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
-      deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId)),
+      deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt)),
     );
     if (!sent) return sendFailed("link");
   }
@@ -641,6 +647,8 @@ function linkBlockedWhy(b: LinkBlock): string {
       return `is already linked to Connecteam user ${b.otherCtUserId}`;
     case "not_found":
       return "no longer exists";
+    case "payroll_id_rejected":
+      return "rejected the Payroll ID";
   }
 }
 

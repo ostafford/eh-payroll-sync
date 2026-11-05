@@ -52,14 +52,24 @@ export function unitOf(ehField: string): string {
   return ehField;
 }
 
-/** The mapped payload split into units, without the Payroll ID or any constant. */
+/** Stands in for a field the pack holds but couldn't map. No real value is an object, so it never equals one. */
+const UNMAPPED = { unmapped: true } as const;
+
+/**
+ * The mapped payload split into units, without the Payroll ID or any constant.
+ * `unmapped` names EH fields with a mapping issue: they're in the unit as
+ * {@link UNMAPPED}, so once fixed the unit reads as changed and is sent, not
+ * as a new unit baselined without sending (ADR-0009).
+ */
 export function unitsOf(
   payload: Record<string, unknown>,
   map: Pick<FieldMap, "rules">,
+  unmapped: readonly string[] = [],
 ): Record<string, Record<string, unknown>> {
   const constants = new Set(Object.keys(map.rules?.constants ?? {}));
   const units: Record<string, Record<string, unknown>> = {};
-  for (const [key, value] of Object.entries(payload)) {
+  const entries: Array<[string, unknown]> = [...Object.entries(payload), ...unmapped.map((f) => [f, UNMAPPED] as [string, unknown])];
+  for (const [key, value] of entries) {
     if (key === "externalId" || constants.has(key)) continue;
     (units[unitOf(key)] ??= {})[key] = value;
   }
@@ -92,11 +102,12 @@ export async function takeBaseline(
   payload: Record<string, unknown>,
   map: Pick<FieldMap, "rules">,
   secret: string,
+  unmapped: readonly string[] = [],
 ): Promise<Baseline> {
   if (!secret) throw new Error("BASELINE_KEY is not set");
   const key = await hmacKey(secret);
   const units: Record<string, string> = {};
-  for (const [unit, values] of Object.entries(unitsOf(payload, map))) {
+  for (const [unit, values] of Object.entries(unitsOf(payload, map, unmapped))) {
     units[unit] = await hmacHex(key, canonicalJson({ unit, values }));
   }
   return { keyId: await baselineKeyId(secret), units };

@@ -74,6 +74,16 @@ describe("takeBaseline", () => {
     expect(a.units.taxFileNumber).not.toBe(b.units.taxFileNumber);
   });
 
+  it("holds a field that couldn't be mapped, so fixing it changes that unit", async () => {
+    const { taxFileNumber: _tfn, bankAccount1_BSB: _bsb, ...gappy } = payload;
+    const withGap = await takeBaseline(gappy, map, "k-one", ["taxFileNumber", "bankAccount1_BSB"]);
+    const fixed = await takeBaseline(payload, map, "k-one");
+
+    expect(Object.keys(withGap.units).sort()).toEqual(Object.keys(fixed.units).sort());
+    const changed = Object.keys(fixed.units).filter((u) => fixed.units[u] !== withGap.units[u]);
+    expect(changed.sort()).toEqual(["bankAccount1", "taxFileNumber"]);
+  });
+
   it("refuses to fingerprint without a key", async () => {
     await expect(takeBaseline(payload, map, "")).rejects.toThrow("BASELINE_KEY is not set");
   });

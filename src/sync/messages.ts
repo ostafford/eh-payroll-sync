@@ -390,11 +390,11 @@ export function existingMatchMessages(ref: PersonRef, matches: readonly Existing
  * notice; the employee gets nothing. The name isn't bold, as it would be on
  * the first line (see the module doc).
  */
-export function linkNoticeMessage(ref: PersonRef, ehEmployeeId: string): string {
+export function linkNoticeMessage(ref: PersonRef, ehEmployeeId: string, payrollIdSet: boolean): string {
   return clamp(
     sections(
       `🔗 ${personLabel(ref)} is now linked to Employment Hero employee ${ehEmployeeId}.`,
-      "Only the Payroll ID was set. From now on, only what they change in Connecteam is synced.",
+      `${payrollIdSet ? "Only the Payroll ID was set." : "Their Payroll ID was already in Employment Hero, so nothing was written."} From now on, only what they change in Connecteam is synced.`,
     ),
   );
 }
@@ -404,7 +404,8 @@ export type LinkBlock =
   | { kind: "different_payroll_id" }
   | { kind: "payroll_id_elsewhere"; ehEmployeeId: string }
   | { kind: "linked_in_sync"; otherCtUserId: number }
-  | { kind: "not_found" };
+  | { kind: "not_found" }
+  | { kind: "payroll_id_rejected" };
 
 function linkBlockReason(ehEmployeeId: string, b: LinkBlock): string {
   switch (b.kind) {
@@ -416,6 +417,8 @@ function linkBlockReason(ehEmployeeId: string, b: LinkBlock): string {
       return `Employment Hero employee ${ehEmployeeId} is already linked to Connecteam user ${b.otherCtUserId}.`;
     case "not_found":
       return `Employment Hero has no employee ${ehEmployeeId} any more.`;
+    case "payroll_id_rejected":
+      return `Employment Hero wouldn't accept their Payroll ID on employee ${ehEmployeeId}.`;
   }
 }
 
