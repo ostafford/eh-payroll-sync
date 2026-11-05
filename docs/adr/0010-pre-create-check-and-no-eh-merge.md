@@ -32,4 +32,4 @@ These are EH's own merge keys, made looser on purpose so a hand-entered record w
 
 - Each new hire costs up to three extra EH reads. Linked and already-synced employees cost nothing extra.
 - If the check misses someone, we get a duplicate EH employee instead of a lost record. Duplicates are visible in EH and someone can clean them up.
-- Whether EH's filters return terminated employees isn't known yet (#135 couldn't terminate anyone through the API). Until it's tested, a rehire may get past the check and create a duplicate, never a merge.
+- EH's filters return terminated employees (tested in #141), so a rehire is caught by the same three calls. The notice reads "terminated in EH" from the returned row's `status`. Name + DOB works as a single EH filter.
