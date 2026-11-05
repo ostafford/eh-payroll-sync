@@ -31,14 +31,16 @@ below, with what a full re-run does to it.
 
 | # | Side effect | How it is written | On a re-run of the same job | Verdict |
 |---|---|---|---|---|
-| 1 | **Employment Hero employee record** | `upsertByExternalId`: `GET …/externalid/{id}`, then `POST` if absent or `PUT` if present | If EH applied a write we never saw the answer to (e.g. a timeout), the re-run's `GET` finds it and `PUT`s the same payload. No second employee. | Idempotent |
+| 0 | Pre-create check (ADR-0010) | Before a create only: up to three filtered `GET /employee/unstructured` calls | Read only | — |
+| 1 | **Employment Hero employee record** | `upsertByExternalId`: `GET …/externalid/{id}`, then `POST ?matchType=None` if absent or `PUT` if present | If EH applied a write we never saw the answer to (e.g. a timeout), the re-run's `GET` finds it and `PUT`s the same payload. No second employee. `matchType=None` turns EH's merge off, so a create never lands on someone else's record | Idempotent |
 | 2 | Read-back of the record | `GET` | Read only | — |
 | 3 | **Correction message** to the employee, plus their **Direct manager** on cycle 3+ | One `sync_meta` claim per recipient (user + mapped-payload hash, 1 h), taken **before** sending. Employee: claim, send, then bump the cycle. Manager: its own claim, then send. A failed send releases its claim and the job retries (#89) | A claim that's held is skipped: no second message and no second cycle bump (#58). A released claim is sent by the retry | At most once per recipient |
 | 4 | Failure-cycle count | `advanceCycle` | Correction: inside the employee claim, after the send succeeds (row 3). OK / Manual follow-up: set to 0, which can repeat | Idempotent |
 | 5 | **Manual-follow-up notice** to the alerts channel | Claim (user + reasons, 12 h) before sending; released on a failed send, and the job retries | Not re-sent once sent | At most once |
 | 6 | **Collision alert** to the alerts channel | Claim (1 h) before sending; released on a failed send, and the job retries before its audit row | Not re-sent once sent | At most once |
 | 6a | **Success message** to the employee (#71): first successful sync, or a fixed Correction | One claim (user + mapped-payload hash, 1 h) covering both wordings, taken before sending and **before** the cycle reset; released on a failed send, and the job retries with the cycle still open | Not re-sent once sent; a retry after the cycle reset would pick the other wording, but finds the same claim held | At most once |
-| 7 | `employee_map` link (`lastSyncedTs`, `lastPayloadHash`, `lastOutcome`) | Upsert of one row | Same values. Once saved, the stale-event guard and the payload hash skip any later redelivery of this job before step 1 | Idempotent |
+| 6b | **Existing-match notice** to the alerts channel, for a Held employee (ADR-0010) | One claim per part (user + candidates and keys, 12 h) before sending; released on a failed send, and the job retries before any row is written. No EH write on this path | The check runs again (row 0) and finds the claims held: not re-sent once sent | At most once |
+| 7 | `employee_map` link (`lastSyncedTs`, `lastPayloadHash`, `lastOutcome`) | Upsert of one row. A hold saves `existing_match` with no EH id and no payload hash, so the same profile re-runs once the admin resolves it | Same values. Once saved, the stale-event guard (and, except on a hold, the payload hash) skips any later redelivery of this job before step 1 | Idempotent |
 | 8 | `sync_log` audit row | `INSERT`, written last | Normally skipped by row 7's guard. **Exception:** the collision path doesn't save a link, so a redelivery appends a second identical `collision` row | Audit only; can repeat on collisions |
 | 9 | `acked_total` counter | Bumped once per batch, after the acks | A crash between an ack and the bump under-counts. The `/health` `queueBacklog` gauge can then stay above 0 | Gauge drift only |
 | 10 | Dead-letter queue: **System alert**, `dead_letter` audit row, integrator alert | Alert claimed (1 h); a failed send releases the claim (can't retry, the DLQ always acks), so the next dead-letter for that user posts it; row `INSERT`; integrator alert de-duplicated per user (1 h, `src/index.ts`) | No repeated alerts; the row can repeat if the DLQ itself redelivers | At most once / audit |
@@ -81,7 +83,7 @@ would have succeeded.
 ## Consequences
 
 - **An invariant for future changes:** any new side effect in `runSyncJob` must
-  be idempotent, or claimed before it happens, like rows 3, 5 and 6. Otherwise
+  be idempotent, or claimed before it happens, like rows 3, 5, 6 and 6b. Otherwise
   this decision must be revisited. `src/sync/consumer.ts` points here.
   (`wrangler.jsonc` deliberately has no comment: the live deploy folder keeps
   its settings as uncommitted edits to that file, and upstream changes to it

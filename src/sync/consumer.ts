@@ -46,7 +46,7 @@ import {
   existingMatchMessages,
   type PersonRef,
 } from "./messages.js";
-import { runPreCreateCheck, existingMatchDetail } from "./precheck.js";
+import { runPreCreateCheck, existingMatchDetail, type ExistingMatch } from "./precheck.js";
 import { advanceCycle, directManagerUserId, MANAGER_ESCALATION_CYCLE } from "./cycles.js";
 import { payloadHash } from "./canonical.js";
 import { logEvent } from "../log.js";
@@ -185,7 +185,8 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   // resolve to the same mapped payload; run it once. This also stops an
   // employee stuck in a correction loop from being re-messaged (and their
   // failure cycle re-bumped) once per delivery in the burst. `lastPayloadHash`
-  // is now stored on every terminal outcome, not only clean ones.
+  // is now stored on every terminal outcome, not only clean ones, except a
+  // hold (see holdExisting) and a left-out person.
   if (link?.lastPayloadHash && link.lastPayloadHash === hash) {
     return { status: "skipped", reason: "identical to the last processed state" };
   }
@@ -235,11 +236,9 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
       if (check.outcome !== "ok") return { status: "retry", reason: `employment hero error ${check.status}` };
       if (check.data.length > 0) {
         return holdExisting(deps, {
-          ctUserId,
           person: { ctUserId, firstName: user.firstName, lastName: user.lastName },
           matches: check.data,
           eventTimestamp,
-          hash,
           now: now(),
         });
       }
@@ -442,24 +441,28 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
  * the collision path does, so a retry after a failed send re-runs the check
  * and finds its claims: a re-run of the same job never posts it twice. A part
  * already sent keeps its claim; only a failed one is released.
+ *
+ * No payload hash is stored, unlike other outcomes: once the admin resolves
+ * the hold, the same profile must run again (the daily recheck re-enqueues it,
+ * ADR-0010), not be skipped as "identical to the last processed state". A
+ * redelivery of this same job is still skipped by the stale-event guard.
  */
 async function holdExisting(
   deps: SyncDeps,
   held: {
-    ctUserId: number;
     person: PersonRef;
-    matches: Parameters<typeof existingMatchMessages>[1];
+    matches: readonly ExistingMatch[];
     eventTimestamp: number;
-    hash: string;
     now: number;
   },
 ): Promise<SyncJobOutcome> {
-  const { ctUserId, matches } = held;
+  const { person, matches } = held;
+  const { ctUserId } = person;
   const detail = existingMatchDetail(matches);
   // Keyed by what the notice says (candidates and keys), not the payload hash:
   // a later profile edit that changes nothing about the match doesn't repost
   // it within the window. The digest is the only reminder (#143 item 5).
-  for (const [i, text] of existingMatchMessages(held.person, matches).entries()) {
+  for (const [i, text] of existingMatchMessages(person, matches).entries()) {
     const key = await noticeKey("existing_match", ctUserId, i === 0 ? [detail] : [detail, `part ${i + 1}`]);
     if (!(await shouldPostNotice(deps.store, key, FOLLOW_UP_NOTICE_DEDUPE_MS, held.now))) continue;
     const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
@@ -471,7 +474,7 @@ async function holdExisting(
     ctUserId,
     ehEmployeeId: null,
     lastSyncedTs: held.eventTimestamp,
-    lastPayloadHash: held.hash,
+    lastPayloadHash: null,
     lastOutcome: "existing_match",
   });
   await deps.store.appendSyncLog({ ctUserId, at: held.now, outcome: "existing_match", detail });
