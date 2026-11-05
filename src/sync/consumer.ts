@@ -238,6 +238,9 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
         return holdExisting(deps, {
           person: { ctUserId, firstName: user.firstName, lastName: user.lastName },
           matches: check.data,
+          // Normally none. One we stored whose record EH no longer finds by
+          // Payroll ID (relabelled or deleted there) is kept, not wiped.
+          storedEhEmployeeId: link?.ehEmployeeId ?? null,
           eventTimestamp,
           now: now(),
         });
@@ -452,6 +455,7 @@ async function holdExisting(
   held: {
     person: PersonRef;
     matches: readonly ExistingMatch[];
+    storedEhEmployeeId: string | null;
     eventTimestamp: number;
     now: number;
   },
@@ -472,7 +476,7 @@ async function holdExisting(
   }
   await deps.store.saveEmployeeLink({
     ctUserId,
-    ehEmployeeId: null,
+    ehEmployeeId: held.storedEhEmployeeId,
     lastSyncedTs: held.eventTimestamp,
     lastPayloadHash: null,
     lastOutcome: "existing_match",

@@ -6,7 +6,8 @@
  *
  *   - email (EH's filter compares it case-insensitively, tested in #131);
  *   - TFN, skipped when it is an ATO placeholder (many people share those);
- *   - first name + surname + date of birth, as one filter. A name alone isn't a hit.
+ *   - first name + surname + date of birth, as one filter (names case-insensitive,
+ *     tested). A name alone isn't a hit.
  *
  * Up to three filtered `GET /employee/unstructured` calls, one after another
  * and always all of them, so the Existing-match notice lists every candidate.
@@ -82,7 +83,8 @@ export function preCreateFilters(payload: EhEmployeePayload): Array<{ key: Match
   if (k.email) out.push({ key: "email", filter: `emailAddress eq ${lit(k.email)}` });
   if (k.tfn) out.push({ key: "tfn", filter: `taxFileNumber eq ${lit(k.tfn)}` });
   if (k.nameDob) {
-    // The payload's own casing: EH's `eq` isn't documented as case-insensitive for names.
+    // EH's `eq` ignores case on names, as on email: as-stored, lower- and
+    // upper-cased names all found the same employee (rehearsal account, 2026-11-05).
     const first = text(payload.firstName);
     const last = text(payload.surname);
     out.push({

@@ -477,6 +477,14 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
     expect(eh.upserts).toHaveLength(1);
   });
 
+  it("keeps a stored EH id when EH no longer finds that record by Payroll ID", async () => {
+    const store = fakeGateway({ ctUserId: 17760356, ehEmployeeId: "777", lastSyncedTs: 1 });
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
+
+    expect(await runSyncJob(job(), deps({ store, eh }))).toMatchObject({ status: "held" });
+    expect(store.rows.get(17760356)).toMatchObject({ ehEmployeeId: "777", lastOutcome: "existing_match" });
+  });
+
   it("retries a failed notice and writes no rows until it goes out", async () => {
     const store = fakeGateway();
     const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
