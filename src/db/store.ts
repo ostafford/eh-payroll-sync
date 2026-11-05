@@ -5,10 +5,13 @@
  */
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
-import { employeeMap, onboardingState, syncLog, syncMeta } from "./schema.js";
+import { employeeMap, onboardingState, pendingLink, syncLog, syncMeta } from "./schema.js";
 import type {
+  Baseline,
   EmployeeLink,
   EmployeeLinkPatch,
+  LinkGateway,
+  PendingLink,
   SyncGateway,
   SyncLogEntry,
 } from "../sync/gateway.js";
@@ -16,7 +19,7 @@ import type { OnboardingStateRow } from "../cron/sweep.js";
 import type { OnboardingAssignment } from "../connecteam/types.js";
 import { ROSTER_QUERY_SQL, parseRosterRows, type RosterRow } from "../status/roster.js";
 
-export class SyncStore implements SyncGateway {
+export class SyncStore implements SyncGateway, LinkGateway {
   readonly #db: DrizzleD1Database;
   readonly #raw: D1Database;
 
@@ -32,14 +35,7 @@ export class SyncStore implements SyncGateway {
       .where(eq(employeeMap.ctUserId, ctUserId))
       .limit(1);
     if (!row) return null;
-    return {
-      ctUserId: row.ctUserId,
-      ehEmployeeId: row.ehEmployeeId,
-      lastSyncedTs: row.lastSyncedTs,
-      failureCycleCount: row.failureCycleCount,
-      lastPayloadHash: row.lastPayloadHash,
-      lastOutcome: row.lastOutcome,
-    };
+    return toEmployeeLink(row);
   }
 
   /** The Connecteam userId already linked to this EH employee id, if any (collision check). */
@@ -85,14 +81,7 @@ export class SyncStore implements SyncGateway {
       .select()
       .from(employeeMap)
       .where(and(eq(employeeMap.lastOutcome, "follow_up"), isNotNull(employeeMap.ehEmployeeId)));
-    return rows.map((row) => ({
-      ctUserId: row.ctUserId,
-      ehEmployeeId: row.ehEmployeeId,
-      lastSyncedTs: row.lastSyncedTs,
-      failureCycleCount: row.failureCycleCount,
-      lastPayloadHash: row.lastPayloadHash,
-      lastOutcome: row.lastOutcome,
-    }));
+    return rows.map(toEmployeeLink);
   }
 
   async getFailureCount(ctUserId: number): Promise<number> {
@@ -182,6 +171,49 @@ export class SyncStore implements SyncGateway {
     }
   }
 
+  // --- linking Pre-existing employees (ADR-0009, ADR-0010) ---
+
+  async getPendingLink(ctUserId: number): Promise<PendingLink | null> {
+    const [row] = await this.#db
+      .select()
+      .from(pendingLink)
+      .where(eq(pendingLink.ctUserId, ctUserId))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async listPendingLinks(): Promise<PendingLink[]> {
+    return this.#db.select().from(pendingLink);
+  }
+
+  async savePendingLink(link: PendingLink): Promise<void> {
+    await this.#db
+      .insert(pendingLink)
+      .values(link)
+      .onConflictDoUpdate({
+        target: pendingLink.ctUserId,
+        set: { ehEmployeeId: link.ehEmployeeId, confirmedAt: link.confirmedAt },
+      });
+  }
+
+  async deletePendingLink(ctUserId: number): Promise<void> {
+    await this.#db.delete(pendingLink).where(eq(pendingLink.ctUserId, ctUserId));
+  }
+
+  async markLinked(ctUserId: number, linkedAt: number, baseline: Baseline): Promise<void> {
+    await this.#db
+      .update(employeeMap)
+      .set({ linkedAt, baseline: JSON.stringify(baseline), updatedAt: Date.now() })
+      .where(eq(employeeMap.ctUserId, ctUserId));
+  }
+
+  async saveBaseline(ctUserId: number, baseline: Baseline): Promise<void> {
+    await this.#db
+      .update(employeeMap)
+      .set({ baseline: JSON.stringify(baseline), updatedAt: Date.now() })
+      .where(eq(employeeMap.ctUserId, ctUserId));
+  }
+
   // --- operational counters / markers for /health (issue #9) ---
 
   /** Add `delta` to a counter, creating it at `delta` if absent. */
@@ -225,5 +257,31 @@ export class SyncStore implements SyncGateway {
   async listRosterRows(): Promise<RosterRow[]> {
     const { results } = await this.#raw.prepare(ROSTER_QUERY_SQL).all();
     return parseRosterRows(results);
+  }
+}
+
+function toEmployeeLink(row: typeof employeeMap.$inferSelect): EmployeeLink {
+  return {
+    ctUserId: row.ctUserId,
+    ehEmployeeId: row.ehEmployeeId,
+    lastSyncedTs: row.lastSyncedTs,
+    failureCycleCount: row.failureCycleCount,
+    lastPayloadHash: row.lastPayloadHash,
+    lastOutcome: row.lastOutcome,
+    linkedAt: row.linkedAt,
+    baseline: parseBaseline(row.baseline),
+  };
+}
+
+/** The stored Baseline, or null when there is none or it isn't the shape we write. */
+export function parseBaseline(text: string | null): Baseline | null {
+  if (!text) return null;
+  try {
+    const b = JSON.parse(text) as Partial<Baseline>;
+    if (typeof b.keyId !== "string" || !b.units || typeof b.units !== "object" || Array.isArray(b.units)) return null;
+    if (!Object.values(b.units).every((v) => typeof v === "string")) return null;
+    return { keyId: b.keyId, units: b.units };
+  } catch {
+    return null;
   }
 }

@@ -18,7 +18,22 @@ export const employeeMap = sqliteTable("employee_map", {
   lastOutcome: text("last_outcome", {
     enum: ["ok", "correction", "follow_up", "retry", "dead_letter", "resolved", "collision", "excluded"],
   }),
+  /** When this person became a Linked employee (epoch ms); NULL for everyone else (ADR-0009). */
+  linkedAt: integer("linked_at"),
+  /** A Linked employee's Baseline as JSON: a key id plus a keyed fingerprint per unit, never a value. */
+  baseline: text("baseline"),
   updatedAt: integer("updated_at").notNull(),
+});
+
+/**
+ * Links the admin confirmed in the wizard's link stage, waiting for that
+ * person's first approval. Identifiers only. A NULL `ehEmployeeId` is "New
+ * hire, not this person" (ADR-0010).
+ */
+export const pendingLink = sqliteTable("pending_link", {
+  ctUserId: integer("ct_user_id").primaryKey(),
+  ehEmployeeId: text("eh_employee_id"),
+  confirmedAt: integer("confirmed_at").notNull(),
 });
 
 /** Last-seen state of each onboarding-pack assignment, for the approval sweep diff. */

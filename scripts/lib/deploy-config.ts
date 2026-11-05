@@ -104,6 +104,20 @@ export function renderDeployConfig(templateText: string, devVars: Record<string,
   return { ok: true, config: { ...config, vars }, databaseId, vars };
 }
 
+/**
+ * Secrets a live Worker can't run without. Only their names are checked (never
+ * values): `wrangler secret put` adds one to the live Worker, so a deploy that
+ * finds one missing would go live without it. `BASELINE_KEY` is the one an
+ * existing deployment is missing after an update that adds linking (ADR-0009).
+ */
+export const REQUIRED_SECRETS = ["CT_API_KEY", "EH_API_KEY", "CT_WEBHOOK_SECRET", "BASELINE_KEY"] as const;
+
+/** The required secrets the live Worker doesn't have, in {@link REQUIRED_SECRETS} order. */
+export function missingSecrets(live: readonly LiveBinding[]): string[] {
+  const present = new Set(live.filter((b) => b.type === "secret_text").map((b) => b.name));
+  return REQUIRED_SECRETS.filter((name) => !present.has(name));
+}
+
 /** One binding as `wrangler versions view --json` lists it. */
 export interface LiveBinding {
   name: string;

@@ -28,6 +28,28 @@ export interface EmployeeLink {
   lastPayloadHash: string | null;
   /** The outcome of the most recent attempt, or undefined if not tracked by this store. */
   lastOutcome?: SyncOutcomeLabel | null;
+  /** When this person became a Linked employee (epoch ms); null or undefined for everyone else. */
+  linkedAt?: number | null;
+  /** A Linked employee's Baseline (ADR-0009); null until it is taken, or if what's stored can't be read. */
+  baseline?: Baseline | null;
+}
+
+/**
+ * A Linked employee's Baseline (ADR-0009): one keyed fingerprint per unit, and
+ * the id of the `BASELINE_KEY` that made them. Never a value.
+ */
+export interface Baseline {
+  keyId: string;
+  /** Unit name -> HMAC-SHA-256 fingerprint of that unit's mapped value. */
+  units: Record<string, string>;
+}
+
+/** One `pending_link` row: a link the admin confirmed, waiting for the person's first approval. */
+export interface PendingLink {
+  ctUserId: number;
+  /** The EH employee to link to, or null for "New hire, not this person" (ADR-0010). */
+  ehEmployeeId: string | null;
+  confirmedAt: number;
 }
 
 /** Values written back to `employee_map` after an attempt. */
@@ -102,6 +124,23 @@ export interface RecheckGateway
   extends Pick<SyncGateway, "appendSyncLog" | "saveEmployeeLink" | "readMeta" | "setMarker"> {
   /** Every `employee_map` row whose last attempt ended in a Manual-follow-up. */
   listFollowUpLinks(): Promise<EmployeeLink[]>;
+}
+
+/**
+ * The storage linking needs: `pending_link` rows and the linked state on
+ * `employee_map`. A separate interface for the same reason as
+ * {@link RecheckGateway}.
+ */
+export interface LinkGateway {
+  getPendingLink(ctUserId: number): Promise<PendingLink | null>;
+  listPendingLinks(): Promise<PendingLink[]>;
+  /** Add a pending link, or replace this person's existing one. */
+  savePendingLink(link: PendingLink): Promise<void>;
+  deletePendingLink(ctUserId: number): Promise<void>;
+  /** Mark an existing `employee_map` row as a Linked employee, with their first Baseline. */
+  markLinked(ctUserId: number, linkedAt: number, baseline: Baseline): Promise<void>;
+  /** Replace a Linked employee's Baseline (it rolls forward unit by unit, ADR-0009). */
+  saveBaseline(ctUserId: number, baseline: Baseline): Promise<void>;
 }
 
 /**
