@@ -74,6 +74,17 @@ _Avoid_: migrated employee, legacy employee
 What a Linked employee's Connecteam data looked like at the last sync EH accepted for it, first taken at their link. It's kept as fingerprints, never values, and is used only to tell what has changed since.
 _Avoid_: snapshot, last-known profile
 
+**Pre-create check**:
+Before the sync creates anyone in EH, it looks for an EH employee who is already the same person: by email, by TFN, or by name and date of birth. If it finds one, nothing is created (see ADR-0010).
+_Avoid_: duplicate check, dedupe
+
+**Held employee**:
+An approved Connecteam user the Pre-create check stopped. Nothing is written to EH for them until the admin either links them to an EH employee or confirms them as a new hire, in the link list.
+_Avoid_: blocked employee, collision
+
+**Existing-match notice**:
+The admin-channel message saying someone is a Held employee: which EH employees they may be, and which details matched or disagreed. It never shows the values themselves. Distinct from a Manual-follow-up notice, which means EH needs something done by hand.
+
 **In-scope fields**:
 Everything the employee can enter in the onboarding pack: personal, address, emergency contact, structural fields EH needs (name, start date, employment type, job title), **and** tax file number, bank account(s), superannuation, and tax-declaration answers. All flow Connecteam → EH via the API — no EH self-setup (see ADR-0001). Pay rate / award / classification stay a manual EH task for v1.
 
