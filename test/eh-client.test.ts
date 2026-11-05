@@ -62,6 +62,23 @@ describe("EhPayrollClient.getByExternalId", () => {
   });
 });
 
+describe("EhPayrollClient.findEmployees", () => {
+  it("sends the $filter URL-encoded and returns the rows", async () => {
+    const f = fakeFetch({ "GET /employee/unstructured?$filter=": { status: 200, body: [EMP] } });
+    const r = await new EhPayrollClient(cfg(f)).findEmployees("emailAddress eq 'a+b@x.com'");
+    expect(r).toEqual({ outcome: "ok", data: [EMP] });
+    const [url] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(String(url)).toBe(
+      "https://eh.test/api/v2/business/555455/employee/unstructured?$filter=emailAddress%20eq%20'a%2Bb%40x.com'",
+    );
+  });
+
+  it("classifies a 429 as retryable", async () => {
+    const f = fakeFetch({ "GET /employee/unstructured?$filter=": { status: 429, body: "slow down" } });
+    expect(await new EhPayrollClient(cfg(f)).findEmployees("x eq 'y'")).toMatchObject({ outcome: "retryable", status: 429 });
+  });
+});
+
 describe("EhPayrollClient.upsertByExternalId", () => {
   const CREATE_ENVELOPE = { id: 987, status: "Incomplete", detailedStatus: "Basic Details are incomplete", operationType: "Create" };
 
@@ -79,7 +96,8 @@ describe("EhPayrollClient.upsertByExternalId", () => {
 
     const calls = (f as unknown as ReturnType<typeof vi.fn>).mock.calls;
     const [postUrl, postInit] = calls[1]!;
-    expect(String(postUrl)).toMatch(/\/business\/555455\/employee\/unstructured$/);
+    // EH's own merge is off on every create (ADR-0010).
+    expect(String(postUrl)).toMatch(/\/business\/555455\/employee\/unstructured\?matchType=None$/);
     expect(JSON.parse(postInit.body as string)).toMatchObject({ externalId: "17760356", surname: "Rivera" });
   });
 

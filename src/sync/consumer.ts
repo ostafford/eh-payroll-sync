@@ -43,8 +43,10 @@ import {
   correctionFixedMessage,
   adminFirstSyncMessage,
   adminCorrectionFixedMessage,
+  existingMatchMessages,
   type PersonRef,
 } from "./messages.js";
+import { runPreCreateCheck, existingMatchDetail } from "./precheck.js";
 import { advanceCycle, directManagerUserId, MANAGER_ESCALATION_CYCLE } from "./cycles.js";
 import { payloadHash } from "./canonical.js";
 import { logEvent } from "../log.js";
@@ -57,15 +59,16 @@ import {
   SYSTEM_ALERT_NOTICE_DEDUPE_MS,
   CORRECTION_NOTICE_DEDUPE_MS,
 } from "./notices.js";
-import type { EmployeeLink, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
+import type { EmployeeLink, LinkGateway, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
 
 export interface SyncDeps {
   ct: Pick<
     ConnecteamClient,
     "getUser" | "getPayRate" | "sendDirectMessage" | "sendChannelMessage"
   >;
-  eh: Pick<EhPayrollClient, "upsertByExternalId" | "getByExternalId">;
-  store: SyncGateway;
+  eh: Pick<EhPayrollClient, "upsertByExternalId" | "getByExternalId" | "findEmployees">;
+  /** `getPendingLink`: a "New hire, not this person" row skips the Pre-create check. */
+  store: SyncGateway & Pick<LinkGateway, "getPendingLink">;
   fieldMap: FieldMap;
   /** Connecteam conversation id for the "EH Sync Alerts" channel. */
   adminChannelId: string;
@@ -75,7 +78,16 @@ export interface SyncDeps {
   onSystemAlert?: (info: { ctUserId: number; reason: string }) => Promise<void>;
 }
 
-export type SyncJobStatus = "synced" | "correction" | "follow_up" | "skipped" | "retry" | "collision" | "excluded";
+export type SyncJobStatus =
+  | "synced"
+  | "correction"
+  | "follow_up"
+  | "skipped"
+  | "retry"
+  | "collision"
+  | "excluded"
+  /** A Held employee: the Pre-create check found them already in EH (ADR-0010). */
+  | "held";
 
 export interface SyncJobOutcome {
   status: SyncJobStatus;
@@ -213,9 +225,28 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     // it - safety net for a skipped admin field or a renamed award template.
     const followUps = [...mapped.payRunIssues, ...mapped.followUps];
 
+    // About to create: no EH record carries this Payroll ID. Run the
+    // Pre-create check first (ADR-0010) unless the admin already confirmed
+    // them as "New hire, not this person" (a pending link with no EH id).
+    const confirmedNewHire = current === null && (await deps.store.getPendingLink(ctUserId))?.ehEmployeeId === null;
+    if (current === null && !confirmedNewHire) {
+      const check = await runPreCreateCheck(deps.eh, mapped.payload);
+      if (check.outcome === "retryable") return { status: "retry", reason: `employment hero unavailable: ${check.detail}` };
+      if (check.outcome !== "ok") return { status: "retry", reason: `employment hero error ${check.status}` };
+      if (check.data.length > 0) {
+        return holdExisting(deps, {
+          ctUserId,
+          person: { ctUserId, firstName: user.firstName, lastName: user.lastName },
+          matches: check.data,
+          eventTimestamp,
+          hash,
+          now: now(),
+        });
+      }
+    }
+
     // Match order: stored link -> externalId (both handled by upsertByExternalId).
-    // Email fallback for the very first match is deferred - it needs an EH
-    // employee-search endpoint that issue #2 did not build/verify.
+    // A create goes out with EH's own merge off (`matchType=None`).
     const write = await deps.eh.upsertByExternalId(mapped.externalId, mapped.payload, current);
     if (write.outcome === "retryable") return { status: "retry", reason: `employment hero unavailable: ${write.detail}` };
     if (write.outcome === "client_error") return { status: "retry", reason: `employment hero error ${write.status}` };
@@ -224,12 +255,13 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     if (write.outcome === "ok") {
       ehEmployeeId = String(write.data.id);
 
-      // Employment Hero's unstructured-employee endpoint matches/merges by TFN
-      // internally - a write for a brand-new externalId can still land on and
-      // silently overwrite an EXISTING employee (even relabelling its
-      // externalId) if the TFN collides. The read-back below can't catch this:
-      // EH relabels the merged record's externalId too, so a read-back-by-
-      // externalId finds exactly what we just sent. Check employee_map instead.
+      // Backstop (ADR-0010): creates now go out with `matchType=None` after the
+      // Pre-create check, but EH's unstructured endpoint used to match/merge by
+      // TFN - a write for a brand-new externalId could land on and silently
+      // overwrite an EXISTING employee (even relabelling its externalId). The
+      // read-back below can't catch this: EH relabels the merged record's
+      // externalId too, so a read-back-by-externalId finds exactly what we just
+      // sent. Check employee_map instead.
       const collidingCtUserId = await deps.store.findByEhEmployeeId(ehEmployeeId);
       if (collidingCtUserId !== null && collidingCtUserId !== ctUserId) {
         const key = await noticeKey("collision", ctUserId, [ehEmployeeId]);
@@ -401,6 +433,49 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     managerNotified,
     ...(noticeSuppressed ? { noticeSuppressed: true } : {}),
   };
+}
+
+/**
+ * A Held employee (ADR-0010): write nothing to EH, post one claimed
+ * Existing-match notice to the admin channel (nothing to the employee), then
+ * record `existing_match` with no EH id. The notice goes before the rows, as
+ * the collision path does, so a retry after a failed send re-runs the check
+ * and finds its claims: a re-run of the same job never posts it twice. A part
+ * already sent keeps its claim; only a failed one is released.
+ */
+async function holdExisting(
+  deps: SyncDeps,
+  held: {
+    ctUserId: number;
+    person: PersonRef;
+    matches: Parameters<typeof existingMatchMessages>[1];
+    eventTimestamp: number;
+    hash: string;
+    now: number;
+  },
+): Promise<SyncJobOutcome> {
+  const { ctUserId, matches } = held;
+  const detail = existingMatchDetail(matches);
+  // Keyed by what the notice says (candidates and keys), not the payload hash:
+  // a later profile edit that changes nothing about the match doesn't repost
+  // it within the window. The digest is the only reminder (#143 item 5).
+  for (const [i, text] of existingMatchMessages(held.person, matches).entries()) {
+    const key = await noticeKey("existing_match", ctUserId, i === 0 ? [detail] : [detail, `part ${i + 1}`]);
+    if (!(await shouldPostNotice(deps.store, key, FOLLOW_UP_NOTICE_DEDUPE_MS, held.now))) continue;
+    const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
+      deps.ct.sendChannelMessage(deps.adminChannelId, text),
+    );
+    if (!sent) return sendFailed("existing_match");
+  }
+  await deps.store.saveEmployeeLink({
+    ctUserId,
+    ehEmployeeId: null,
+    lastSyncedTs: held.eventTimestamp,
+    lastPayloadHash: held.hash,
+    lastOutcome: "existing_match",
+  });
+  await deps.store.appendSyncLog({ ctUserId, at: held.now, outcome: "existing_match", detail });
+  return { status: "held", reason: detail };
 }
 
 /** Minimal shape of a queue message / batch, so batch routing is runtime-agnostic. */

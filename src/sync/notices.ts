@@ -38,7 +38,8 @@ export type NoticeKind =
   | "admin_success"
   | "follow_up"
   | "system_alert"
-  | "collision";
+  | "collision"
+  | "existing_match";
 
 /** A follow-up can wait on a payroll admin for a while - at most twice a day. */
 export const FOLLOW_UP_NOTICE_DEDUPE_MS = 12 * 60 * 60 * 1000;

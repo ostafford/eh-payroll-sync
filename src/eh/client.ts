@@ -6,6 +6,7 @@
  *
  * Confirmed against the live API (issue #2):
  *  - GET .../employee/unstructured/externalid/{id}  -> 200 full record, or 404
+ *  - GET .../employee/unstructured?$filter=...       -> 200 [records], terminated ones included (#131, #141)
  *  - POST .../employee/unstructured                 -> 201 { id, status, detailedStatus, operationType }
  *  - PUT  .../employee/unstructured/{id}            -> 200 same envelope
  *  - validation failures are HTTP 400 with { message: "Field: reason\n..." }
@@ -64,9 +65,22 @@ export class EhPayrollClient {
   }
 
   /**
+   * Every employee matching an OData `$filter` on the unstructured endpoint,
+   * terminated ones included (#141). For the Pre-create check (ADR-0010); the
+   * rows carry full values (TFN unmasked), so never log or store them.
+   */
+  async findEmployees(filter: string): Promise<EhResult<EhEmployee[]>> {
+    const r = await this.#get(`/employee/unstructured?$filter=${encodeURIComponent(filter)}`);
+    if (r.kind === "success") return { outcome: "ok", data: Array.isArray(r.body) ? (r.body as EhEmployee[]) : [] };
+    return toResult(r);
+  }
+
+  /**
    * Create the employee if no record carries this external id, otherwise update
    * the existing one. `externalId` is written into the payload so a fresh create
-   * is linked from the start. Returns the write envelope - call
+   * is linked from the start. A create goes out with `matchType=None`, so EH
+   * never merges it into an existing employee (ADR-0010): the caller runs the
+   * Pre-create check first. Returns the write envelope - call
    * {@link getByExternalId} afterwards for a field-level read-back.
    *
    * Pass `current` (a {@link getByExternalId} result already in hand, `null`
@@ -84,7 +98,7 @@ export class EhPayrollClient {
     const body: EhEmployeePayload = { ...payload, externalId };
     const created = existing.data === null;
     const r = created
-      ? await this.#write("POST", `/employee/unstructured`, body)
+      ? await this.#write("POST", `/employee/unstructured?matchType=None`, body)
       : await this.#write("PUT", `/employee/unstructured/${existing.data!.id}`, body);
 
     if (r.kind === "success") {

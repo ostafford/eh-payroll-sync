@@ -17,7 +17,9 @@ export type SyncOutcomeLabel =
   | "resolved"
   | "collision"
   /** Left out of the sync by choice (`rules.exclude`): no EH write, no message. */
-  | "excluded";
+  | "excluded"
+  /** A Held employee: the Pre-create check found them already in EH, so nothing was written (ADR-0010). */
+  | "existing_match";
 
 /** One row of `employee_map`, as the consumer reads it. */
 export interface EmployeeLink {
