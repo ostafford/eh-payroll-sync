@@ -313,9 +313,10 @@ Required`). The wizard's "Field map" stage runs it and loops until it passes.
 (`test/fixtures/demo-field-map.json`), so they pass the same on every clone.
 The deploy checks the real map (§5, "Where the deployment's values live").
 
-**Back up the finished map** with `.dev.vars`. Git ignores both, so neither is
-on GitHub: a lost machine means rebuilding the map with `discover` and tuning
-it again.
+**Back up the finished map** with `.dev.vars` and `clients/self/field-picks.json`
+(the field check's choices). Git ignores all three, so none is on GitHub: a lost
+machine means re-running the field check and `discover`, and tuning the map
+again.
 
 ---
 
@@ -372,7 +373,8 @@ the live Worker. A file git ignores can't be reset that way.
 The field map, `clients/self/field-map.json`, is git-ignored for a related
 reason. If git tracked it, a client who committed their tuned map would split
 their history from the repo's, and `git pull --ff-only` in
-`scripts/update.sh` would refuse every update after that.
+`scripts/update.sh` would refuse every update after that. The field check's
+choices, `clients/self/field-picks.json`, are ignored the same way.
 
 Before a deploy changes anything, `deploy:config --check-live` refuses when:
 

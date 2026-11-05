@@ -3,6 +3,7 @@
 // again (`--ff-only` refuses a split history), and a change to the file
 // upstream would collide with theirs. So git ignores it, a fresh clone builds
 // against the placeholder, and a deploy refuses anything but a real map.
+// field-picks.json (the field check's choices) is the same kind of data.
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -11,13 +12,14 @@ import { join } from "node:path";
 import { loadFieldMap, resetFieldMapCache } from "../src/mapping/loader.js";
 
 const MAP = "clients/self/field-map.json";
+const PICKS = "clients/self/field-picks.json";
 const read = (p: string) => readFileSync(p, "utf8");
 const git = (...args: string[]) => execFileSync("git", args, { encoding: "utf8" });
 
 describe("the client's field map stays out of git", () => {
-  it("git ignores it and doesn't track it", () => {
-    expect(git("check-ignore", MAP).trim()).toBe(MAP);
-    expect(git("ls-files", MAP).trim()).toBe("");
+  it.each([MAP, PICKS])("git ignores %s and doesn't track it", (file) => {
+    expect(git("check-ignore", file).trim()).toBe(file);
+    expect(git("ls-files", file).trim()).toBe("");
   });
 
   it("the deploy config refuses to build before checking the map", () => {

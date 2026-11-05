@@ -10,7 +10,7 @@ During onboarding, `npm run discover -- --client self` overwrites it with a draf
 built from the client's real Connecteam fields and Employment Hero IDs. Tune that
 draft, then `npm run validate-field-map -- --client self`. A deploy refuses the
 placeholder, a missing map or an invalid one. **Back the finished map up** with
-`.dev.vars`: neither is on GitHub.
+`.dev.vars` and `field-picks.json`: none of them is on GitHub.
 
 **Employee success messages** (#71) are on here: `"messages": {
 "employeeSuccess": true }`, so each employee gets one "Thanks…" DM on their
@@ -43,4 +43,5 @@ means not synced: a Correction message), `{ "skip": true }`
 (optional fields only), or `{ "create": true }` (waiting on `create-fields`,
 which swaps in the new field's ID). The wizard's field check (`npm run field-check`)
 writes it. The field check, `create-fields` and `discover` all read it before
-matching by name. Remove an entry to be asked about that field again.
+matching by name. Remove an entry to be asked about that field again. Git
+ignores it, like `field-map.json`.
