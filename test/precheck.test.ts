@@ -156,6 +156,11 @@ describe("existingMatchDetail", () => {
   it("round-trips the EH ids for the roster", () => {
     expect(heldCandidateIds(existingMatchDetail(matches))).toEqual(["40213", "40377"]);
   });
+
+  it("reads no ids from any other detail", () => {
+    expect(heldCandidateIds("collision: EH employee 555 already linked to Connecteam user 9")).toEqual([]);
+    expect(heldCandidateIds(null)).toEqual([]);
+  });
 });
 
 describe("Existing-match notice", () => {
@@ -206,5 +211,23 @@ describe("Existing-match notice", () => {
     expect(parts[0]).toContain("⚠️ Held:");
     expect(parts.at(-1)).toContain("To fix:");
     for (const m of many) expect(parts.join("\n")).toContain(existingMatchLine(m));
+  });
+
+  it("never runs past 9 parts: the label has room for one digit, and the rest are counted", () => {
+    const lots: ExistingMatch[] = Array.from({ length: 120 }, (_, i) => ({
+      ehEmployeeId: 40000 + i,
+      terminated: true,
+      matched: ["email", "tfn", "nameDob"],
+      differs: [],
+    }));
+    const parts = existingMatchMessages(person, lots);
+    expect(parts).toHaveLength(9);
+    parts.forEach((p, i) => {
+      expect(p.length).toBeLessThanOrEqual(500);
+      expect(p.startsWith(`(${i + 1} of 9)`)).toBe(true);
+      expect(p.endsWith("…")).toBe(false);
+    });
+    expect(parts.at(-1)).toMatch(/\.\.\.and \d+ more/);
+    expect(parts.at(-1)).toContain("To fix:");
   });
 });

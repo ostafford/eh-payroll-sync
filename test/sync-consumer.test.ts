@@ -460,6 +460,31 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
     expect(eh.upserts).toHaveLength(0);
   });
 
+  it("runs the same profile again once the admin resolves the hold", async () => {
+    const store = fakeGateway();
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] }, id: 555, created: true });
+
+    expect(await runSyncJob(job(), deps({ store, eh }))).toMatchObject({ status: "held" });
+    expect(store.rows.get(17760356)!.lastPayloadHash).toBeNull();
+    // A redelivery of the same job is still skipped.
+    expect(await runSyncJob(job(), deps({ store, eh }))).toMatchObject({ status: "skipped", reason: "stale or duplicate event" });
+
+    // "New hire, not this person", then the recheck re-enqueues them with an unchanged profile.
+    store.pending.set(17760356, { ctUserId: 17760356, ehEmployeeId: null, confirmedAt: 2 });
+    const out = await runSyncJob(job({ eventTimestamp: 2000 }), deps({ store, eh }));
+
+    expect(out).toMatchObject({ status: "synced", ehEmployeeId: "555" });
+    expect(eh.upserts).toHaveLength(1);
+  });
+
+  it("keeps a stored EH id when EH no longer finds that record by Payroll ID", async () => {
+    const store = fakeGateway({ ctUserId: 17760356, ehEmployeeId: "777", lastSyncedTs: 1 });
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
+
+    expect(await runSyncJob(job(), deps({ store, eh }))).toMatchObject({ status: "held" });
+    expect(store.rows.get(17760356)).toMatchObject({ ehEmployeeId: "777", lastOutcome: "existing_match" });
+  });
+
   it("retries a failed notice and writes no rows until it goes out", async () => {
     const store = fakeGateway();
     const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });

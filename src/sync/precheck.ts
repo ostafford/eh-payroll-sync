@@ -6,7 +6,8 @@
  *
  *   - email (EH's filter compares it case-insensitively, tested in #131);
  *   - TFN, skipped when it is an ATO placeholder (many people share those);
- *   - first name + surname + date of birth, as one filter. A name alone isn't a hit.
+ *   - first name + surname + date of birth, as one filter (names case-insensitive,
+ *     tested). A name alone isn't a hit.
  *
  * Up to three filtered `GET /employee/unstructured` calls, one after another
  * and always all of them, so the Existing-match notice lists every candidate.
@@ -52,17 +53,17 @@ interface Keys {
   nameDob: { firstName: string; surname: string; dob: string } | null;
 }
 
-function text(v: unknown): string {
+function trimmedText(v: unknown): string {
   return typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
 }
 
 function keysOf(record: Record<string, unknown>): Keys {
-  const email = text(record.emailAddress).toLowerCase();
-  const tfn = text(record.taxFileNumber).replace(/\D/g, "");
-  const firstName = text(record.firstName).toLowerCase();
-  const surname = text(record.surname).toLowerCase();
+  const email = trimmedText(record.emailAddress).toLowerCase();
+  const tfn = trimmedText(record.taxFileNumber).replace(/\D/g, "");
+  const firstName = trimmedText(record.firstName).toLowerCase();
+  const surname = trimmedText(record.surname).toLowerCase();
   // We send YYYY-MM-DD; EH returns YYYY-MM-DDT00:00:00.
-  const dob = text(record.dateOfBirth).slice(0, 10);
+  const dob = trimmedText(record.dateOfBirth).slice(0, 10);
   return {
     email: email || null,
     tfn: tfn && !ATO_PLACEHOLDER_TFNS.has(tfn) ? tfn : null,
@@ -71,7 +72,7 @@ function keysOf(record: Record<string, unknown>): Keys {
 }
 
 /** An OData string literal: single quotes doubled. */
-function lit(v: string): string {
+function odataString(v: string): string {
   return `'${v.replace(/'/g, "''")}'`;
 }
 
@@ -79,27 +80,32 @@ function lit(v: string): string {
 export function preCreateFilters(payload: EhEmployeePayload): Array<{ key: MatchKey; filter: string }> {
   const k = keysOf(payload);
   const out: Array<{ key: MatchKey; filter: string }> = [];
-  if (k.email) out.push({ key: "email", filter: `emailAddress eq ${lit(k.email)}` });
-  if (k.tfn) out.push({ key: "tfn", filter: `taxFileNumber eq ${lit(k.tfn)}` });
+  if (k.email) out.push({ key: "email", filter: `emailAddress eq ${odataString(k.email)}` });
+  if (k.tfn) out.push({ key: "tfn", filter: `taxFileNumber eq ${odataString(k.tfn)}` });
   if (k.nameDob) {
-    // The payload's own casing: EH's `eq` isn't documented as case-insensitive for names.
-    const first = text(payload.firstName);
-    const last = text(payload.surname);
+    // EH's `eq` ignores case on names, as on email: as-stored, lower- and
+    // upper-cased names all found the same employee (rehearsal account, 2026-11-05).
+    const first = trimmedText(payload.firstName);
+    const last = trimmedText(payload.surname);
     out.push({
       key: "nameDob",
-      filter: `firstName eq ${lit(first)} and surname eq ${lit(last)} and dateOfBirth eq datetime'${k.nameDob.dob}T00:00:00'`,
+      filter: `firstName eq ${odataString(first)} and surname eq ${odataString(last)} and dateOfBirth eq datetime'${k.nameDob.dob}T00:00:00'`,
     });
   }
   return out;
 }
 
-function sameKey(key: MatchKey, a: Keys, b: Keys): boolean | null {
-  const x = a[key];
-  const y = b[key];
-  if (x === null || y === null) return null;
-  if (typeof x === "string") return x === y;
-  const yy = y as NonNullable<Keys["nameDob"]>;
-  return x.firstName === yy.firstName && x.surname === yy.surname && x.dob === yy.dob;
+/** Whether both sides agree on one key, or null when either side doesn't hold it. */
+function sameKey(key: MatchKey, ours: Keys, theirs: Keys): boolean | null {
+  if (key === "nameDob") {
+    const a = ours.nameDob;
+    const b = theirs.nameDob;
+    if (a === null || b === null) return null;
+    return a.firstName === b.firstName && a.surname === b.surname && a.dob === b.dob;
+  }
+  const a = ours[key];
+  const b = theirs[key];
+  return a === null || b === null ? null : a === b;
 }
 
 /**
@@ -135,6 +141,9 @@ export async function runPreCreateCheck(
   return { outcome: "ok", data: matches.sort((a, b) => a.ehEmployeeId - b.ehEmployeeId) };
 }
 
+const DETAIL_PREFIX = "existing_match: ";
+const DETAIL_SEP = " | ";
+
 /**
  * The `sync_log` detail for a Held employee: EH ids and key names only, e.g.
  * `existing_match: EH 40213 (email, nameDob; tfn differs) | EH 40377 terminated (tfn)`.
@@ -144,10 +153,17 @@ export function existingMatchDetail(matches: readonly ExistingMatch[]): string {
     const differs = m.differs.length ? `; ${m.differs.join(", ")} differs` : "";
     return `EH ${m.ehEmployeeId}${m.terminated ? " terminated" : ""} (${m.matched.join(", ")}${differs})`;
   });
-  return `existing_match: ${parts.join(" | ")}`;
+  return `${DETAIL_PREFIX}${parts.join(DETAIL_SEP)}`;
 }
 
-/** The EH ids named in an {@link existingMatchDetail}, for the roster. */
+/**
+ * The EH ids an {@link existingMatchDetail} names, for the roster: the reverse
+ * of the format above, kept beside it. Anything else gives `[]`.
+ */
 export function heldCandidateIds(detail: string | null): string[] {
-  return [...(detail ?? "").matchAll(/\bEH (\d+)\b/g)].map((m) => m[1]!);
+  if (!detail?.startsWith(DETAIL_PREFIX)) return [];
+  return detail
+    .slice(DETAIL_PREFIX.length)
+    .split(DETAIL_SEP)
+    .flatMap((part) => /^EH (\d+)\b/.exec(part)?.[1] ?? []);
 }

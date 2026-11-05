@@ -180,8 +180,9 @@ const CORRECTION_HEAD = "✏️ Hi - a few of the details you entered need a qui
 const CORRECTION_MARK = "❗";
 /** A Correction never runs to more messages than this; past it, bullets are counted ("...and 2 more"). */
 const MAX_CORRECTION_PARTS = 3;
-/** Room for a part's "(1 of 3) " label. */
+/** Room for a part's "(1 of 3) " label: one digit each side, so never more than {@link MAX_PARTS}. */
 const PART_LABEL = "(9 of 9) ".length;
+const MAX_PARTS = 9;
 
 function correctionFoot(lines: readonly string[], profilePath: string, note: string): string[] {
   return [
@@ -210,17 +211,33 @@ export function correctionMessage(fields: EhFieldError[], profilePath: string, n
  */
 export function correctionMessages(fields: EhFieldError[], profilePath: string, note: string): string[] {
   const lines = friendlyLines(fields, true);
-  const foot = correctionFoot(lines, profilePath, note);
-  const whole = sections(CORRECTION_HEAD, bulletList(lines, CORRECTION_MARK), ...foot);
-  if (whole.length <= MAX_LEN) return [whole];
+  return numberedParts([CORRECTION_HEAD], lines, correctionFoot(lines, profilePath, note), CORRECTION_MARK, MAX_CORRECTION_PARTS);
+}
 
-  const body = (first: boolean, items: string[], last: boolean, more = 0) =>
+/**
+ * A bulleted message as one message when it fits, otherwise "(1 of 2)",
+ * "(2 of 2)"... (at most `maxParts`, and never past {@link MAX_PARTS}), each
+ * within the cap. The head opens the first part and the foot closes the last;
+ * past `maxParts`, the last part counts the rest ("...and 2 more").
+ */
+function numberedParts(
+  head: readonly string[],
+  lines: readonly string[],
+  foot: readonly string[],
+  mark: string,
+  maxParts: number,
+): string[] {
+  const body = (first: boolean, items: readonly string[], last: boolean, more = 0) =>
     sections(
-      first ? CORRECTION_HEAD : "",
-      bulletList([...items, ...(more > 0 ? [`...and ${more} more`] : [])], CORRECTION_MARK),
+      ...(first ? head : []),
+      bulletList([...items, ...(more > 0 ? [`...and ${more} more`] : [])], mark),
       ...(last ? foot : []),
     );
-  const fits = (first: boolean, items: string[], last: boolean, more = 0) => PART_LABEL + body(first, items, last, more).length <= MAX_LEN;
+  const whole = body(true, lines, true);
+  if (whole.length <= MAX_LEN) return [whole];
+
+  const fits = (first: boolean, items: readonly string[], last: boolean, more = 0) =>
+    PART_LABEL + body(first, items, last, more).length <= MAX_LEN;
 
   // Fill parts with bullets in order; the closing lines go in the last part, or one of their own.
   const parts: string[][] = [[]];
@@ -233,9 +250,10 @@ export function correctionMessages(fields: EhFieldError[], profilePath: string, 
   const last = parts.at(-1)!;
   if (!fits(parts.length === 1, last, true)) parts.push(last.length > 1 ? [last.pop()!] : []);
 
+  const max = Math.min(maxParts, MAX_PARTS);
   let more = 0;
-  if (parts.length > MAX_CORRECTION_PARTS) {
-    parts.length = MAX_CORRECTION_PARTS - 1;
+  if (parts.length > max) {
+    parts.length = max - 1;
     const rest = lines.slice(parts.flat().length);
     let keep = rest.length;
     while (keep > 0 && !fits(false, rest.slice(0, keep), true, rest.length - keep)) keep--;
@@ -352,34 +370,15 @@ const EXISTING_MATCH_FOOT = [
  * someone (ADR-0010, #143 item 8): each possible EH match with the keys that
  * matched or disagreed, never their values, and how to fix it. One message
  * when it fits, otherwise numbered parts, each within the cap: the heading
- * opens the first, "To fix" closes the last.
+ * opens the first, "To fix" closes the last. Past {@link MAX_PARTS} parts the
+ * rest are counted, which takes dozens of candidates.
  */
 export function existingMatchMessages(ref: PersonRef, matches: readonly ExistingMatch[]): string[] {
   const head = [
     `⚠️ Held: ${personLabel(ref)} may already be in Employment Hero, so nothing was written for them.`,
     matches.length === 1 ? "Possible match:" : "Possible matches:",
   ];
-  const lines = matches.map(existingMatchLine);
-  const body = (first: boolean, items: readonly string[], last: boolean) =>
-    sections(...(first ? head : []), bulletList(items), ...(last ? EXISTING_MATCH_FOOT : []));
-  const whole = body(true, lines, true);
-  if (whole.length <= MAX_LEN) return [whole];
-
-  const fits = (first: boolean, items: readonly string[], last: boolean) => PART_LABEL + body(first, items, last).length <= MAX_LEN;
-  const parts: string[][] = [[]];
-  for (const line of lines) {
-    const cur = parts.at(-1)!;
-    if (cur.length && !fits(parts.length === 1, [...cur, line], false)) parts.push([line]);
-    else cur.push(line);
-  }
-  const last = parts.at(-1)!;
-  if (!fits(parts.length === 1, last, true)) parts.push(last.length > 1 ? [last.pop()!] : []);
-
-  const n = parts.length;
-  return parts.map((items, i) => {
-    const text = body(i === 0, items, i === n - 1);
-    return clamp(i === 0 ? `(1 of ${n}) ${text}` : `(${i + 1} of ${n})\n${text}`);
-  });
+  return numberedParts(head, matches.map(existingMatchLine), EXISTING_MATCH_FOOT, "•", MAX_PARTS);
 }
 
 /**
