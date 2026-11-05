@@ -1,0 +1,81 @@
+/**
+ * The storage linking builds on (ADR-0009, ADR-0010), against real local D1
+ * with every migration applied: `pending_link` rows and the linked state on
+ * `employee_map`.
+ */
+import { env } from "cloudflare:test";
+import { describe, it, expect, beforeEach } from "vitest";
+import { SyncStore } from "../../src/db/store.js";
+
+const store = new SyncStore(env.DB);
+const baseline = { keyId: "k1", units: { phone: "fp-phone", bankAccount1: "fp-bank" } };
+
+beforeEach(async () => {
+  await env.DB.batch([env.DB.prepare("DELETE FROM employee_map"), env.DB.prepare("DELETE FROM pending_link")]);
+});
+
+describe("pending_link", () => {
+  it("adds, reads, lists and deletes a pending link", async () => {
+    await store.savePendingLink({ ctUserId: 1, ehEmployeeId: "40213", confirmedAt: 100 });
+    await store.savePendingLink({ ctUserId: 2, ehEmployeeId: null, confirmedAt: 200 });
+
+    expect(await store.getPendingLink(1)).toEqual({ ctUserId: 1, ehEmployeeId: "40213", confirmedAt: 100 });
+    expect(await store.getPendingLink(2)).toEqual({ ctUserId: 2, ehEmployeeId: null, confirmedAt: 200 });
+    expect((await store.listPendingLinks()).map((l) => l.ctUserId).sort()).toEqual([1, 2]);
+
+    await store.deletePendingLink(1);
+    expect(await store.getPendingLink(1)).toBeNull();
+    expect(await store.listPendingLinks()).toHaveLength(1);
+  });
+
+  it("replaces a person's pending link rather than adding a second", async () => {
+    await store.savePendingLink({ ctUserId: 1, ehEmployeeId: "40213", confirmedAt: 100 });
+    await store.savePendingLink({ ctUserId: 1, ehEmployeeId: "40999", confirmedAt: 300 });
+    expect(await store.listPendingLinks()).toEqual([{ ctUserId: 1, ehEmployeeId: "40999", confirmedAt: 300 }]);
+  });
+
+  it("deleting someone with no pending link is a no-op", async () => {
+    await expect(store.deletePendingLink(99)).resolves.toBeUndefined();
+  });
+});
+
+describe("linked state on employee_map", () => {
+  const link = { ctUserId: 7, ehEmployeeId: "40213", lastSyncedTs: 1, lastPayloadHash: "h", lastOutcome: "ok" as const };
+
+  it("an ordinary row is not linked and has no baseline", async () => {
+    await store.saveEmployeeLink(link);
+    const row = await store.getEmployeeLink(7);
+    expect(row?.linkedAt).toBeNull();
+    expect(row?.baseline).toBeNull();
+  });
+
+  it("marks a row linked with its first baseline, then replaces the baseline", async () => {
+    await store.saveEmployeeLink(link);
+    await store.markLinked(7, 5000, baseline);
+    expect(await store.getEmployeeLink(7)).toMatchObject({ linkedAt: 5000, baseline });
+
+    const rolled = { keyId: "k1", units: { ...baseline.units, phone: "fp-phone-2" } };
+    await store.saveBaseline(7, rolled);
+    expect(await store.getEmployeeLink(7)).toMatchObject({ linkedAt: 5000, baseline: rolled });
+  });
+
+  it("a later full save keeps the linked state", async () => {
+    await store.saveEmployeeLink(link);
+    await store.markLinked(7, 5000, baseline);
+    await store.saveEmployeeLink({ ...link, lastPayloadHash: "h2" });
+    expect(await store.getEmployeeLink(7)).toMatchObject({ linkedAt: 5000, baseline, lastPayloadHash: "h2" });
+  });
+
+  it("stores fingerprints and the key id, nothing else", async () => {
+    await store.saveEmployeeLink(link);
+    await store.markLinked(7, 5000, baseline);
+    const raw = await env.DB.prepare("SELECT baseline FROM employee_map WHERE ct_user_id = 7").first<{ baseline: string }>();
+    expect(JSON.parse(raw!.baseline)).toEqual(baseline);
+  });
+
+  it("a baseline that can't be read comes back as null, not an error", async () => {
+    await store.saveEmployeeLink(link);
+    await env.DB.prepare("UPDATE employee_map SET linked_at = 1, baseline = 'not json' WHERE ct_user_id = 7").run();
+    expect((await store.getEmployeeLink(7))?.baseline).toBeNull();
+  });
+});

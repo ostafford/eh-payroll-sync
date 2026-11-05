@@ -635,7 +635,8 @@ fi
 
 # Every remote command from here uses wrangler.deploy.json, built from the
 # wrangler.jsonc template + .dev.vars and checked against this account.
-if ! out=$(npm run --silent deploy:config -- --check-live 2>&1); then
+# --allow-missing-secrets: the "Push secrets + deploy" stage puts them itself.
+if ! out=$(npm run --silent deploy:config -- --check-live --allow-missing-secrets 2>&1); then
   fail "The deploy settings aren't ready:"; printf '%s\n' "$out" | sed 's/^/    /'; exit 1
 fi
 
@@ -674,16 +675,28 @@ next_up "put the sync live."
 # ─────────────────────────────────────────────────────────────────────────
 stage "Push secrets + deploy"
 why "This puts the sync live on your Cloudflare account and stores the two API" \
-    "keys and the webhook secret there, where only the sync can read them."
+    "keys, the webhook secret and the sync's own baseline key there, where only" \
+    "the sync can read them."
 printf '\n'
 # Rebuilt now: earlier stages may have changed a value since the storage stage. The secrets
 # below go to the Worker that config names, so they use it too.
-if ! out=$(npm run --silent deploy:config -- --check-live 2>&1); then
+if ! out=$(npm run --silent deploy:config -- --check-live --allow-missing-secrets 2>&1); then
   fail "The deploy settings aren't ready:"; printf '%s\n' "$out" | sed 's/^/    /'; exit 1
+fi
+# The key behind a Linked employee's Baseline (ADR-0009). Keep an existing one
+# on a re-run: a new key re-baselines every Linked employee, and an edit not yet
+# synced would never reach Employment Hero.
+if BASELINE_KEY=$(_existing BASELINE_KEY) && [[ -n "$BASELINE_KEY" ]]; then
+  ok "Kept the existing baseline key."
+else
+  BASELINE_KEY=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
+  write_env BASELINE_KEY "$BASELINE_KEY" >/dev/null
+  ok "Created a baseline key (kept in .dev.vars: back that file up)."
 fi
 put_secret CT_API_KEY "$CT_API_KEY" "the Connecteam API key"
 put_secret EH_API_KEY "$EH_API_KEY" "the Employment Hero API key"
 put_secret CT_WEBHOOK_SECRET "$CT_WEBHOOK_SECRET" "the webhook secret"
+put_secret BASELINE_KEY "$BASELINE_KEY" "the baseline key"
 printf '\n'
 say "Deploying (this takes about a minute)..."
 wr_quiet deploy --config wrangler.deploy.json || { fail "The deploy failed:"; show_wr_tail; exit 1; }

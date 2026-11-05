@@ -12,6 +12,12 @@ export interface Env {
   EH_API_KEY: string;
   CT_WEBHOOK_SECRET: string;
   /**
+   * Keys the HMAC-SHA-256 fingerprints in a Linked employee's Baseline
+   * (ADR-0009), so a stored fingerprint of a TFN can't be brute-forced. Losing
+   * or changing it re-baselines every Linked employee without pushing.
+   */
+  BASELINE_KEY: string;
+  /**
    * Bearer token for `GET /status` and `POST /status/digest` (issue #44).
    * Optional - unset falls back to `CT_WEBHOOK_SECRET` so /status works out of
    * the box, but a dedicated token lets it be rotated/shared independently of

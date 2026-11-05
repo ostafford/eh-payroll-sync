@@ -4,8 +4,10 @@ import {
   DATABASE_ID_KEY,
   DATABASE_ID_PLACEHOLDER,
   DEPLOY_CONFIG_PATH,
+  REQUIRED_SECRETS,
   REQUIRED_VARS,
   compareWithLive,
+  missingSecrets,
   parseDevVars,
   renderDeployConfig,
   stripJsonc,
@@ -101,6 +103,54 @@ describe("compareWithLive", () => {
   });
 });
 
+describe("missingSecrets", () => {
+  const all: LiveBinding[] = REQUIRED_SECRETS.map((name) => ({ name, type: "secret_text" }));
+
+  it("is empty when the live Worker has every required secret", () => {
+    expect(missingSecrets([...all, { name: "STATUS_TOKEN", type: "secret_text" }])).toEqual([]);
+  });
+
+  it("names BASELINE_KEY on a Worker deployed before linking", () => {
+    expect(missingSecrets(all.filter((b) => b.name !== "BASELINE_KEY"))).toEqual(["BASELINE_KEY"]);
+  });
+
+  it("doesn't count a plain var with a secret's name", () => {
+    const live = [...all.filter((b) => b.name !== "BASELINE_KEY"), { name: "BASELINE_KEY", type: "plain_text", text: "x" }];
+    expect(missingSecrets(live)).toEqual(["BASELINE_KEY"]);
+  });
+});
+
+describe("the secrets check is wired into every deploy path", () => {
+  const script = read("scripts/deploy-config.ts");
+  const wizard = read("scripts/setup-wizard.sh");
+
+  it("--check-live refuses a missing secret unless told the wizard will put it", () => {
+    expect(script).toMatch(/allowMissingSecrets \? \[\] : missingSecrets\(bindings\)/);
+    expect(script).toContain('process.argv.includes("--allow-missing-secrets")');
+  });
+
+  it("npm run deploy and update.sh keep the check on", () => {
+    expect(JSON.parse(read("package.json")).scripts.deploy).not.toContain("--allow-missing-secrets");
+    expect(read("scripts/update.sh")).not.toContain("--allow-missing-secrets");
+  });
+
+  it("the wizard skips the check only because it puts every required secret before deploying", () => {
+    for (const line of wizard.split("\n").filter((l) => l.includes("deploy:config -- --check-live"))) {
+      expect(line).toContain("--allow-missing-secrets");
+    }
+    const deployAt = wizard.indexOf("wr_quiet deploy --config");
+    for (const name of REQUIRED_SECRETS) {
+      const putAt = wizard.indexOf(`put_secret ${name} `);
+      expect(putAt, name).toBeGreaterThan(-1);
+      expect(putAt, name).toBeLessThan(deployAt);
+    }
+  });
+
+  it("the wizard keeps an existing BASELINE_KEY rather than making a new one", () => {
+    expect(wizard).toContain("BASELINE_KEY=$(_existing BASELINE_KEY)");
+  });
+});
+
 // The wizard, update.sh, `npm run deploy`, the runbook and the template must all
 // agree on where a deployment's values live. A slip in any one of them brings
 // back the deploy that blanks a live Worker's settings.
@@ -155,6 +205,6 @@ describe("every deploy path uses the built config, never the template", () => {
 
   it(".dev.vars.example lists every value a deploy needs", () => {
     const example = read(".dev.vars.example");
-    for (const key of [DATABASE_ID_KEY, ...REQUIRED_VARS]) expect(example).toMatch(new RegExp(`^${key}=`, "m"));
+    for (const key of [DATABASE_ID_KEY, ...REQUIRED_VARS, ...REQUIRED_SECRETS]) expect(example).toMatch(new RegExp(`^${key}=`, "m"));
   });
 });

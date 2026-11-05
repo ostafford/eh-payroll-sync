@@ -25,6 +25,12 @@ CT_CUSTOM_PUBLISHER_ID=
 # "needs a person" and "something isn't working" alerts.
 ADMIN_CONNECTEAM_CHANNEL_ID=
 
+# --- The sync's own key ---
+# Keys the fingerprints in a Linked employee's Baseline (ADR-0009). The setup
+# wizard makes it; any random 64-hex-character value works. Keep it: a new one
+# re-baselines every Linked employee.
+BASELINE_KEY=
+
 # --- Optional ---
 # STATUS_DIGEST_DAY=
 # INTEGRATOR_ALERT_URL=

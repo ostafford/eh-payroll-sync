@@ -1,5 +1,5 @@
 /**
- * `npm run deploy:config [-- --check-live] [-- --allow-database-change]`
+ * `npm run deploy:config [-- --check-live] [-- --allow-database-change] [-- --allow-missing-secrets]`
  *
  * Writes `wrangler.deploy.json` - the config every deploy and remote D1 command
  * uses - from the `wrangler.jsonc` template plus this deployment's values in
@@ -13,7 +13,11 @@
  *  - with --check-live: that database isn't on the Cloudflare account wrangler
  *    is logged in to (wrong account, or a stale id), the live Worker can't be
  *    read, or the deploy would point the live Worker at a different database.
- *    --allow-database-change permits the last one, for a deliberate move.
+ *    --allow-database-change permits the last one, for a deliberate move;
+ *  - with --check-live: the live Worker is missing a secret it needs
+ *    (REQUIRED_SECRETS, names only). The built config is kept, so the secret
+ *    can be put with it. --allow-missing-secrets skips this, for the setup
+ *    wizard, which puts every secret itself just before it deploys.
  * Settings the deploy would change on the live Worker are listed, not blocked:
  * changing one (a new alerts channel, say) is a normal reason to deploy.
  */
@@ -23,6 +27,7 @@ import {
   DEPLOY_CONFIG_PATH,
   DATABASE_ID_KEY,
   compareWithLive,
+  missingSecrets,
   parseDevVars,
   renderDeployConfig,
   type LiveBinding,
@@ -31,6 +36,7 @@ import { checkDeployableFieldMap } from "./lib/validate-field-map.js";
 
 const checkLive = process.argv.includes("--check-live");
 const allowDatabaseChange = process.argv.includes("--allow-database-change");
+const allowMissingSecrets = process.argv.includes("--allow-missing-secrets");
 
 function stop(...lines: string[]): never {
   // A config that failed a check must not be left lying around to deploy by hand.
@@ -140,6 +146,19 @@ if (checkLive) {
       );
     }
     console.log(`✓ Matches the live Worker's database${diff.databaseChange ? " (change allowed)" : ""}.`);
+    const missing = allowMissingSecrets ? [] : missingSecrets(bindings);
+    if (missing.length > 0) {
+      // Kept, unlike stop(): the config is right, and putting the secret needs it.
+      for (const l of [
+        "✗ The live Worker is missing secrets it needs:",
+        ...missing.map((k) => `    ${k}`),
+        ...missing.map((k) => `  Put ${k}: ${putSecretHint(k, Boolean(devVars[k]?.trim()))}`),
+        "  Then run this again. Nothing was deployed or changed.",
+      ])
+        console.error(l);
+      process.exit(1);
+    }
+    if (!allowMissingSecrets) console.log("✓ The live Worker has every secret it needs.");
     if (diff.varChanges.length === 0) {
       console.log("✓ No settings change on the live Worker.");
     } else {
@@ -147,4 +166,19 @@ if (checkLive) {
       for (const c of diff.varChanges) console.log(`    ${c.name}: "${c.live}" → "${c.next}"`);
     }
   }
+}
+
+/**
+ * How to put one missing secret. BASELINE_KEY is the sync's own random key:
+ * reuse the one in .dev.vars if it's there, otherwise make one and keep it there.
+ */
+function putSecretHint(name: string, inDevVars: boolean): string {
+  const put = `npx wrangler secret put ${name} --config ${DEPLOY_CONFIG_PATH}`;
+  if (name !== "BASELINE_KEY") return `printf %s "<value>" | ${put}`;
+  if (inDevVars) return `grep '^BASELINE_KEY=' .dev.vars | tail -n1 | cut -d= -f2- | tr -d '\\n' | ${put}`;
+  return (
+    `key=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))') && ` +
+    `echo "BASELINE_KEY=$key" >> .dev.vars && printf %s "$key" | ${put}` +
+    ` (back up .dev.vars: a lost key re-baselines every Linked employee)`
+  );
 }
