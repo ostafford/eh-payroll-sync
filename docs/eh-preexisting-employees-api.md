@@ -296,10 +296,34 @@ These ran on throwaway `Zztest` employees. TFNs had valid checksums and were che
 | B4 `matchType=None` + duplicate TFN | **201, new id**. EH creates a duplicate rather than rejecting it. |
 | B5 POST `id`=A + another employee's TFN | 200, A's id; the other employee unchanged. **`id` wins over TFN.** |
 | B6 two default POSTs with `333333333` | 201 + 201, distinct ids. The placeholder TFN isn't a match key. |
-| B7 terminated employees | **Not tested.** `PUT {endDate}` → 400 "A termination reason must be provided"; adding `terminationReason` didn't satisfy it. Whether terminated employees are matched is still unknown. |
+| B7 terminated employees | Not testable through the API: `PUT {endDate}` → 400 "A termination reason must be provided", and adding `terminationReason` didn't satisfy it. **Filters tested in #141 (below), using the EH UI to terminate.** Whether a *default* create merges into a terminated employee is still untested, and no longer matters (ADR-0010 always sends `matchType=None`). |
 
 **Design consequences**
 - Linking: `PUT /employee/unstructured/{id}` with only `externalId` is safe. Expect `leaveYearStart` to be filled if it was empty.
 - The "changed since link" push must send **whole groups** (at least bank account 1, which is all-or-nothing). Treat address the same way, since EH re-resolves it.
 - Clearing a field: there's no safe general way. `""` is ignored and `"(clear)"` breaks addresses.
 - `matchType=None` turns the silent overwrite into a **visible duplicate**, so the pre-create check is what prevents duplicates.
+
+## Terminated employees and the filters (#141, 2026-11-05, rehearsal account, **tested**)
+
+Probe: [`scripts/probe-eh-terminated-filters.sh`](../scripts/probe-eh-terminated-filters.sh), read-only unless `--delete`, run from the rehearsal clone. It prints counts and ids, never a TFN.
+
+**Method.** The integrator created a throwaway employee in the EH UI with fake details (Zztest Terminated, `zztest.terminated@example.com`, a checksum-valid TFN that `--precheck` confirmed unused). DOB was saved as 1990-07-18. The probe ran with the employee **Active** (the control), then again after the integrator **terminated** them in the EH UI (end date 2026-11-05). Then the employee was deleted (DELETE 200), and `--precheck` confirmed nothing matches.
+
+| Lookup (`GET /employee/unstructured`) | Active | Terminated |
+| --- | --- | --- |
+| `$filter=emailAddress eq '…'` | found | **found** |
+| `$filter=taxFileNumber eq '…'` | found | **found** |
+| `$filter=firstName eq '…' and surname eq '…' and dateOfBirth eq datetime'1990-07-18T00:00:00'` | found | **found** |
+| same, bare `dateOfBirth eq 1990-07-18` | found | **found** |
+| `$filter=firstName eq '…' and surname eq '…'` | found | **found** |
+| unfiltered list (`$top=100`, `$skip`) | included | **included** |
+
+- **Terminated employees are returned by every filter and by the plain list.** The row carries `status: "Terminated"` and `endDate`.
+- **A `dateOfBirth` literal works in a filter**, in both forms, and is really applied: the same filters with the wrong DOB (1990-01-01) returned `[]`.
+
+**Design consequences**
+- The Pre-create check (ADR-0010) catches rehires with its three filters, with no extra call. The Existing-match notice reads "terminated in EH" from the returned row's `status`.
+- Name + DOB can be one EH filter. There's no need to fetch by name and compare the DOB locally.
+- The link list's EH side (#132) includes terminated employees from the plain list, as #132 assumed.
+
