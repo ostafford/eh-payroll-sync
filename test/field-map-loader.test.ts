@@ -1,6 +1,5 @@
-// Some cases load the real clients/self/field-map.json, so they fail while a
-// client's map is mid-tuning. The wizard checks the map with
-// `npm run validate-field-map` instead (issue #56).
+// `self` here is test/fixtures/demo-field-map.json, not the clone's own map
+// (vitest.config.ts), so these pass the same on every clone.
 import { describe, it, expect, beforeEach } from "vitest";
 import { loadFieldMap, resetFieldMapCache, FieldMapError } from "../src/mapping/loader.js";
 
@@ -46,7 +45,7 @@ describe("messages.employeeSuccess (issue #71)", () => {
     expect(loadFieldMap("_example").messages.employeeSuccess).toBe(true);
   });
 
-  it("is on for the live client (clients/self)", () => {
+  it("is on for the demo client's map", () => {
     expect(loadFieldMap("self").messages.employeeSuccess).toBe(true);
   });
 });

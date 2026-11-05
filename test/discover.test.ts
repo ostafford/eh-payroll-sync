@@ -104,7 +104,7 @@ describe("buildFieldMapDraft", () => {
 
   it("drafts the demo account's committed field map, apart from pay settings and the award (#62 part 3)", async () => {
     const { DEMO_CUSTOM_FIELDS } = await import("./fixtures/demo-custom-fields.js");
-    const committed = (await import("../clients/self/field-map.json", { with: { type: "json" } })).default as any;
+    const committed = (await import("./fixtures/demo-field-map.json", { with: { type: "json" } })).default as any;
     const { draft } = buildFieldMapDraft({ ...base, fields: DEMO_CUSTOM_FIELDS });
 
     const byEh = (fields: any[]) =>

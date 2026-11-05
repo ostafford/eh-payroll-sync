@@ -4,7 +4,7 @@
  * correctly-configured one (create-fields, issue #55).
  *
  * Names, types, options, categories and permissions copy the demo account,
- * whose fields the committed clients/self/field-map.json is tuned against.
+ * whose fields test/fixtures/demo-field-map.json is tuned against.
  * The award field is not here: its own stage creates it from EH's classifications
  * (npm run provision-classification-field), and the pay-run picker maps it.
  */

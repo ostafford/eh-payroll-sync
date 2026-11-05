@@ -4,6 +4,9 @@
  *
  * DEFAULT: one repo clone serves one client, whose map is `clients/self/`. The
  * Worker loads `self` unless `FIELD_MAP_CLIENT` names another entry here.
+ * That map is git-ignored (it is the deployment's own data, like .dev.vars);
+ * npm install copies in the _example placeholder, and the tests swap in
+ * test/fixtures/demo-field-map.json (vitest.config.ts).
  *
  * ADD ANOTHER CLIENT (multi-tenant only):
  *   1. create clients/<slug>/field-map.json
