@@ -87,7 +87,9 @@ npm install
 ```
 
 One clone = one client. The deployment loads `clients/self/field-map.json`
-automatically; `FIELD_MAP_CLIENT` is left blank. (The `clients/` folder and
+automatically; `FIELD_MAP_CLIENT` is left blank. That file is this client's
+own, so git ignores it: `npm install` copies in a placeholder for the code to
+build with, and `discover` (step 4) replaces it. (The `clients/` folder and
 `src/mapping/registry.ts` only matter if you ever run several clients from one
 deployment.)
 
@@ -257,7 +259,7 @@ cover the whole account, and the API can't tell which fields are attached to
 the pack, so confirm that in the Connecteam UI.
 
 - **`clients/self/field-map.json`** — a schema-checked draft mapping. It replaces
-  the map that ships in the repo (set up for another account), but **never** a
+  the placeholder `npm install` copied in, but **never** a
   map already set up for this account (same Connecteam pack + EH business):
   then it writes `field-map.draft.json` beside it (git-ignored) and prints what
   differs, so tuning such as pay-run defaults and the award field is kept.
@@ -307,10 +309,14 @@ It checks only the map against the schema the Worker uses, and lists each
 problem by path (for example `rules.taxDeclaration.claimTaxFreeThreshold:
 Required`). The wizard's "Field map" stage runs it and loops until it passes.
 
-`npm test` also fails on an invalid map, but use it as the final gate, not
-while tuning: some tests load `clients/self/field-map.json` as a fixture
-(`test/field-map-loader.test.ts` and the Worker tests in `test/worker/`), so an
-unfinished map fails them as well, with unrelated output.
+`npm test` doesn't read this map: the tests use a fixed copy
+(`test/fixtures/demo-field-map.json`), so they pass the same on every clone.
+The deploy checks the real map (§5, "Where the deployment's values live").
+
+**Back up the finished map** with `.dev.vars` and `clients/self/field-picks.json`
+(the field check's choices). Git ignores all three, so none is on GitHub: a lost
+machine means re-running the field check and `discover`, and tuning the map
+again.
 
 ---
 
@@ -364,9 +370,18 @@ blank template by ordinary git use (a branch switch, a discard, a pull), and a
 plain `wrangler deploy` then pushed blank settings and a dead database id to
 the live Worker. A file git ignores can't be reset that way.
 
+The field map, `clients/self/field-map.json`, is git-ignored for a related
+reason. If git tracked it, a client who committed their tuned map would split
+their history from the repo's, and `git pull --ff-only` in
+`scripts/update.sh` would refuse every update after that. The field check's
+choices, `clients/self/field-picks.json`, are ignored the same way.
+
 Before a deploy changes anything, `deploy:config --check-live` refuses when:
 
 - `.dev.vars` is missing the database id or a required var (it names each);
+- the field map is missing, invalid, or still the placeholder `npm install`
+  copied in (that one is a valid map, but its field ids are made up, so the
+  Worker would run and sync nobody right);
 - that database isn't on the Cloudflare account wrangler is logged in to
   (wrong account, or a stale id);
 - the deploy would point the live Worker at a **different** database
@@ -759,12 +774,32 @@ must be updated on the Connecteam webhook registration at the same time.
 ./scripts/update.sh
 ```
 
-`git pull` → `npm ci` → `npm test` → `deploy:config --check-live` (see §5,
+`git pull` → `npm ci` → `npm test` → `deploy:config --check-live`, which also
+checks the field map (see §5,
 "Where the deployment's values live") → `wrangler d1 migrations apply --remote`
 → `wrangler deploy` → `/health` check. Fails loudly on any step; the check
 stops it before anything on Cloudflare changes. Run by the client's
 IT, or by the integrator on a support call. A non-technical owner should not run
 this unaided.
+
+### If `update.sh` stops at `git pull` (clones from before the field map left git)
+
+Clones made before the field map became git-ignored still have
+`clients/self/field-map.json` tracked. The update that untracks it stops at
+`git pull`, changing nothing, if the client edited or committed the map. To get
+past it once:
+
+```bash
+cp clients/self/field-map.json ~/field-map.backup.json
+git fetch origin
+git reset --hard origin/main   # drops local commits and edits to tracked files; .dev.vars is untouched
+cp ~/field-map.backup.json clients/self/field-map.json
+./scripts/update.sh
+```
+
+Before the `reset`, check `git status` and `git log origin/main..` show
+nothing but the field map. Anything else is a local change to the code; send
+it to the integrator first. After this, `git pull` never touches the map again.
 
 ---
 

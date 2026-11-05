@@ -39,6 +39,12 @@ coverage/
 
 # discover writes this beside a tuned map instead of overwriting it (#62)
 clients/*/field-map.draft.json
+# this deployment's own field map, like .dev.vars: tracked, it would split a
+# client's history from upstream and stop `git pull` (scripts/update.sh).
+# npm install copies in the _example placeholder; a deploy refuses that.
+clients/self/field-map.json
+# the field check's choices (#112): this deployment's own data, the same way
+clients/self/field-picks.json
 
 # the wizard's session log (#83) - may name the client's accounts
 setup-wizard-*.log

@@ -18,6 +18,25 @@ export function checkFieldMapText(text: string): FieldMapCheck {
   return problems.length === 0 ? { ok: true } : { ok: false, problems };
 }
 
+/** The `client` of clients/_example/field-map.json, the placeholder a fresh clone builds with. */
+export const PLACEHOLDER_CLIENT = "example";
+
+/**
+ * Whether this map can go to the live Worker: present, valid, and the client's
+ * own. The placeholder is a valid map, so the schema alone would let a deploy
+ * ship its made-up field ids: the Worker would run and quietly sync nobody right.
+ */
+export function checkDeployableFieldMap(text: string | undefined): FieldMapCheck {
+  const getIt = "Restore it from your backup, or rebuild it with `npm run discover` (RUNBOOK step 4).";
+  if (text === undefined) return { ok: false, problems: ["The field map was not found.", getIt] };
+  const check = checkFieldMapText(text);
+  if (!check.ok) return check;
+  if ((JSON.parse(text) as { client?: unknown }).client === PLACEHOLDER_CLIENT) {
+    return { ok: false, problems: ["This is the placeholder a fresh clone builds with, not this client's field map.", getIt] };
+  }
+  return { ok: true };
+}
+
 export function renderFieldMapCheck(path: string, check: FieldMapCheck): string {
   if (check.ok) return `✓ ${path} is valid.`;
   const n = check.problems.length;

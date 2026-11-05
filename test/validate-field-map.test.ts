@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { checkFieldMapText, renderFieldMapCheck } from "../scripts/lib/validate-field-map.js";
+import { checkDeployableFieldMap, checkFieldMapText, renderFieldMapCheck } from "../scripts/lib/validate-field-map.js";
 
 const example = readFileSync(new URL("../clients/_example/field-map.json", import.meta.url), "utf8");
 const PATH = "clients/acme/field-map.json";
@@ -42,5 +42,35 @@ describe("renderFieldMapCheck", () => {
 
   it("uses the singular for one problem", () => {
     expect(renderFieldMapCheck(PATH, { ok: false, problems: ["a: bad"] })).toContain("has 1 problem:");
+  });
+});
+
+describe("checkDeployableFieldMap: a deploy needs this client's own map", () => {
+  const real = JSON.stringify({ ...JSON.parse(example), client: "acme" });
+
+  it("passes a valid map of the client's own", () => {
+    expect(checkDeployableFieldMap(real)).toEqual({ ok: true });
+  });
+
+  it("stops when the map is missing, naming both ways to get it back", () => {
+    const result = checkDeployableFieldMap(undefined);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.problems.join("\n")).toMatch(/not found[\s\S]*backup[\s\S]*npm run discover/);
+  });
+
+  it("stops on the placeholder a fresh clone builds with, even though it is a valid map", () => {
+    expect(checkFieldMapText(example)).toEqual({ ok: true });
+    const result = checkDeployableFieldMap(example);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.problems.join("\n")).toMatch(/placeholder[\s\S]*npm run discover/);
+  });
+
+  it("stops on an invalid map, listing its problems", () => {
+    const map = JSON.parse(real);
+    delete map.rules.taxDeclaration.claimTaxFreeThreshold;
+    expect(checkDeployableFieldMap(JSON.stringify(map))).toEqual({
+      ok: false,
+      problems: ["rules.taxDeclaration.claimTaxFreeThreshold: Required"],
+    });
   });
 });

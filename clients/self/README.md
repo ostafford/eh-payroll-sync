@@ -3,15 +3,19 @@
 This deployment's field map. **One repo clone = one client**, so the map lives
 here and the Worker loads it by default (no `FIELD_MAP_CLIENT` needed).
 
-`field-map.json` ships as a **placeholder** (a copy of `clients/_example/`).
+`field-map.json` is **this client's own, so git ignores it** (like `.dev.vars`):
+`git pull` never changes it, and an update can't collide with it. `npm install`
+copies in a **placeholder** (a copy of `clients/_example/`) so the code builds.
 During onboarding, `npm run discover -- --client self` overwrites it with a draft
 built from the client's real Connecteam fields and Employment Hero IDs. Tune that
-draft, then `npm test` (the loader tests fail fast on an invalid map).
+draft, then `npm run validate-field-map -- --client self`. A deploy refuses the
+placeholder, a missing map or an invalid one. **Back the finished map up** with
+`.dev.vars` and `field-picks.json`: none of them is on GitHub.
 
 **Employee success messages** (#71) are on here: `"messages": {
 "employeeSuccess": true }`, so each employee gets one "Thanks…" DM on their
 first successful sync and when a Correction is fixed (never on an ordinary
-edit). Set it to `false`, commit and deploy to turn them off. A map without the
+edit). Set it to `false` and deploy to turn them off. A map without the
 `messages` line has them **on** too.
 
 **Admin success notices** are on here too (`"adminSuccess": true`): a ✅ in the
@@ -39,4 +43,5 @@ means not synced: a Correction message), `{ "skip": true }`
 (optional fields only), or `{ "create": true }` (waiting on `create-fields`,
 which swaps in the new field's ID). The wizard's field check (`npm run field-check`)
 writes it. The field check, `create-fields` and `discover` all read it before
-matching by name. Remove an entry to be asked about that field again.
+matching by name. Remove an entry to be asked about that field again. Git
+ignores it, like `field-map.json`.

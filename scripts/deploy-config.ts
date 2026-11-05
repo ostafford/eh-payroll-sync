@@ -8,6 +8,8 @@
  *
  * Refuses (exit 1), changing nothing, when:
  *  - `.dev.vars` is missing the database id or a required var;
+ *  - `clients/self/field-map.json` is missing, invalid, or still the placeholder
+ *    `npm install` copies in (it is git-ignored, so it is never pulled);
  *  - with --check-live: that database isn't on the Cloudflare account wrangler
  *    is logged in to (wrong account, or a stale id), the live Worker can't be
  *    read, or the deploy would point the live Worker at a different database.
@@ -25,6 +27,7 @@ import {
   renderDeployConfig,
   type LiveBinding,
 } from "./lib/deploy-config.js";
+import { checkDeployableFieldMap } from "./lib/validate-field-map.js";
 
 const checkLive = process.argv.includes("--check-live");
 const allowDatabaseChange = process.argv.includes("--allow-database-change");
@@ -76,6 +79,16 @@ if (!rendered.ok) {
     `  Add each as KEY=value. ${DATABASE_ID_KEY} is the id \`npx wrangler d1 list\` shows for eh-payroll-sync.`,
   );
 }
+const FIELD_MAP_PATH = `clients/${rendered.vars.FIELD_MAP_CLIENT?.trim() || "self"}/field-map.json`;
+let fieldMapText: string | undefined;
+try {
+  fieldMapText = readFileSync(FIELD_MAP_PATH, "utf8");
+} catch {
+  fieldMapText = undefined;
+}
+const fieldMap = checkDeployableFieldMap(fieldMapText);
+if (!fieldMap.ok) stop(`✗ ${FIELD_MAP_PATH} can't be deployed:`, ...fieldMap.problems.map((p) => `    ${p}`));
+
 writeFileSync(DEPLOY_CONFIG_PATH, `${JSON.stringify(rendered.config, null, 2)}\n`);
 console.log(`✓ ${DEPLOY_CONFIG_PATH} written (database ${rendered.databaseId}).`);
 

@@ -1,7 +1,7 @@
 /**
  * The demo account's Connecteam custom-field DEFINITIONS (no employee data),
- * read from `GET /users/v1/custom-fields` on 2026-10-03. The committed
- * clients/self/field-map.json was tuned against exactly these.
+ * read from `GET /users/v1/custom-fields` on 2026-10-03. The demo field map
+ * (test/fixtures/demo-field-map.json) was tuned against exactly these.
  */
 import type { CustomFieldDefinition } from "../../scripts/lib/connecteam-custom-fields.js";
 

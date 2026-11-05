@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sync employee details from Connecteam into Employment Hero Payroll",
   "scripts": {
+    "postinstall": "node scripts/ensure-field-map.mjs",
     "test": "vitest run --project node --project worker",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json",

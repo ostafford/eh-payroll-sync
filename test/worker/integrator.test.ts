@@ -1,6 +1,5 @@
-// The Worker loads clients/self/field-map.json (FIELD_MAP_CLIENT is blank), so
-// this fails while a client's map is mid-tuning. The wizard checks the map with
-// `npm run validate-field-map` instead (issue #56).
+// The Worker loads clients/self/field-map.json (FIELD_MAP_CLIENT is blank),
+// which the tests swap for test/fixtures/demo-field-map.json (vitest.config.ts).
 import { env, createExecutionContext, createMessageBatch } from "cloudflare:test";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import worker from "../../src/index.js";
