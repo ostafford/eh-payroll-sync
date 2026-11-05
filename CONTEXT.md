@@ -59,12 +59,20 @@ One attempt to sync a user that ended in a Validation failure, plus the resultin
 EH Payroll's `externalId` field on an employee (shown in the EH UI as "Payroll ID"). The sync sets it to the Connecteam `userId` and uses it as the cross-system match key. Email is only a fallback for the very first match.
 
 **Pre-existing employee**:
-A person who already has an EH employee record, created outside the sync (e.g. entered by hand and already paid), before the client's go-live. An admin confirms each one's match at setup. On their approval the sync only links them (sets their Payroll ID) and writes nothing else; their later Connecteam edits sync as normal. Anyone hired after go-live is not pre-existing.
+A person who already has an EH employee record, created outside the sync (e.g. entered by hand and already paid), before the client's go-live. An admin confirms each one's match at setup. On their approval the sync only links them (sets their Payroll ID) and writes nothing else. From then on they're a Linked employee. Anyone hired after go-live is not pre-existing.
 _Avoid_: legacy employee, manual employee
 
 **Link list**:
 The confirmed pairs of a Connecteam user and an existing EH employee, one per Pre-existing employee, which the admin approves during setup. A pair waits on the list until that person's onboarding pack is approved, and only then is the link made. Anyone left off the list is treated as a new hire.
 _Avoid_: match list, mapping
+
+**Linked employee**:
+A Pre-existing employee whose link has been made. From then on, EH is the source of truth for them: only what they change in Connecteam afterwards is synced, and only the parts that differ from their Baseline. They never go back to a full sync (see ADR-0009).
+_Avoid_: migrated employee, legacy employee
+
+**Baseline**:
+What a Linked employee's Connecteam data looked like at the last sync EH accepted for it, first taken at their link. It's kept as fingerprints, never values, and is used only to tell what has changed since.
+_Avoid_: snapshot, last-known profile
 
 **In-scope fields**:
 Everything the employee can enter in the onboarding pack: personal, address, emergency contact, structural fields EH needs (name, start date, employment type, job title), **and** tax file number, bank account(s), superannuation, and tax-declaration answers. All flow Connecteam → EH via the API — no EH self-setup (see ADR-0001). Pay rate / award / classification stay a manual EH task for v1.
