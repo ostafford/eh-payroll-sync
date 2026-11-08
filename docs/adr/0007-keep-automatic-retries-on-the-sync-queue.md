@@ -40,8 +40,11 @@ below, with what a full re-run does to it.
 | 6 | **Collision alert** to the alerts channel | Claim (1 h) before sending; released on a failed send, and the job retries before its audit row | Not re-sent once sent | At most once |
 | 6a | **Success message** to the employee (#71): first successful sync, or a fixed Correction | One claim (user + mapped-payload hash, 1 h) covering both wordings, taken before sending and **before** the cycle reset; released on a failed send, and the job retries with the cycle still open | Not re-sent once sent; a retry after the cycle reset would pick the other wording, but finds the same claim held | At most once |
 | 6b | **Existing-match notice** to the alerts channel, for a Held employee (ADR-0010) | One claim per part (user + candidates and keys, 12 h) before sending; released on a failed send, and the job retries before any row is written. No EH write on this path | The check runs again (row 0) and finds the claims held: not re-sent once sent | At most once |
+| 6c | **Link** on a first approval (ADR-0009, #150): `PUT` of the Payroll ID only to the confirmed EH employee | Before the write, `GET …/externalid/{id}` and `GET …/unstructured/{ehId}` re-check that employee | Once EH holds the Payroll ID, the re-check finds it and skips the write. A `link_put` marker in `sync_meta`, set after the write, tells the Link notice that this sync set it. A different Payroll ID, this one on another employee, or a rejected PUT writes nothing more and alerts the admin | Idempotent |
+| 6d | **Link notice**, or the "can't link" System alert, to the alerts channel | Claim before sending (Link notice: user + EH id, 1 h; can't link: user + reason, 12 h); released on a failed send, and the job retries before any row is written | Not re-sent once sent | At most once |
+| 6e | Linked state: `employee_map` row with `linked_at` and the Baseline, and the `pending_link` delete | One D1 batch (`completeLink`), after the Link notice | Same values. Once saved, the stale-event guard skips the job, and a Linked employee never takes the full-sync path. The batch means no re-run finds them synced but not linked | Idempotent |
 | 7 | `employee_map` link (`lastSyncedTs`, `lastPayloadHash`, `lastOutcome`) | Upsert of one row. A hold saves `existing_match` with no EH id and no payload hash, so the same profile re-runs once the admin resolves it | Same values. Once saved, the stale-event guard (and, except on a hold, the payload hash) skips any later redelivery of this job before step 1 | Idempotent |
-| 8 | `sync_log` audit row | `INSERT`, written last | Normally skipped by row 7's guard. **Exception:** the collision path doesn't save a link, so a redelivery appends a second identical `collision` row | Audit only; can repeat on collisions |
+| 8 | `sync_log` audit row | `INSERT`, written last | Normally skipped by row 7's guard. **Exception:** the collision and "can't link" paths don't save a link, so a redelivery appends a second identical `collision` row | Audit only; can repeat on collisions |
 | 9 | `acked_total` counter | Bumped once per batch, after the acks | A crash between an ack and the bump under-counts. The `/health` `queueBacklog` gauge can then stay above 0 | Gauge drift only |
 | 10 | Dead-letter queue: **System alert**, `dead_letter` audit row, integrator alert | Alert claimed (1 h); a failed send releases the claim (can't retry, the DLQ always acks), so the next dead-letter for that user posts it; row `INSERT`; integrator alert de-duplicated per user (1 h, `src/index.ts`) | No repeated alerts; the row can repeat if the DLQ itself redelivers | At most once / audit |
 
@@ -55,8 +58,9 @@ counter.
 to the playbook's "never auto-retry" rule. The rule exists to prevent
 duplicated third-party writes, and this consumer has none:
 
-- **The one third-party write is an upsert** keyed by the Connecteam user id
-  (EH `externalId`). Re-running it converges on the same record.
+- **The third-party writes are an upsert** keyed by the Connecteam user id
+  (EH `externalId`), **and the link's Payroll-ID `PUT`**, re-checked before
+  it's sent. Re-running either converges on the same record.
 - **Every human-facing message is claimed before it is sent**, so a re-run
   skips it. Messages are at-most-once.
 - **Everything else** is an idempotent upsert, an audit row, or a gauge.
@@ -83,7 +87,7 @@ would have succeeded.
 ## Consequences
 
 - **An invariant for future changes:** any new side effect in `runSyncJob` must
-  be idempotent, or claimed before it happens, like rows 3, 5, 6 and 6b. Otherwise
+  be idempotent, or claimed before it happens, like rows 3, 5, 6, 6b and 6d. Otherwise
   this decision must be revisited. `src/sync/consumer.ts` points here.
   (`wrangler.jsonc` deliberately has no comment: the live deploy folder keeps
   its settings as uncommitted edits to that file, and upstream changes to it

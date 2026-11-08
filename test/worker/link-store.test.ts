@@ -6,6 +6,7 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, beforeEach } from "vitest";
 import { SyncStore } from "../../src/db/store.js";
+import { deriveRosterEntry } from "../../src/status/roster.js";
 
 const store = new SyncStore(env.DB);
 const baseline = { keyId: "k1", units: { phone: "fp-phone", bankAccount1: "fp-bank" } };
@@ -77,5 +78,33 @@ describe("linked state on employee_map", () => {
     await store.saveEmployeeLink(link);
     await env.DB.prepare("UPDATE employee_map SET linked_at = 1, baseline = 'not json' WHERE ct_user_id = 7").run();
     expect((await store.getEmployeeLink(7))?.baseline).toBeNull();
+  });
+});
+
+describe("completeLink", () => {
+  const patch = { ctUserId: 7, ehEmployeeId: "40213", lastSyncedTs: 1, lastPayloadHash: "h", lastOutcome: "ok" as const };
+
+  it("saves the row linked with its Baseline and deletes the pending link, together", async () => {
+    await store.savePendingLink({ ctUserId: 7, ehEmployeeId: "40213", confirmedAt: 100 });
+    await store.completeLink(patch, 5000, baseline);
+
+    expect(await store.getEmployeeLink(7)).toMatchObject({ ...patch, linkedAt: 5000, baseline, failureCycleCount: 0 });
+    expect(await store.getPendingLink(7)).toBeNull();
+  });
+
+  it("links a Held employee's existing row", async () => {
+    await store.saveEmployeeLink({ ...patch, ehEmployeeId: null, lastPayloadHash: null, lastOutcome: "existing_match" });
+    await store.completeLink(patch, 5000, baseline);
+    expect(await store.getEmployeeLink(7)).toMatchObject({ ehEmployeeId: "40213", lastOutcome: "ok", linkedAt: 5000 });
+  });
+
+  it("shows a Linked employee in the roster as ready and linked", async () => {
+    await store.completeLink(patch, 5000, baseline);
+    await store.saveEmployeeLink({ ...patch, ctUserId: 8 });
+    const entries = (await store.listRosterRows()).map(deriveRosterEntry);
+    expect(entries).toEqual([
+      { ctUserId: 7, ehEmployeeId: "40213", state: "ready", reasons: [], linked: true },
+      { ctUserId: 8, ehEmployeeId: "40213", state: "ready", reasons: [] },
+    ]);
   });
 });

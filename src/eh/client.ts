@@ -64,6 +64,23 @@ export class EhPayrollClient {
     return toResult(r);
   }
 
+  /** One employee by EH id, or `data: null` when EH has none (a link's target, ADR-0009). */
+  async getEmployee(employeeId: string): Promise<EhResult<EhEmployee | null>> {
+    const r = await this.#get(`/employee/unstructured/${encodeURIComponent(employeeId)}`);
+    if (r.kind === "success") return { outcome: "ok", data: (r.body as EhEmployee) ?? null };
+    if (r.kind === "client_error" && r.status === 404) return { outcome: "ok", data: null };
+    return toResult(r);
+  }
+
+  /**
+   * Set only the Payroll ID (`externalId`) on an existing employee: the link
+   * (ADR-0009). A partial PUT keeps every other value EH holds (#135).
+   */
+  async setExternalId(employeeId: string, externalId: string): Promise<EhResult<null>> {
+    const r = await this.#write("PUT", `/employee/unstructured/${encodeURIComponent(employeeId)}`, { externalId });
+    return r.kind === "success" ? { outcome: "ok", data: null } : toResult(r);
+  }
+
   /**
    * Every employee matching an OData `$filter` on the unstructured endpoint,
    * terminated ones included (#141). For the Pre-create check (ADR-0010); the

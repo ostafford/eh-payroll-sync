@@ -21,6 +21,16 @@ function row(over: Partial<RosterRow>): RosterRow {
 }
 
 describe("deriveRosterEntry", () => {
+  it("marks a Linked employee ready and linked (#143 item 2)", () => {
+    expect(deriveRosterEntry(row({ linkedAt: 5000, latestDetail: "linked: Payroll ID only" }))).toEqual({
+      ctUserId: 100,
+      ehEmployeeId: "555",
+      state: "ready",
+      reasons: [],
+      linked: true,
+    });
+  });
+
   it("is ready when the last outcome was a clean sync", () => {
     expect(deriveRosterEntry(row({}))).toEqual({
       ctUserId: 100,
@@ -174,17 +184,17 @@ describe("summarizeRoster", () => {
 describe("parseRosterRows", () => {
   it("normalises a raw D1 result row into a RosterRow", () => {
     const rows = parseRosterRows([
-      { ctUserId: "100", ehEmployeeId: "555", failureCycleCount: "2", lastOutcome: "correction", latestOutcome: "correction", latestDetail: "correction: bsb" },
+      { ctUserId: "100", ehEmployeeId: "555", failureCycleCount: "2", lastOutcome: "correction", latestOutcome: "correction", latestDetail: "correction: bsb", linkedAt: "5000" },
     ]);
     expect(rows).toEqual([
-      { ctUserId: 100, ehEmployeeId: "555", failureCycleCount: 2, lastOutcome: "correction", latestOutcome: "correction", latestDetail: "correction: bsb" },
+      { ctUserId: 100, ehEmployeeId: "555", failureCycleCount: 2, lastOutcome: "correction", latestOutcome: "correction", latestDetail: "correction: bsb", linkedAt: 5000 },
     ]);
   });
 
   it("defaults missing/null fields", () => {
     const rows = parseRosterRows([{ ctUserId: 4 }]);
     expect(rows).toEqual([
-      { ctUserId: 4, ehEmployeeId: null, failureCycleCount: null, lastOutcome: null, latestOutcome: null, latestDetail: null },
+      { ctUserId: 4, ehEmployeeId: null, failureCycleCount: null, lastOutcome: null, latestOutcome: null, latestDetail: null, linkedAt: null },
     ]);
   });
 });
