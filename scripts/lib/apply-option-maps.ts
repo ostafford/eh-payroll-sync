@@ -5,7 +5,8 @@
  * mapping made on a wizard re-run would never reach the sync.
  *
  * Only `map` (fields) and `options` (tax declaration) of an entry already
- * reading the picked field change, plus that field's entry in `rules.exclude`;
+ * reading the picked field change, plus that field's entry in `rules.exclude`
+ * and, from the EH Payroll ID pick, `identity.externalIdFrom` (#167);
  * everything else in the map is left alone.
  */
 import { optionsOf, syncedOptions, type FieldPicks } from "./field-resolve.js";
@@ -30,6 +31,15 @@ export function applyOptionMaps<T>(fieldMap: T, picks: FieldPicks): { map: T; ch
         map.rules.exclude = want;
         mark(spec.name);
       }
+    }
+    if (pick && spec.target.kind === "payrollId" && ("id" in pick || "skip" in pick)) {
+      // Where the Payroll ID comes from (ADR-0011): the picked field, or the user id once skipped.
+      const want = "id" in pick ? { customFieldId: pick.id } : "userId";
+      if (!same(map.identity?.externalIdFrom ?? "userId", want)) {
+        map.identity = { ...map.identity, externalIdFrom: want };
+        mark(spec.name);
+      }
+      continue;
     }
     const options = optionsOf(pick);
     if (!options || !pick || !("id" in pick)) continue;

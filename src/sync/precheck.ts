@@ -30,6 +30,10 @@ export interface ExistingMatch {
   matched: MatchKey[];
   /** Keys both sides hold that didn't match, in check order. */
   differs: MatchKey[];
+  /** EH already holds a Payroll ID for them (ADR-0011: the client can copy it into Connecteam). */
+  hasPayrollId?: true;
+  /** Found by a Payroll ID copied into Connecteam, with no key agreeing (ADR-0011), not by the check. */
+  byPayrollId?: true;
 }
 
 const KEY_ORDER: readonly MatchKey[] = ["email", "tfn", "nameDob"];
@@ -96,6 +100,10 @@ export function preCreateFilters(payload: EhEmployeePayload): Array<{ key: Match
 }
 
 /** Whether both sides agree on one key, or null when either side doesn't hold it. */
+export function isTerminated(row: { status?: unknown }): boolean {
+  return typeof row.status === "string" && row.status.toLowerCase() === "terminated";
+}
+
 function sameKey(key: MatchKey, ours: Keys, theirs: Keys): boolean | null {
   if (key === "nameDob") {
     const a = ours.nameDob;
@@ -106,6 +114,20 @@ function sameKey(key: MatchKey, ours: Keys, theirs: Keys): boolean | null {
   const a = ours[key];
   const b = theirs[key];
   return a === null || b === null ? null : a === b;
+}
+
+/**
+ * Which of the three keys this payload and an EH record agree or disagree on
+ * (ADR-0011): a Payroll ID copied into Connecteam links someone only when at
+ * least one agrees. A key either side lacks is in neither list.
+ */
+export function compareKeys(payload: EhEmployeePayload, record: Record<string, unknown>): { agree: MatchKey[]; differs: MatchKey[] } {
+  const ours = keysOf(payload);
+  const theirs = keysOf(record);
+  return {
+    agree: KEY_ORDER.filter((k) => sameKey(k, ours, theirs) === true),
+    differs: KEY_ORDER.filter((k) => sameKey(k, ours, theirs) === false),
+  };
 }
 
 /**
@@ -133,9 +155,10 @@ export async function runPreCreateCheck(
     const theirs = keysOf(row);
     return {
       ehEmployeeId: row.id,
-      terminated: typeof row.status === "string" && row.status.toLowerCase() === "terminated",
+      terminated: isTerminated(row),
       matched: KEY_ORDER.filter((k) => matched.has(k)),
       differs: KEY_ORDER.filter((k) => !matched.has(k) && sameKey(k, ours, theirs) === false),
+      ...(trimmedText(row.externalId) ? { hasPayrollId: true as const } : {}),
     };
   });
   return { outcome: "ok", data: matches.sort((a, b) => a.ehEmployeeId - b.ehEmployeeId) };
@@ -151,7 +174,8 @@ const DETAIL_SEP = " | ";
 export function existingMatchDetail(matches: readonly ExistingMatch[]): string {
   const parts = matches.map((m) => {
     const differs = m.differs.length ? `; ${m.differs.join(", ")} differs` : "";
-    return `EH ${m.ehEmployeeId}${m.terminated ? " terminated" : ""} (${m.matched.join(", ")}${differs})`;
+    const matched = m.byPayrollId ? ["Payroll ID", ...m.matched] : m.matched;
+    return `EH ${m.ehEmployeeId}${m.terminated ? " terminated" : ""} (${matched.join(", ")}${differs})`;
   });
   return `${DETAIL_PREFIX}${parts.join(DETAIL_SEP)}`;
 }

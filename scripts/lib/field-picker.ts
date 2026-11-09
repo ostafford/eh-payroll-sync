@@ -143,6 +143,12 @@ export async function reviewFields(raw: any[], picks: FieldPicks, io: PickerIo):
     const row = checkFields(raw, out).find((x) => x.name === spec.name)!;
     if (!change && row.result.status === "options") return fixOptions(spec);
     if (!change && row.result.status === "taxGuess") return fixOptions(spec, row.result.guesses.map((g) => g.option));
+    if (!change && row.result.status === "toAsk") {
+      const { candidates } = row.result;
+      const named = candidates.map((c) => `"${c.name}"`).join(", ");
+      const first = fields.find((f) => f.id === candidates[0]?.id);
+      return decide(spec, `${named} may hold each employee's EH Payroll ID`, first);
+    }
     const current = r.status === "matched" ? r.field : undefined;
     await decide(spec, current && change ? `matched "${current.name}"` : whyAsk(r, spec), current);
     await fixOptions(spec);
@@ -334,5 +340,6 @@ function choiceLabel(spec: FieldSpec, c: Choice, p: Palette): string {
     return `Use profile ${p.ct(`"${spec.profile.label}"`)} (Connecteam profile - may be a preferred name, not the legal one)`;
   }
   if (c.kind === "create") return `Create a new ${p.ct(`"${spec.name}"`)} field in Connecteam`;
+  if (spec.target.kind === "payrollId") return "Skip: keep using the Connecteam user ID";
   return "Skip: the sync won't use this field";
 }

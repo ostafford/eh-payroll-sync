@@ -29,6 +29,19 @@ describe("applyOptionMaps", () => {
     expect(map.employmentHero).toEqual(kept().employmentHero);
   });
 
+  it("writes the EH Payroll ID pick into a kept map's identity, and a skip puts back the user id (#167)", () => {
+    const picked = applyOptionMaps(kept(), { "EH Payroll ID": { id: 70 } });
+    expect(picked.changed).toEqual(["EH Payroll ID"]);
+    expect(picked.map).toMatchObject({ identity: { externalIdFrom: { customFieldId: 70 } }, fields: kept().fields });
+
+    expect(applyOptionMaps(picked.map, { "EH Payroll ID": { id: 70 } }).changed).toEqual([]);
+    const skipped = applyOptionMaps(picked.map, { "EH Payroll ID": { skip: true } });
+    expect(skipped.changed).toEqual(["EH Payroll ID"]);
+    expect((skipped.map as any).identity.externalIdFrom).toBe("userId");
+    // Never asked: the map is left as it is.
+    expect(applyOptionMaps(kept(), {})).toEqual({ map: kept(), changed: [] });
+  });
+
   it("reports nothing changed when the map already has them", () => {
     const picks = { "Employee Status": { id: 60, options: { FullTime: "FullTime" } } };
     expect(applyOptionMaps(kept(), picks).changed).toEqual([]);

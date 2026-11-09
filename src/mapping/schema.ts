@@ -200,7 +200,14 @@ export const fieldMap = z
       }),
     identity: z
       .object({
-        externalIdFrom: z.literal("userId").default("userId"),
+        /**
+         * The Payroll ID (EH `externalId`): the Connecteam `userId`, or a
+         * Connecteam text field holding the Payroll IDs EH already has
+         * (ADR-0011). A blank field falls back to the `userId`, per person.
+         */
+        externalIdFrom: z
+          .union([z.literal("userId"), z.object({ customFieldId: z.number().int().positive() }).strict()])
+          .default("userId"),
         emailFallbackFrom: z.literal("email").default("email"),
       })
       .strict()

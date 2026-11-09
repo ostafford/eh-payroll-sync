@@ -532,6 +532,27 @@ describe("applyFieldMap - happy path", () => {
   });
 });
 
+describe("applyFieldMap - Payroll ID from a Connecteam field (#167, ADR-0011)", () => {
+  const PAYROLL_ID_FIELD = 50000001;
+  const withSetting = parseFieldMap({ ...map, identity: { externalIdFrom: { customFieldId: PAYROLL_ID_FIELD } } });
+  const withPayrollId = (value: unknown): ConnecteamUser => {
+    const user = clone();
+    user.customFields.push({ customFieldId: PAYROLL_ID_FIELD, type: "str", name: "EH Payroll ID", value });
+    return user;
+  };
+
+  it("uses the field's trimmed value as the Payroll ID", () => {
+    const result = applyFieldMap(withPayrollId("  007421 "), withSetting);
+    expect(result.externalId).toBe("007421");
+    expect(result.payload.externalId).toBe("007421");
+  });
+
+  it("falls back to the userId when the field is blank or absent", () => {
+    expect(applyFieldMap(withPayrollId("   "), withSetting).externalId).toBe("17760356");
+    expect(applyFieldMap(clone(), withSetting).externalId).toBe("17760356");
+  });
+});
+
 describe("applyFieldMap - number-type Postcode and BSB fields (#116)", () => {
   it("restores the leading zeros a number field drops", () => {
     const u = clone();

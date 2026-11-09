@@ -44,13 +44,15 @@ import {
   adminFirstSyncMessage,
   adminCorrectionFixedMessage,
   existingMatchMessages,
+  PAYROLL_ID_TYPO_HINT,
+  copyPayrollIdHint,
   linkNoticeMessage,
   linkBlockedMessage,
   payrollIdChangedMessage,
   type LinkBlock,
   type PersonRef,
 } from "./messages.js";
-import { runPreCreateCheck, existingMatchDetail, type ExistingMatch } from "./precheck.js";
+import { runPreCreateCheck, existingMatchDetail, compareKeys, isTerminated, type ExistingMatch, type MatchKey } from "./precheck.js";
 import { advanceCycle, directManagerUserId, MANAGER_ESCALATION_CYCLE } from "./cycles.js";
 import { payloadHash } from "./canonical.js";
 import { takeBaseline } from "./baseline.js";
@@ -243,6 +245,40 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     });
   }
 
+  // A Payroll ID the client copied into Connecteam (ADR-0011): when it finds
+  // someone in EH on their first sync, they're a Pre-existing employee, linked
+  // with no EH write, but only if another detail agrees with that record.
+  if (mapped.externalIdFromField && !hasSyncedBefore(link)) {
+    const found = await deps.eh.getByExternalId(matchKey);
+    if (found.outcome !== "ok") return ehRetry(found);
+    if (found.data) {
+      const keys = compareKeys(mapped.payload, found.data);
+      if (keys.agree.length > 0) {
+        return linkOnApproval(deps, {
+          person,
+          link,
+          ehEmployeeId: String(found.data.id),
+          externalId: matchKey,
+          payload: mapped.payload,
+          unmapped: mapped.issues.map((i) => i.ehField),
+          differs: keys.differs,
+          hash,
+          eventTimestamp,
+          now: now(),
+        });
+      }
+      return holdExisting(deps, {
+        person,
+        matches: [
+          { ehEmployeeId: found.data.id, terminated: isTerminated(found.data), matched: [], differs: keys.differs, byPayrollId: true },
+        ],
+        storedEhEmployeeId: link?.ehEmployeeId ?? null,
+        eventTimestamp,
+        now: now(),
+      });
+    }
+  }
+
   let ehEmployeeId = link?.ehEmployeeId ?? undefined;
   let decision: SyncDecision;
   // Set once EH accepts a write under the key: stored if they have none yet.
@@ -293,6 +329,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
           // Normally none. One we stored whose record EH no longer finds by
           // Payroll ID (relabelled or deleted there) is kept, not wiped.
           storedEhEmployeeId: link?.ehEmployeeId ?? null,
+          notes: payrollIdNotes(user as unknown as MappingUser, deps.fieldMap, mapped.externalIdFromField, check.data),
           eventTimestamp,
           now: now(),
         });
@@ -490,6 +527,20 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
 }
 
 /**
+ * What a hold's notice adds for a client whose Payroll IDs come from a
+ * Connecteam field (ADR-0011): a copied ID that found nobody may be a typo;
+ * a blank one, where a match already has a Payroll ID, should be filled in.
+ */
+function payrollIdNotes(user: MappingUser, map: FieldMap, fromField: boolean, matches: readonly ExistingMatch[]): string[] {
+  const from = map.identity.externalIdFrom;
+  if (from === "userId") return [];
+  if (fromField) return [PAYROLL_ID_TYPO_HINT];
+  if (!matches.some((m) => m.hasPayrollId)) return [];
+  const name = user.customFields.find((f) => f.customFieldId === from.customFieldId)?.name;
+  return [copyPayrollIdHint(name?.trim() || "their Payroll ID field")];
+}
+
+/**
  * A Held employee (ADR-0010): write nothing to EH, post one claimed
  * Existing-match notice to the admin channel (nothing to the employee), then
  * record `existing_match` with no EH id. The notice goes before the rows, as
@@ -508,6 +559,8 @@ async function holdExisting(
     person: PersonRef;
     matches: readonly ExistingMatch[];
     storedEhEmployeeId: string | null;
+    /** Extra lines for the notice, before "To fix". */
+    notes?: readonly string[];
     eventTimestamp: number;
     now: number;
   },
@@ -518,7 +571,7 @@ async function holdExisting(
   // Keyed by what the notice says (candidates and keys), not the payload hash:
   // a later profile edit that changes nothing about the match doesn't repost
   // it within the window. The digest is the only reminder (#143 item 5).
-  for (const [i, text] of existingMatchMessages(person, matches).entries()) {
+  for (const [i, text] of existingMatchMessages(person, matches, held.notes).entries()) {
     const key = await noticeKey("existing_match", ctUserId, i === 0 ? [detail] : [detail, `part ${i + 1}`]);
     if (!(await shouldPostNotice(deps.store, key, FOLLOW_UP_NOTICE_DEDUPE_MS, held.now))) continue;
     const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
@@ -567,6 +620,8 @@ async function linkOnApproval(
     payload: Record<string, unknown>;
     /** EH fields with a mapping issue: baselined as unmapped, so a later fix is sent. */
     unmapped: readonly string[];
+    /** Keys that disagree with the EH record, named in the Link notice (a link by a copied Payroll ID). */
+    differs?: readonly MatchKey[];
     hash: string;
     eventTimestamp: number;
     now: number;
@@ -612,7 +667,7 @@ async function linkOnApproval(
   const key = await noticeKey("link", ctUserId, [ehEmployeeId]);
   if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, linking.now)) {
     const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
-      deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt)),
+      deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt, linking.differs)),
     );
     if (!sent) return sendFailed("link");
   }
