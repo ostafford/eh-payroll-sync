@@ -147,7 +147,7 @@ export async function reviewFields(raw: any[], picks: FieldPicks, io: PickerIo):
       const { candidates } = row.result;
       const named = candidates.map((c) => `"${c.name}"`).join(", ");
       const first = fields.find((f) => f.id === candidates[0]?.id);
-      return decide(spec, `${named} may hold each employee's EH Payroll ID`, first);
+      return decide(spec, `which Connecteam field holds the EH Payroll ID? ${named} may.`, first);
     }
     const current = r.status === "matched" ? r.field : undefined;
     await decide(spec, current && change ? `matched "${current.name}"` : whyAsk(r, spec), current);

@@ -19,7 +19,7 @@
  */
 import type { SyncJob } from "./job.js";
 import type { FieldMap } from "../mapping/schema.js";
-import { applyFieldMap, leftOutBy, type ConnecteamUser as MappingUser } from "../mapping/apply.js";
+import { applyFieldMap, leftOutBy, type ConnecteamUser as MappingUser, type MappingResult } from "../mapping/apply.js";
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { CtResult, PayRate } from "../connecteam/types.js";
 import type { EhPayrollClient, EhResult } from "../eh/client.js";
@@ -248,9 +248,12 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   // A Payroll ID the client copied into Connecteam (ADR-0011): when it finds
   // someone in EH on their first sync, they're a Pre-existing employee, linked
   // with no EH write, but only if another detail agrees with that record.
+  // Kept for the lookup below when it found nobody, so EH isn't asked twice.
+  let prefetched: EhEmployee | null | undefined;
   if (mapped.externalIdFromField && !hasSyncedBefore(link)) {
     const found = await deps.eh.getByExternalId(matchKey);
     if (found.outcome !== "ok") return ehRetry(found);
+    prefetched = found.data;
     if (found.data) {
       const keys = compareKeys(mapped.payload, found.data);
       if (keys.agree.length > 0) {
@@ -290,9 +293,12 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   // lookup, so it costs no extra call. The hash above stays EH-independent.
   let current: EhEmployee | null | undefined;
   if (mapped.issues.length === 0) {
-    const found = await deps.eh.getByExternalId(matchKey);
-    if (found.outcome !== "ok") return ehRetry(found);
-    current = found.data;
+    if (prefetched !== undefined) current = prefetched;
+    else {
+      const found = await deps.eh.getByExternalId(matchKey);
+      if (found.outcome !== "ok") return ehRetry(found);
+      current = found.data;
+    }
     mapped = applyFieldMap(user as unknown as MappingUser, deps.fieldMap, { payRate, ehRecord: current });
   }
 
@@ -329,7 +335,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
           // Normally none. One we stored whose record EH no longer finds by
           // Payroll ID (relabelled or deleted there) is kept, not wiped.
           storedEhEmployeeId: link?.ehEmployeeId ?? null,
-          notes: payrollIdNotes(user as unknown as MappingUser, deps.fieldMap, mapped.externalIdFromField, check.data),
+          notes: payrollIdNotes(user as unknown as MappingUser, deps.fieldMap, mapped, matchKey, check.data),
           eventTimestamp,
           now: now(),
         });
@@ -528,13 +534,20 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
 
 /**
  * What a hold's notice adds for a client whose Payroll IDs come from a
- * Connecteam field (ADR-0011): a copied ID that found nobody may be a typo;
- * a blank one, where a match already has a Payroll ID, should be filled in.
+ * Connecteam field (ADR-0011): a copied ID that EH was asked for and found
+ * nobody by may be a typo; a blank one, where a match already has a Payroll
+ * ID, should be filled in. A stored key looked up instead gets neither.
  */
-function payrollIdNotes(user: MappingUser, map: FieldMap, fromField: boolean, matches: readonly ExistingMatch[]): string[] {
+function payrollIdNotes(
+  user: MappingUser,
+  map: FieldMap,
+  mapped: Pick<MappingResult, "externalId" | "externalIdFromField">,
+  matchKey: string,
+  matches: readonly ExistingMatch[],
+): string[] {
   const from = map.identity.externalIdFrom;
-  if (from === "userId") return [];
-  if (fromField) return [PAYROLL_ID_TYPO_HINT];
+  if (from === "userId" || matchKey !== mapped.externalId) return [];
+  if (mapped.externalIdFromField) return [PAYROLL_ID_TYPO_HINT];
   if (!matches.some((m) => m.hasPayrollId)) return [];
   const name = user.customFields.find((f) => f.customFieldId === from.customFieldId)?.name;
   return [copyPayrollIdHint(name?.trim() || "their Payroll ID field")];

@@ -97,9 +97,8 @@ export const FIELD_SPEC: FieldSpec[] = [
   { name: "Gender", match: /^gender/i, group: "Identity", create: true,
     ct: { type: "dropdown", options: ["Male", "Female", "Other"], ...employee(PERSONAL) },
     target: { kind: "field", eh: "gender", transform: "dropdownValue", map: { Male: "Male", Female: "Female", Other: "Indeterminate" } } },
-  // Optional (ADR-0011): only a field named "Payroll ID" matches by name. Any
-  // other ID-like field ("Employee ID") is asked about, never taken on its own:
-  // using the wrong one would re-key everyone.
+  // Optional (ADR-0011): never taken by name, even "Payroll ID". The check asks
+  // about any ID-like field ("Employee ID"): the wrong one would re-key everyone.
   { name: "EH Payroll ID", match: /payroll\s*id/i, group: "Identity", create: false,
     about: "The Payroll ID each employee already has in Employment Hero, copied into Connecteam. Skip to use their Connecteam user ID.",
     ct: { type: "str", numberNote: "A number field drops leading zeros, so a Payroll ID like 007421 would no longer match EH.", ...adminSet(PERSONAL) },

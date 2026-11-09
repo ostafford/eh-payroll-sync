@@ -1203,6 +1203,21 @@ describe("runSyncJob - Payroll ID from a Connecteam field (#167, ADR-0011)", () 
     const eh = payrollEh();
     expect(await run(eh, fakeCt(withCopiedId()))).toMatchObject({ status: "synced", ehEmployeeId: "555" });
     expect(writes(eh)).toEqual([`UPSERT ${COPIED}`]);
+    // Looked up once before the write, not twice.
+    expect(eh.calls.filter((c) => c === `GET externalid/${COPIED}`)).toHaveLength(2);
+  });
+
+  it("suggests no typo when the lookup used their stored key, not the copied one", async () => {
+    // Synced under their userId before the field was filled in; EH no longer has that record.
+    const store = fakeGateway({ ctUserId: ME, ehEmployeeId: "777", lastSyncedTs: 1, lastOutcome: "ok", externalId: String(ME) });
+    const ct = fakeCt(withCopiedId());
+
+    expect(await run(payrollEh(handEntered(40213, { externalId: "007412" })), ct, store)).toMatchObject({ status: "held" });
+    expect(ct.channels.some((c) => c.text.includes("⚠️ Held"))).toBe(true);
+    const said = ct.channels.map((c) => c.text).join("\n");
+    expect(said).not.toContain(TYPO);
+    // Their field isn't blank, so there's nothing to copy in either.
+    expect(said).not.toContain("Copy their EH Payroll ID");
   });
 });
 

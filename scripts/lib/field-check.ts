@@ -113,6 +113,7 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
     const resolved = resolveField(spec, defs, picks);
     const f = resolved.status === "matched" ? raw.find((x) => x?.id === resolved.field.id) : undefined;
     const level = levelOf(spec);
+    const ids = spec.target.kind === "payrollId" && !picks[spec.name] ? idLike(defs) : [];
     const result: CheckResult =
       resolved.status === "ambiguous"
         ? { status: "ambiguous", candidates: resolved.candidates.map(({ id, name }) => ({ id, name })) }
@@ -124,8 +125,8 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
               ? { status: "found" }
               : resolved.status === "none" && picks[spec.name] && "create" in picks[spec.name]!
                 ? { status: "toCreate" }
-                : resolved.status === "none" && spec.target.kind === "payrollId" && idLike(defs).length
-                  ? { status: "toAsk", candidates: idLike(defs) }
+                : resolved.status === "none" && ids.length
+                  ? { status: "toAsk", candidates: ids }
                   : checkOne(spec, f, optionsOf(picks[spec.name]));
     return {
       group: spec.group,

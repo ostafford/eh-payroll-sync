@@ -112,7 +112,7 @@ One account only, set to 100% and paid electronically.
 | Connecteam field | Type | EH field | Notes |
 |---|---|---|---|
 | Standard hours per week (any name) | Text or number, admin-only | `hoursPerWeek` | Sent with the employee's pay settings, overriding the default hours. Never created: the field picker asks which field holds it, or Skip (#118) |
-| EH Payroll ID (any name) | Text only, admin-only | `externalId` (Payroll ID) | Each Pre-existing employee's Payroll ID, copied in from EH. It becomes their match key, and linking them writes nothing to EH (ADR-0011). A number field is refused: it drops leading zeros. Only a field named "Payroll ID" matches by name. The field picker asks about any other ID-like field ("Employee ID"), or pick it by row number. Blank for a person: their Connecteam user ID is used (#167) |
+| EH Payroll ID (any name) | Text only, admin-only | `externalId` (Payroll ID) | Each Pre-existing employee's Payroll ID, copied in from EH. It becomes their match key, and linking them writes nothing to EH (ADR-0011). A number field is refused: it drops leading zeros. Never taken by name, even "Payroll ID": the field picker asks about any ID-like field ("Employee ID"), or pick it by row number. Blank for a person: their Connecteam user ID is used (#167) |
 
 **Total:** 28 custom fields (27 plus the award dropdown), plus email and phone from the profile, and the two optional fields. The wizard creates any of the 27 that are missing (`npm run create-fields`, #55) and the award dropdown in its own stage.
 

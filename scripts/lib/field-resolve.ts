@@ -73,6 +73,8 @@ export type FieldPicks = Record<string, FieldPick>;
 export function resolveField(spec: FieldSpec, fields: FieldDef[], picks: FieldPicks = {}): Resolution {
   const pick = picks[spec.name];
   if (pick && "skip" in pick) return { status: "skipped" };
+  // Never by name (ADR-0011): the wrong field would re-key everyone, so only a human's pick counts.
+  if (!pick && spec.target.kind === "payrollId") return { status: "none" };
   if (pick && "profile" in pick) return spec.profile ? { status: "profile" } : { status: "none" };
   // Not made yet: no name match stands in for it, so create-fields makes it.
   if (pick && "create" in pick) return { status: "none" };

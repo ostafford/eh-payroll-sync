@@ -50,6 +50,11 @@ describe("buildFieldMapDraft", () => {
       expect(draft.fields.some((r) => r.from.customFieldId === 910034)).toBe(false);
     });
 
+    it("never takes a field named \"Payroll ID\" without a pick", () => {
+      const named = [{ customFieldId: 910034, name: "Payroll ID", type: "str" }];
+      expect(buildFieldMapDraft({ ...base, fields: named, picks: {} }).draft.identity.externalIdFrom).toBe("userId");
+    });
+
     it("keeps the Connecteam user id when it's skipped or not picked", () => {
       for (const picks of [{ "EH Payroll ID": { skip: true as const } }, {}]) {
         expect(buildFieldMapDraft({ ...base, fields, picks }).draft.identity.externalIdFrom).toBe("userId");

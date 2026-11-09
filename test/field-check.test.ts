@@ -147,6 +147,13 @@ describe("checkFields", () => {
       expect(row(rows, "EH Payroll ID").field).toBeUndefined();
       expect(row(checkFields([...demoRaw(), text], { "EH Payroll ID": { skip: true } }), "EH Payroll ID").result.status).toBe("skipped");
     });
+
+    it("asks even about a field named \"Payroll ID\": switching everyone's key needs a human", () => {
+      const named = { ...text, name: "Payroll ID" };
+      expect(row(checkFields([...demoRaw(), named]), "EH Payroll ID")).toMatchObject({
+        result: { status: "toAsk", candidates: [{ id: 910034, name: "Payroll ID" }] },
+      });
+    });
   });
 
   describe("with the client's options mapped (#112)", () => {

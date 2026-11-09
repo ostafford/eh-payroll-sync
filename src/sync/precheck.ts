@@ -14,6 +14,9 @@
  * A key the payload doesn't have is skipped. Terminated employees come back
  * from every filter (#141) and count as a hit, flagged from their `status`.
  *
+ * The same keys decide a link by a Payroll ID copied into Connecteam
+ * (ADR-0011, {@link compareKeys}): at least one must agree.
+ *
  * The values compared here never leave this module: a candidate carries its EH
  * id and the NAMES of the keys that matched or disagreed, nothing else.
  */
@@ -99,11 +102,12 @@ export function preCreateFilters(payload: EhEmployeePayload): Array<{ key: Match
   return out;
 }
 
-/** Whether both sides agree on one key, or null when either side doesn't hold it. */
+/** An EH employee's `status` says Terminated (#141). */
 export function isTerminated(row: { status?: unknown }): boolean {
   return typeof row.status === "string" && row.status.toLowerCase() === "terminated";
 }
 
+/** Whether both sides agree on one key, or null when either side doesn't hold it. */
 function sameKey(key: MatchKey, ours: Keys, theirs: Keys): boolean | null {
   if (key === "nameDob") {
     const a = ours.nameDob;

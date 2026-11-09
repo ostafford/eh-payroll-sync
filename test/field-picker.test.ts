@@ -342,7 +342,7 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
       const { result, asked, out } = await run(withEmployeeId(), {}, ["y", choice('Use "Employee ID"'), ""]);
       expect(asked[0]).toBe(fixPrompt(1));
       const q = out.slice(out.lastIndexOf("EH Payroll ID (optional)"));
-      expect(q).toMatch(/^EH Payroll ID \(optional\): "Employee ID" may hold each employee's EH Payroll ID/);
+      expect(q).toMatch(/^EH Payroll ID \(optional\): which Connecteam field holds the EH Payroll ID\? "Employee ID" may\./);
       expect(q).toMatch(/^\s+1\) Use "Employee ID" \(text\)/m);
       expect(q).toContain("Skip: keep using the Connecteam user ID");
       expect(result["EH Payroll ID"]).toEqual({ id: 42920893 });
