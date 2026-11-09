@@ -26,7 +26,7 @@ These are EH's own merge keys, made looser on purpose so a hand-entered record w
 
 - **On a hit:** nothing is written. The person becomes a **Held employee** (`existing_match` on `employee_map`, no EH id; a `sync_log` row). The admin gets one claimed **Existing-match notice** listing every candidate and which keys matched or disagreed, never the values. The employee gets nothing.
 - **When clear:** the create goes out with `matchType=None`, so EH can never merge. The after-write collision guard stays as a backstop.
-- **Resolving a hit:** the admin re-runs the wizard's link stage. They either link the Held employee to a candidate, or confirm "New hire, not this person" (a link-list row with no EH id, which lets the create go ahead). The daily recheck enqueues the person afterwards, and a profile edit does it immediately.
+- **Resolving a hit:** the admin re-runs the wizard's link stage. They either link the Held employee to a candidate, or confirm "New hire, not this person" (a link-list row with no EH id, which lets the create go ahead). For a client whose Payroll IDs come from a Connecteam field, they can instead fill in the person's EH Payroll ID there (ADR-0011). The daily recheck enqueues every Held employee, and a profile edit does it immediately.
 
 ## Consequences
 

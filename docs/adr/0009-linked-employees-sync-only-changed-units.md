@@ -16,7 +16,7 @@ We considered three options:
 
 ## Decision
 
-Once a Pre-existing employee is linked (their first approval sets only the Payroll ID), they're a **Linked employee** for good. Every later sync sends only the **units** whose Connecteam value differs from their **Baseline**. They never go back to a full-profile sync, and v1 has no unlink.
+Once a Pre-existing employee is linked (their first approval sets only the Payroll ID, or finds EH already holding it when it comes from a Connecteam field, ADR-0011), they're a **Linked employee** for good. Every later sync sends only the **units** whose Connecteam value differs from their **Baseline**. They never go back to a full-profile sync, and v1 has no unlink.
 
 - **Units.** A unit is a single field, or a group EH needs sent whole (#135): bank account 1, residential address, emergency contact 1, super, tax declaration, the pay-run set. A change to any value in a group sends the whole group.
 - **Baseline.** One fingerprint per unit, taken at the first approval. Fingerprints are HMAC-SHA-256 with a Worker secret and never values (ADR-0001): an unkeyed hash of a 9-digit TFN can be brute-forced. They're stored on `employee_map` (`baseline`: unit → fingerprint plus the key id; `linked_at` marks the row as linked).

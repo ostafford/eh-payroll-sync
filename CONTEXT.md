@@ -56,14 +56,14 @@ The initial EH sync for a person fires when their assignment first reaches `stat
 One attempt to sync a user that ended in a Validation failure, plus the resulting Correction message. Cycles for a user do not auto-retry — the next attempt only happens when the user edits their Connecteam data again. First two cycles message the employee only; the third also messages their direct manager. The counter resets on a successful sync.
 
 **Payroll ID** / **External ID**:
-EH Payroll's `externalId` field on an employee (shown in the EH UI as "Payroll ID"). The sync sets it to the Connecteam `userId` and uses it as the cross-system match key. Email is only a fallback for the very first match.
+EH Payroll's `externalId` field on an employee (shown in the EH UI as "Payroll ID"), and the cross-system match key. It's the Connecteam `userId`, unless the client keeps the Payroll IDs EH already holds in a Connecteam field and the person's field is filled in: then it's that value, and linking them writes nothing to EH. Email is only a fallback for the very first match.
 
 **Pre-existing employee**:
-A person who already has an EH employee record, created outside the sync (e.g. entered by hand and already paid), before the client's go-live. An admin confirms each one's match at setup. On their approval the sync only links them (sets their Payroll ID) and writes nothing else. From then on they're a Linked employee. Anyone hired after go-live is not pre-existing.
+A person who already has an EH employee record, created outside the sync (e.g. entered by hand and already paid), before the client's go-live. Each one is matched either by the Payroll ID the client copied into Connecteam, or through the Link list the admin confirms at setup. On their approval the sync only links them (setting their Payroll ID if EH doesn't already hold it) and writes nothing else. From then on they're a Linked employee. Anyone hired after go-live is not pre-existing.
 _Avoid_: legacy employee, manual employee
 
 **Link list**:
-The confirmed pairs of a Connecteam user and an existing EH employee, one per Pre-existing employee, which the admin approves during setup. A pair waits on the list until that person's onboarding pack is approved, and only then is the link made. Anyone left off the list is treated as a new hire.
+The confirmed pairs of a Connecteam user and an existing EH employee, which the admin approves during setup, for Pre-existing employees not already matched by Payroll ID. A pair waits on the list until that person's onboarding pack is approved, and only then is the link made. Anyone left off the list, and not matched by Payroll ID, is treated as a new hire.
 _Avoid_: match list, mapping
 
 **Linked employee**:
@@ -79,7 +79,7 @@ Before the sync creates anyone in EH, it looks for an EH employee who is already
 _Avoid_: duplicate check, dedupe
 
 **Held employee**:
-An approved Connecteam user the Pre-create check stopped. Nothing is written to EH for them until the admin either links them to an EH employee or confirms them as a new hire, in the link list.
+An approved Connecteam user the Pre-create check stopped. Nothing is written to EH for them until the admin either links them to an EH employee or confirms them as a new hire, in the link list, or fills in the Payroll ID EH already holds for them in Connecteam.
 _Avoid_: blocked employee, collision
 
 **Existing-match notice**:
