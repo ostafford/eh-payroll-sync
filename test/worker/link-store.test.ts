@@ -108,3 +108,50 @@ describe("completeLink", () => {
     ]);
   });
 });
+
+describe("the stored match key (ADR-0011)", () => {
+  const patch = { ctUserId: 7, ehEmployeeId: "40213", lastSyncedTs: 1, lastPayloadHash: "h", lastOutcome: "ok" as const };
+
+  it("keeps the first key saved; a later save can't replace or clear it", async () => {
+    await store.saveEmployeeLink({ ...patch, externalId: "P-100" });
+    await store.saveEmployeeLink({ ...patch, lastPayloadHash: "h2", externalId: "P-200" });
+    await store.saveEmployeeLink({ ...patch, lastPayloadHash: "h3", externalId: null });
+    await store.saveEmployeeLink({ ...patch, lastPayloadHash: "h4" });
+    expect(await store.getEmployeeLink(7)).toMatchObject({ externalId: "P-100", lastPayloadHash: "h4" });
+  });
+
+  it("a row saved without one has none", async () => {
+    await store.saveEmployeeLink({ ...patch, ehEmployeeId: null, lastOutcome: "existing_match" });
+    expect((await store.getEmployeeLink(7))?.externalId).toBeNull();
+  });
+
+  it("a link stores the key it was made with", async () => {
+    await store.saveEmployeeLink({ ...patch, ehEmployeeId: null, lastOutcome: "existing_match" });
+    await store.completeLink({ ...patch, externalId: "P-100" }, 5000, baseline);
+    expect((await store.getEmployeeLink(7))?.externalId).toBe("P-100");
+  });
+});
+
+describe("migration 0006 backfill", () => {
+  // Setup already applied every migration, so re-run 0006 minus its ALTER
+  // (the column exists) over rows shaped as they were before it: no key stored.
+  const backfill = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0006_"))!.queries.filter(
+    (q) => !/^\s*ALTER\s/i.test(q),
+  );
+
+  it("gives each row EH accepted a write for its userId, and leaves the rest without a key", async () => {
+    const link = { lastSyncedTs: 1, lastPayloadHash: "h", lastOutcome: "ok" as const };
+    await store.saveEmployeeLink({ ...link, ctUserId: 7, ehEmployeeId: "40213" });
+    await store.completeLink({ ...link, ctUserId: 8, ehEmployeeId: "40214" }, 5000, baseline);
+    await store.saveEmployeeLink({ ...link, ctUserId: 9, ehEmployeeId: null, lastPayloadHash: null, lastOutcome: "existing_match" });
+    await store.setFailureCount(10, 1);
+    await env.DB.prepare("UPDATE employee_map SET external_id = NULL").run();
+
+    for (const q of backfill) await env.DB.prepare(q).run();
+
+    const keys = Object.fromEntries(
+      await Promise.all([7, 8, 9, 10].map(async (id) => [id, (await store.getEmployeeLink(id))?.externalId])),
+    );
+    expect(keys).toEqual({ 7: "7", 8: "8", 9: null, 10: null });
+  });
+});

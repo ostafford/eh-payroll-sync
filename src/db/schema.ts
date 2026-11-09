@@ -22,6 +22,8 @@ export const employeeMap = sqliteTable("employee_map", {
   linkedAt: integer("linked_at"),
   /** A Linked employee's Baseline as JSON: a key id plus a keyed fingerprint per unit, never a value. */
   baseline: text("baseline"),
+  /** The Payroll ID (EH `externalId`) used at the first sync or link; the match key from then on (ADR-0011). */
+  externalId: text("external_id"),
   updatedAt: integer("updated_at").notNull(),
 });
 

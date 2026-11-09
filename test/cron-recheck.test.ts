@@ -115,6 +115,16 @@ describe("runRecheck", () => {
     ]);
   });
 
+  it("looks EH up by the stored match key, not the Connecteam id (ADR-0011)", async () => {
+    const store = fakeStore([link({ ctUserId: 100, externalId: "P-100" })]);
+    const eh = fakeEh({ "P-100": { status: "Complete" } });
+
+    const result = await runRecheck({ eh, ct: fakeCt(), store, adminChannelId: ADMIN_CHANNEL });
+
+    expect(eh.calls).toEqual(["P-100"]);
+    expect(result).toMatchObject({ resolved: 1 });
+  });
+
   it("leaves a still-Incomplete row untouched and posts nothing", async () => {
     const store = fakeStore([link({ ctUserId: 100 })]);
     const eh = fakeEh({ "100": { status: "Incomplete" } });

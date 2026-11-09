@@ -434,6 +434,17 @@ export function linkBlockedMessage(ref: PersonRef, ehEmployeeId: string, block: 
 }
 
 /**
+ * System alert -> the admin channel, when a synced person's mapped Payroll ID
+ * no longer matches the one fixed at their first sync (ADR-0011). Neither ID
+ * is named: the admin looks both up.
+ */
+export function payrollIdChangedMessage(ref: PersonRef): string {
+  return clamp(
+    `The Payroll ID for ${personLabel(ref)} changed in Connecteam; the sync still uses the old one. Change it in both places by hand if that's intended.`,
+  );
+}
+
+/**
  * The closing "this is automated" line on a message to a person (per client:
  * `messages.automatedNote`; blank for none). Admin-channel messages don't
  * carry it: admins know where those come from.

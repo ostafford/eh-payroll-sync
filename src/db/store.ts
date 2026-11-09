@@ -59,6 +59,7 @@ export class SyncStore implements SyncGateway, LinkGateway {
         lastSyncedTs: patch.lastSyncedTs,
         lastPayloadHash: patch.lastPayloadHash,
         lastOutcome,
+        externalId: patch.externalId ?? null,
         updatedAt: now,
       })
       .onConflictDoUpdate({
@@ -68,6 +69,7 @@ export class SyncStore implements SyncGateway, LinkGateway {
           lastSyncedTs: patch.lastSyncedTs,
           lastPayloadHash: patch.lastPayloadHash,
           lastOutcome,
+          externalId: keepFirstExternalId,
           updatedAt: now,
         },
       });
@@ -214,8 +216,8 @@ export class SyncStore implements SyncGateway, LinkGateway {
     await this.#db.batch([
       this.#db
         .insert(employeeMap)
-        .values({ ctUserId: patch.ctUserId, ...linked })
-        .onConflictDoUpdate({ target: employeeMap.ctUserId, set: linked }),
+        .values({ ctUserId: patch.ctUserId, ...linked, externalId: patch.externalId ?? null })
+        .onConflictDoUpdate({ target: employeeMap.ctUserId, set: { ...linked, externalId: keepFirstExternalId } }),
       this.#db.delete(pendingLink).where(eq(pendingLink.ctUserId, patch.ctUserId)),
     ]);
   }
@@ -290,8 +292,12 @@ function toEmployeeLink(row: typeof employeeMap.$inferSelect): EmployeeLink {
     lastOutcome: row.lastOutcome,
     linkedAt: row.linkedAt,
     baseline: parseBaseline(row.baseline),
+    externalId: row.externalId,
   };
 }
+
+/** On an upsert, the stored match key wins over the new one: it's fixed at first sync (ADR-0011). */
+const keepFirstExternalId = sql`coalesce(${employeeMap.externalId}, excluded.external_id)`;
 
 /** The stored Baseline, or null when there is none or it isn't the shape we write. */
 export function parseBaseline(text: string | null): Baseline | null {

@@ -82,7 +82,8 @@ export async function runRecheck(deps: RecheckDeps): Promise<RecheckResult> {
       continue;
     }
 
-    const found = await deps.eh.getByExternalId(String(link.ctUserId));
+    // Their stored match key (ADR-0011); a row from before it existed was synced by userId.
+    const found = await deps.eh.getByExternalId(link.externalId ?? String(link.ctUserId));
     if (found.outcome !== "ok" || found.data === null) {
       // Transient EH fault, or the record has vanished - leave `employee_map`
       // untouched so this row is tried again on the next recheck.

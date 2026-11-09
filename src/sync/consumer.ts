@@ -46,6 +46,7 @@ import {
   existingMatchMessages,
   linkNoticeMessage,
   linkBlockedMessage,
+  payrollIdChangedMessage,
   type LinkBlock,
   type PersonRef,
 } from "./messages.js";
@@ -138,6 +139,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   if (userRes.outcome === "error") return { status: "retry", reason: `connecteam error ${userRes.status}` };
   if (userRes.data === null) return { status: "skipped", reason: "connecteam user no longer exists" };
   const user = userRes.data;
+  const person: PersonRef = { ctUserId, firstName: user.firstName, lastName: user.lastName };
 
   // Left out of the sync by choice (rules.exclude), e.g. an employee type that
   // isn't paid through payroll: no EH call, no message. Recorded once, by field
@@ -188,6 +190,10 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
 
   let mapped = applyFieldMap(user as unknown as MappingUser, deps.fieldMap, { payRate });
   const hash = await payloadHash(mapped.payload);
+  // The Payroll ID to match EH by: the one stored at their first sync or
+  // link, so a later edit to the field it came from can't re-key them
+  // (ADR-0011). Someone never synced takes the freshly mapped one.
+  const matchKey = link?.externalId ?? mapped.externalId;
 
   // Identical to the state we last processed. Connecteam fires one webhook per
   // changed field, so a multi-field edit is a burst of deliveries that all
@@ -198,6 +204,20 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   // hold (see holdExisting) and a left-out person.
   if (link?.lastPayloadHash && link.lastPayloadHash === hash) {
     return { status: "skipped", reason: "identical to the last processed state" };
+  }
+
+  // Their key changed in Connecteam since it was fixed: keep the stored one,
+  // and tell the admin once per new value. Before anything is written, so a
+  // failed send retries the whole job.
+  if (matchKey !== mapped.externalId) {
+    const key = await noticeKey("payroll_id_changed", ctUserId, [mapped.externalId]);
+    if (await shouldPostNotice(deps.store, key, "forever", now())) {
+      const text = payrollIdChangedMessage(person);
+      const sent = await sendClaimed(deps.store, key, ctUserId, "payroll_id_changed", () =>
+        deps.ct.sendChannelMessage(deps.adminChannelId, text),
+      );
+      if (!sent) return sendFailed("payroll_id_changed");
+    }
   }
 
   // A Linked employee never gets a full-profile sync (ADR-0009): that would
@@ -211,10 +231,10 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   const pending = await deps.store.getPendingLink(ctUserId);
   if (pending?.ehEmployeeId && !hasSyncedBefore(link)) {
     return linkOnApproval(deps, {
-      person: { ctUserId, firstName: user.firstName, lastName: user.lastName },
+      person,
       link,
       ehEmployeeId: pending.ehEmployeeId,
-      externalId: mapped.externalId,
+      externalId: matchKey,
       payload: mapped.payload,
       unmapped: mapped.issues.map((i) => i.ehField),
       hash,
@@ -225,6 +245,8 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
 
   let ehEmployeeId = link?.ehEmployeeId ?? undefined;
   let decision: SyncDecision;
+  // Set once EH accepts a write under the key: stored if they have none yet.
+  let keyToStore: string | null = null;
 
   // Re-map against EH's current record (issue #102): a pay-run value EH
   // already holds counts as set, and a `defaults` value it holds is left off
@@ -232,7 +254,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   // lookup, so it costs no extra call. The hash above stays EH-independent.
   let current: EhEmployee | null | undefined;
   if (mapped.issues.length === 0) {
-    const found = await deps.eh.getByExternalId(mapped.externalId);
+    const found = await deps.eh.getByExternalId(matchKey);
     if (found.outcome !== "ok") return ehRetry(found);
     current = found.data;
     mapped = applyFieldMap(user as unknown as MappingUser, deps.fieldMap, { payRate, ehRecord: current });
@@ -266,7 +288,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
       if (check.outcome !== "ok") return ehRetry(check);
       if (check.data.length > 0) {
         return holdExisting(deps, {
-          person: { ctUserId, firstName: user.firstName, lastName: user.lastName },
+          person,
           matches: check.data,
           // Normally none. One we stored whose record EH no longer finds by
           // Payroll ID (relabelled or deleted there) is kept, not wiped.
@@ -279,13 +301,14 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
 
     // Match order: stored link -> externalId (both handled by upsertByExternalId).
     // A create goes out with EH's own merge off (`matchType=None`).
-    const write = await deps.eh.upsertByExternalId(mapped.externalId, mapped.payload, current);
+    const write = await deps.eh.upsertByExternalId(matchKey, mapped.payload, current);
     // A validation failure isn't retried: it's the employee's to fix (decide below).
     if (write.outcome === "retryable" || write.outcome === "client_error") return ehRetry(write);
 
     let readBack: ReadBackResult | undefined;
     if (write.outcome === "ok") {
       ehEmployeeId = String(write.data.id);
+      keyToStore = matchKey;
 
       // Backstop (ADR-0010): creates now go out with `matchType=None` after the
       // Pre-create check, but EH's unstructured endpoint used to match/merge by
@@ -300,7 +323,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
         if (await shouldPostNotice(deps.store, key, SYSTEM_ALERT_NOTICE_DEDUPE_MS, now())) {
           const text = collisionAlertMessage(
             ehEmployeeId,
-            { ctUserId, firstName: user.firstName, lastName: user.lastName },
+            person,
             collidingCtUserId,
           );
           const sent = await sendClaimed(deps.store, key, ctUserId, "collision", () =>
@@ -324,7 +347,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
         };
       }
 
-      const rb = await deps.eh.getByExternalId(mapped.externalId);
+      const rb = await deps.eh.getByExternalId(matchKey);
       if (rb.outcome === "ok" && rb.data) {
         readBack = compareReadBack(
           mapped.payload,
@@ -342,8 +365,6 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   }
 
   if (decision.kind === "retry") return { status: "retry", reason: decision.detail };
-
-  const person = { ctUserId, firstName: user.firstName, lastName: user.lastName };
 
   let managerNotified = false;
   let noticeSuppressed = false;
@@ -450,6 +471,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     lastSyncedTs: eventTimestamp,
     lastPayloadHash: hash,
     lastOutcome: outcome,
+    externalId: keyToStore,
   });
   await deps.store.appendSyncLog({
     ctUserId,
@@ -596,7 +618,14 @@ async function linkOnApproval(
   }
 
   await deps.store.completeLink(
-    { ctUserId, ehEmployeeId, lastSyncedTs: linking.eventTimestamp, lastPayloadHash: linking.hash, lastOutcome: "ok" },
+    {
+      ctUserId,
+      ehEmployeeId,
+      lastSyncedTs: linking.eventTimestamp,
+      lastPayloadHash: linking.hash,
+      lastOutcome: "ok",
+      externalId,
+    },
     linking.now,
     baseline,
   );
