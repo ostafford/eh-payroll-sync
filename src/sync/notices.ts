@@ -41,7 +41,8 @@ export type NoticeKind =
   | "collision"
   | "existing_match"
   | "link"
-  | "link_blocked";
+  | "link_blocked"
+  | "payroll_id_changed";
 
 /** A follow-up can wait on a payroll admin for a while - at most twice a day. */
 export const FOLLOW_UP_NOTICE_DEDUPE_MS = 12 * 60 * 60 * 1000;
@@ -76,7 +77,8 @@ export async function noticeKey(
 }
 
 /**
- * True if this exact notice has NOT gone out within `windowMs`. On true it also
+ * True if this exact notice has NOT gone out within `windowMs`, or ever with
+ * `"forever"` (a changed Payroll ID: one alert per new value, ADR-0011). On true it also
  * stamps the send time - a claim taken BEFORE the send, so a re-run of the job
  * skips it (ADR-0007). A caller must check the send's result and
  * {@link releaseNotice} on failure, or a failed send is lost (issue #89).
@@ -84,11 +86,11 @@ export async function noticeKey(
 export async function shouldPostNotice(
   store: MetaStore,
   key: string,
-  windowMs: number,
+  windowMs: number | "forever",
   now: number,
 ): Promise<boolean> {
   const last = (await store.readMeta([key]))[key] ?? 0;
-  if (last > 0 && now - last < windowMs) return false;
+  if (last > 0 && (windowMs === "forever" || now - last < windowMs)) return false;
   await store.setMarker(key, now);
   return true;
 }

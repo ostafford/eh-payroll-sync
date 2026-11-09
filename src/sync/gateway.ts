@@ -34,6 +34,11 @@ export interface EmployeeLink {
   linkedAt?: number | null;
   /** A Linked employee's Baseline (ADR-0009); null until it is taken, or if what's stored can't be read. */
   baseline?: Baseline | null;
+  /**
+   * The Payroll ID used at their first sync or link (ADR-0011): every later
+   * lookup, upsert and read-back uses it. Null or undefined until then.
+   */
+  externalId?: string | null;
 }
 
 /**
@@ -66,6 +71,11 @@ export interface EmployeeLinkPatch {
   lastPayloadHash: string | null;
   /** The outcome of this attempt (issue #43); optional so existing callers still compile. */
   lastOutcome?: SyncOutcomeLabel | null;
+  /**
+   * The Payroll ID EH accepted this attempt under. Stored only if the row has
+   * none yet: the first one is kept for good (ADR-0011).
+   */
+  externalId?: string | null;
 }
 
 export interface SyncLogEntry {

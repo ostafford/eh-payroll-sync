@@ -45,8 +45,15 @@ function fakeGateway(
       lastSyncedTs: seed.lastSyncedTs ?? null,
       failureCycleCount: seed.failureCycleCount ?? 0,
       lastPayloadHash: seed.lastPayloadHash ?? null,
+      ...(seed.lastOutcome !== undefined ? { lastOutcome: seed.lastOutcome } : {}),
+      ...(seed.externalId !== undefined ? { externalId: seed.externalId } : {}),
     });
   }
+  // As the real store does (ADR-0011): the first key saved is kept for good.
+  const keepKey = (prev: EmployeeLink | undefined, next?: string | null) => {
+    const externalId = prev?.externalId ?? next ?? null;
+    return externalId !== null ? { externalId } : {};
+  };
   const log: SyncLogEntry[] = [];
   const counters = new Map<string, number>();
   const meta = new Map<string, number>();
@@ -71,6 +78,7 @@ function fakeGateway(
         lastOutcome: patch.lastOutcome ?? null,
         linkedAt,
         baseline,
+        ...keepKey(prev, patch.externalId),
       });
       pending.delete(patch.ctUserId);
     },
@@ -105,6 +113,7 @@ function fakeGateway(
         failureCycleCount: prev?.failureCycleCount ?? 0,
         // As the real store does (issue #43).
         ...(patch.lastOutcome !== undefined ? { lastOutcome: patch.lastOutcome } : {}),
+        ...keepKey(prev, patch.externalId),
       });
     },
     async getFailureCount(id) {
@@ -118,6 +127,7 @@ function fakeGateway(
         lastSyncedTs: prev?.lastSyncedTs ?? null,
         lastPayloadHash: prev?.lastPayloadHash ?? null,
         failureCycleCount: count,
+        ...keepKey(prev),
       });
     },
     async appendSyncLog(entry) {
@@ -158,6 +168,8 @@ type CtFake = SyncDeps["ct"] & {
 type EhFake = SyncDeps["eh"] & {
   upserts: Array<{ externalId: string; payload: Record<string, unknown>; current?: unknown }>;
   gets: number;
+  /** The Payroll ID of every `getByExternalId` call, in order. */
+  getKeys: string[];
   /** Every `$filter` the Pre-create check sent. */
   finds: string[];
 };
@@ -207,6 +219,7 @@ function fakeEh(stub: EhStub = {}): EhFake {
   return {
     upserts,
     gets: 0,
+    getKeys: [],
     finds,
     async findEmployees(filter: string) {
       finds.push(filter);
@@ -231,6 +244,7 @@ function fakeEh(stub: EhStub = {}): EhFake {
     },
     async getByExternalId(this: EhFake, externalId: string) {
       this.gets++;
+      this.getKeys.push(externalId);
       if (stub.get) return stub.get;
       return {
         outcome: "ok",
@@ -624,6 +638,12 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
   const run = (store: ReturnType<typeof linking>, eh: ReturnType<typeof linkEh>, ct: CtFake, j = job()) =>
     runSyncJob(j, deps({ store, eh: eh as unknown as SyncDeps["eh"], ct, fieldMap: loud }));
 
+  it("stores the Payroll ID it linked with as their match key (ADR-0011)", async () => {
+    const store = linking();
+    await run(store, linkEh(), fakeCt(cloneUser()));
+    expect(store.rows.get(ME)).toMatchObject({ linkedAt: 1_000_000, externalId: String(ME) });
+  });
+
   it("sets only the Payroll ID, records the Linked employee and posts one Link notice", async () => {
     const store = linking();
     const eh = linkEh();
@@ -888,6 +908,115 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
     expect(out.status).toBe("synced");
     expect(eh.upserts).toHaveLength(1);
     expect(store.rows.get(ME)!.linkedAt).toBeUndefined();
+  });
+});
+
+describe("runSyncJob - the match key is fixed at first sync (#166, ADR-0011)", () => {
+  // A synced person whose stored key differs from what the map gives now: the
+  // Connecteam field it came from was edited after their first sync.
+  const synced = (over: Partial<EmployeeLink> = {}) =>
+    fakeGateway({
+      ctUserId: 17760356,
+      ehEmployeeId: "987",
+      lastSyncedTs: 500,
+      lastPayloadHash: "older",
+      lastOutcome: "ok",
+      externalId: "P-100",
+      ...over,
+    });
+
+  it("looks up, writes and reads back by the stored key, and keeps it", async () => {
+    const store = synced();
+    const eh = fakeEh({ id: 987 });
+
+    const out = await runSyncJob(job(), deps({ store, eh }));
+
+    expect(out.status).toBe("synced");
+    expect(eh.getKeys).toEqual(["P-100", "P-100"]);
+    expect(eh.upserts.map((u) => u.externalId)).toEqual(["P-100"]);
+    expect(eh.finds).toEqual([]);
+    expect(store.rows.get(17760356)!.externalId).toBe("P-100");
+  });
+
+  const CHANGED =
+    "The Payroll ID for Sam Rivera (17760356) changed in Connecteam; the sync still uses the old one. Change it in both places by hand if that's intended.";
+
+  it("alerts the admin once, and still syncs by the stored key", async () => {
+    const store = synced();
+    const ct = fakeCt(cloneUser());
+
+    const out = await runSyncJob(job(), deps({ store, ct }));
+
+    expect(out.status).toBe("synced");
+    expect(ct.channels).toEqual([{ id: "chan-1", text: CHANGED }]);
+    expect(ct.dms).toHaveLength(0);
+  });
+
+  it("sends no alert when the mapped key is the stored one", async () => {
+    const ct = fakeCt(cloneUser());
+    await runSyncJob(job(), deps({ store: synced({ externalId: "17760356" }), ct }));
+    expect(ct.channels).toHaveLength(0);
+  });
+
+  it("a retried job doesn't send a second alert for the same change (ADR-0007)", async () => {
+    const store = synced();
+    const ct = fakeCt(cloneUser());
+    const down = fakeEh({ get: { outcome: "retryable", status: 503, detail: "down" } });
+
+    expect(await runSyncJob(job(), deps({ store, ct, eh: down }))).toMatchObject({ status: "retry" });
+    expect(await runSyncJob(job(), deps({ store, ct }))).toMatchObject({ status: "synced" });
+
+    expect(ct.channels).toHaveLength(1);
+  });
+
+  it("a later edit sends no second alert for the same new value", async () => {
+    const store = synced();
+    const ct = fakeCt(cloneUser());
+    await runSyncJob(job(), deps({ store, ct }));
+
+    const edited = cloneUser();
+    edited.customFields.find((f) => f.customFieldId === 25145108)!.value = "Senior Support Officer";
+    const out = await runSyncJob(job({ eventTimestamp: 2000 }), deps({ store, ct: fakeCt(edited) }));
+
+    expect(out.status).toBe("synced");
+    expect(ct.channels).toHaveLength(1);
+  });
+
+  it("a failed alert releases its claim and retries the job before anything is written", async () => {
+    const store = synced();
+    const ct = fakeCt(cloneUser());
+    const eh = fakeEh({ id: 987 });
+    ct.failSends.set("chan-1", 1);
+
+    expect(await runSyncJob(job(), deps({ store, ct, eh }))).toMatchObject({ status: "retry" });
+    expect(eh.upserts).toHaveLength(0);
+    expect(store.rows.get(17760356)!.lastSyncedTs).toBe(500);
+
+    expect(await runSyncJob(job(), deps({ store, ct, eh }))).toMatchObject({ status: "synced" });
+    expect(ct.channels).toEqual([{ id: "chan-1", text: CHANGED }]);
+  });
+
+  it("stores the key at a first sync EH accepts", async () => {
+    const store = fakeGateway();
+    await runSyncJob(job(), deps({ store, eh: fakeEh({ id: 555, created: true }) }));
+    expect(store.rows.get(17760356)!.externalId).toBe("17760356");
+  });
+
+  it("stores no key when EH accepted nothing: the next attempt still uses the mapped one", async () => {
+    const bad = cloneUser();
+    bad.customFields.find((f) => f.customFieldId === 25145118)!.value = "not-a-date";
+    const store = fakeGateway();
+    const eh = fakeEh();
+
+    expect(await runSyncJob(job(), deps({ store, eh, ct: fakeCt(bad) }))).toMatchObject({ status: "correction" });
+    expect(store.rows.get(17760356)!.externalId).toBeUndefined();
+
+    const held = fakeGateway();
+    const none = { outcome: "ok", data: null };
+    const found = [{ id: 40213, firstName: "Samuel", surname: "Rivera", emailAddress: "sam.rivera@example.com" }];
+    await runSyncJob(job(), deps({ store: held, eh: fakeEh({ get: none, existing: { emailAddress: found } }) }));
+    expect(held.rows.get(17760356)).toMatchObject({ lastOutcome: "existing_match" });
+    expect(held.rows.get(17760356)!.externalId).toBeUndefined();
   });
 });
 
