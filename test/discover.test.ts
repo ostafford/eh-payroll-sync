@@ -44,7 +44,7 @@ describe("buildFieldMapDraft", () => {
 
     it("reads the Payroll ID from the picked field, and lists it as used", () => {
       const { draft, notSynced, unmapped } = buildFieldMapDraft({ ...base, fields, picks: { "EH Payroll ID": { id: 910034 } } });
-      expect(draft.identity).toEqual({ externalIdFrom: { customFieldId: 910034 }, emailFallbackFrom: "email" });
+      expect(draft.identity).toEqual({ externalIdFrom: { customFieldId: 910034, name: "Employee ID" }, emailFallbackFrom: "email" });
       expect(notSynced).toEqual([]);
       expect(unmapped).toEqual([]);
       expect(draft.fields.some((r) => r.from.customFieldId === 910034)).toBe(false);

@@ -206,7 +206,16 @@ export const fieldMap = z
          * (ADR-0011). A blank field falls back to the `userId`, per person.
          */
         externalIdFrom: z
-          .union([z.literal("userId"), z.object({ customFieldId: z.number().int().positive() }).strict()])
+          .union([
+            z.literal("userId"),
+            z
+              .object({
+                customFieldId: z.number().int().positive(),
+                /** The field's Connecteam name, for the notices: a blank field may not be on the profile to read it from. */
+                name: z.string().trim().min(1).optional(),
+              })
+              .strict(),
+          ])
           .default("userId"),
         emailFallbackFrom: z.literal("email").default("email"),
       })

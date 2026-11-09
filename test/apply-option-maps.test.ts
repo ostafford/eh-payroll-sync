@@ -30,11 +30,15 @@ describe("applyOptionMaps", () => {
   });
 
   it("writes the EH Payroll ID pick into a kept map's identity, and a skip puts back the user id (#167)", () => {
-    const picked = applyOptionMaps(kept(), { "EH Payroll ID": { id: 70 } });
+    const fields = [{ customFieldId: 70, name: "Employee ID", type: "str" }];
+    const picked = applyOptionMaps(kept(), { "EH Payroll ID": { id: 70 } }, fields);
     expect(picked.changed).toEqual(["EH Payroll ID"]);
-    expect(picked.map).toMatchObject({ identity: { externalIdFrom: { customFieldId: 70 } }, fields: kept().fields });
+    expect(picked.map).toMatchObject({ identity: { externalIdFrom: { customFieldId: 70, name: "Employee ID" } }, fields: kept().fields });
 
-    expect(applyOptionMaps(picked.map, { "EH Payroll ID": { id: 70 } }).changed).toEqual([]);
+    expect(applyOptionMaps(picked.map, { "EH Payroll ID": { id: 70 } }, fields).changed).toEqual([]);
+    // Renamed in Connecteam: the map takes the new name.
+    const renamed = applyOptionMaps(picked.map, { "EH Payroll ID": { id: 70 } }, [{ ...fields[0]!, name: "Payroll Number" }]);
+    expect((renamed.map as any).identity.externalIdFrom).toEqual({ customFieldId: 70, name: "Payroll Number" });
     const skipped = applyOptionMaps(picked.map, { "EH Payroll ID": { skip: true } });
     expect(skipped.changed).toEqual(["EH Payroll ID"]);
     expect((skipped.map as any).identity.externalIdFrom).toBe("userId");

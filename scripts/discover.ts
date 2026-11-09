@@ -129,7 +129,7 @@ async function main(): Promise<void> {
   if (write.action !== "draft") rmSync(draftFile, { force: true });
   // A kept map still takes the option mappings chosen in the field picker (#112).
   if (write.action === "draft" && existing) {
-    const { map, changed } = applyOptionMaps(existing, picks);
+    const { map, changed } = applyOptionMaps(existing, picks, fields);
     if (changed.length) {
       writeFileSync(mapFile, JSON.stringify(map, null, 2) + "\n");
       console.log(`\nUpdated the dropdown option mappings in ${mapFile} for: ${changed.join(", ")}.`);

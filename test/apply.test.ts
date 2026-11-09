@@ -541,6 +541,11 @@ describe("applyFieldMap - Payroll ID from a Connecteam field (#167, ADR-0011)", 
     return user;
   };
 
+  it("accepts the field's name alongside its id, for the notices", () => {
+    const named = parseFieldMap({ ...map, identity: { externalIdFrom: { customFieldId: PAYROLL_ID_FIELD, name: "Employee ID" } } });
+    expect(named.identity.externalIdFrom).toEqual({ customFieldId: PAYROLL_ID_FIELD, name: "Employee ID" });
+  });
+
   it("uses the field's trimmed value as the Payroll ID", () => {
     const result = applyFieldMap(withPayrollId("  007421 "), withSetting);
     expect(result.externalId).toBe("007421");

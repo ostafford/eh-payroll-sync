@@ -1188,6 +1188,32 @@ describe("runSyncJob - Payroll ID from a Connecteam field (#167, ADR-0011)", () 
     expect(ct.channels[0]!.text).not.toContain(COPIED);
   });
 
+  it("posts the hold again when only its hint changes, so the admin sees the new fix", async () => {
+    const store = fakeGateway();
+    const ct = fakeCt(withCopiedId());
+    // Copied 007421, but EH holds them under 007412: the typo hint.
+    const eh = payrollEh(handEntered(40213, { externalId: "007412" }));
+    await runSyncJob(job(), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct, fieldMap: byField }));
+
+    // The admin clears the field: same match, now the copy-it-in hint.
+    const cleared = fakeCt(withCopiedId(""));
+    const again = job({ eventTimestamp: 2000 });
+    expect(await runSyncJob(again, deps({ store, eh: eh as unknown as SyncDeps["eh"], ct: cleared, fieldMap: byField }))).toMatchObject({
+      status: "held",
+    });
+    expect(cleared.channels).toHaveLength(1);
+    expect(cleared.channels[0]!.text).toContain(COPY_IT);
+  });
+
+  it("names the field from the field map, when Connecteam leaves the blank field off their profile", async () => {
+    const named = parseFieldMap({ ...fieldMap, identity: { externalIdFrom: { customFieldId: FIELD, name: "Payroll Number" } } });
+    const ct = fakeCt(cloneUser());
+
+    await runSyncJob(job(), deps({ eh: payrollEh(handEntered(40213)) as unknown as SyncDeps["eh"], ct, fieldMap: named }));
+
+    expect(ct.channels[0]!.text).toContain("Copy their EH Payroll ID into **Payroll Number** in Connecteam.");
+  });
+
   it("doesn't ask for it when the match has no Payroll ID, or the client doesn't use the setting", async () => {
     const noId = fakeCt(withCopiedId(""));
     await run(payrollEh(handEntered(40213, { externalId: null })), noId);
@@ -1203,7 +1229,7 @@ describe("runSyncJob - Payroll ID from a Connecteam field (#167, ADR-0011)", () 
     const eh = payrollEh();
     expect(await run(eh, fakeCt(withCopiedId()))).toMatchObject({ status: "synced", ehEmployeeId: "555" });
     expect(writes(eh)).toEqual([`UPSERT ${COPIED}`]);
-    // Looked up once before the write, not twice.
+    // Once before the write (the copied-ID check is reused) and once to read it back.
     expect(eh.calls.filter((c) => c === `GET externalid/${COPIED}`)).toHaveLength(2);
   });
 

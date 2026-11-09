@@ -11,10 +11,16 @@
  */
 import { optionsOf, syncedOptions, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC } from "./field-spec.js";
+import { payrollIdFrom } from "./discover-draft.js";
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-export function applyOptionMaps<T>(fieldMap: T, picks: FieldPicks): { map: T; changed: string[] } {
+/** `fields`: the account's custom-field definitions, for the Payroll ID field's name. */
+export function applyOptionMaps<T>(
+  fieldMap: T,
+  picks: FieldPicks,
+  fields: ReadonlyArray<{ customFieldId: number; name: string }> = [],
+): { map: T; changed: string[] } {
   const map: any = structuredClone(fieldMap);
   const changed: string[] = [];
   const mark = (name: string) => {
@@ -34,7 +40,7 @@ export function applyOptionMaps<T>(fieldMap: T, picks: FieldPicks): { map: T; ch
     }
     if (pick && spec.target.kind === "payrollId" && ("id" in pick || "skip" in pick)) {
       // Where the Payroll ID comes from (ADR-0011): the picked field, or the user id once skipped.
-      const want = "id" in pick ? { customFieldId: pick.id } : "userId";
+      const want = payrollIdFrom(fields, "id" in pick ? pick.id : undefined);
       if (!same(map.identity?.externalIdFrom ?? "userId", want)) {
         map.identity = { ...map.identity, externalIdFrom: want };
         mark(spec.name);

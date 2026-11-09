@@ -38,7 +38,7 @@ export interface DraftResult {
     client: string;
     connecteam: { onboardingPackId: number };
     employmentHero: { businessId: string; payScheduleId: string; locationId: string };
-    identity: { externalIdFrom: "userId" | { customFieldId: number }; emailFallbackFrom: string };
+    identity: { externalIdFrom: "userId" | { customFieldId: number; name?: string }; emailFallbackFrom: string };
     fields: Array<{ eh: string; from: Record<string, unknown>; transform: string; [k: string]: unknown }>;
     rules: {
       taxDeclaration: Record<string, { customFieldId: number; options?: Record<string, string> }>;
@@ -120,7 +120,7 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
       payScheduleId: input.payScheduleId || "TODO",
       locationId: input.locationId || "TODO",
     },
-    identity: { externalIdFrom: payrollIdField === undefined ? "userId" : { customFieldId: payrollIdField }, emailFallbackFrom: "email" },
+    identity: { externalIdFrom: payrollIdFrom(fields, payrollIdField), emailFallbackFrom: "email" },
     fields: [
       { eh: "emailAddress", from: { userField: "email" }, transform: "lowerTrim" },
       { eh: "mobilePhone", from: { userField: "phoneNumber" }, transform: "phoneAu" },
@@ -148,6 +148,16 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
       return reason ? [{ id: f.customFieldId, name: f.name, reason }] : [];
     }),
   };
+}
+
+/** `identity.externalIdFrom` for the picked field, with its name for the notices (ADR-0011). */
+export function payrollIdFrom(
+  fields: ReadonlyArray<{ customFieldId: number; name: string }>,
+  id: number | undefined,
+): "userId" | { customFieldId: number; name?: string } {
+  if (id === undefined) return "userId";
+  const name = fields.find((f) => f.customFieldId === id)?.name.trim();
+  return name ? { customFieldId: id, name } : { customFieldId: id };
 }
 
 function notSyncedReason(f: CustomFieldDefinition): string | undefined {
