@@ -15,7 +15,7 @@ const ct = (over: Partial<LinkCtUser> = {}): LinkCtUser => ({
   ...over,
 });
 const eh = (over: Partial<LinkEhEmployee> = {}): LinkEhEmployee => ({
-  id: 9000,
+  id: "9000",
   firstName: "Jack",
   surname: "Mitchell",
   email: "jack@example.com",
@@ -36,7 +36,7 @@ const input = (over: Partial<LinkListInput> = {}): LinkListInput => ({
 describe("buildLinkList", () => {
   it("matches one Connecteam user to the one EH employee with the same email and name, ignoring email case", () => {
     const { rows } = buildLinkList(
-      input({ ctUsers: [ct({ email: "Jack@Example.com" })], ehEmployees: [eh({ id: 40213, email: "jack@EXAMPLE.com" })] }),
+      input({ ctUsers: [ct({ email: "Jack@Example.com" })], ehEmployees: [eh({ id: "40213", email: "jack@EXAMPLE.com" })] }),
     );
     expect(rows).toEqual([
       expect.objectContaining({ ctUserId: 100, kind: "matched", suggestion: "40213" }),
@@ -54,7 +54,7 @@ describe("buildLinkList", () => {
     const { rows } = buildLinkList(
       input({
         ctUsers: [ct({ email: "jack.two@example.com" }), ct({ ctUserId: 555, email: "jack.one@example.com", payrollId: "555" })],
-        ehEmployees: [eh({ id: 40213, email: "jack.one@example.com", externalId: "555" })],
+        ehEmployees: [eh({ id: "40213", email: "jack.one@example.com", externalId: "555" })],
         employeeMap: [{ ctUserId: 555, ehEmployeeId: "40213", lastOutcome: "ok" }],
       }),
     );
@@ -66,10 +66,10 @@ describe("buildLinkList", () => {
       input({
         ctUsers: [ct(), ct({ ctUserId: 555, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "555" })],
         ehEmployees: [
-          eh({ id: 40213 }),
-          eh({ id: 40377, firstName: "Mia", surname: "Chen", email: "mia@example.com", externalId: "555" }),
-          eh({ id: 40400, firstName: "Ana", surname: "Silva", email: "ana@example.com" }),
-          eh({ id: 40401, firstName: "Tom", surname: "Ng", email: "tom@example.com" }),
+          eh({ id: "40213" }),
+          eh({ id: "40377", firstName: "Mia", surname: "Chen", email: "mia@example.com", externalId: "555" }),
+          eh({ id: "40400", firstName: "Ana", surname: "Silva", email: "ana@example.com" }),
+          eh({ id: "40401", firstName: "Tom", surname: "Ng", email: "tom@example.com" }),
         ],
         employeeMap: [{ ctUserId: 555, ehEmployeeId: "40377", lastOutcome: "ok" }],
       }),
@@ -80,7 +80,7 @@ describe("buildLinkList", () => {
 
   describe("needs your choice, never auto-proposed", () => {
     it("when the email matches but the name differs", () => {
-      const { rows } = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213, firstName: "John" })] }));
+      const { rows } = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: "40213", firstName: "John" })] }));
       expect(rows).toEqual([
         expect.objectContaining({
           kind: "choice",
@@ -92,7 +92,7 @@ describe("buildLinkList", () => {
 
     it("when the same email is on several EH employees, even with agreeing names", () => {
       const { rows } = buildLinkList(
-        input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213 }), eh({ id: 40377, firstName: "Jackson" })] }),
+        input({ ctUsers: [ct()], ehEmployees: [eh({ id: "40213" }), eh({ id: "40377", firstName: "Jackson" })] }),
       );
       expect(rows).toEqual([
         expect.objectContaining({
@@ -107,7 +107,7 @@ describe("buildLinkList", () => {
 
     it("when the same email is on several Connecteam users", () => {
       const { rows } = buildLinkList(
-        input({ ctUsers: [ct(), ct({ ctUserId: 101, payrollId: "101" })], ehEmployees: [eh({ id: 40213 })] }),
+        input({ ctUsers: [ct(), ct({ ctUserId: 101, payrollId: "101" })], ehEmployees: [eh({ id: "40213" })] }),
       );
       expect(rows.map((r) => [r.ctUserId, r.kind, r.candidates])).toEqual([
         [100, "choice", [{ ehEmployeeId: "40213", reasons: ["sameEmailSeveral"] }]],
@@ -119,7 +119,7 @@ describe("buildLinkList", () => {
       const { rows } = buildLinkList(
         input({
           ctUsers: [ct(), ct({ ctUserId: 101, payrollId: "101", email: null })],
-          ehEmployees: [eh({ id: 40213, firstName: " jack ", email: "jmitchell@old.example.com" })],
+          ehEmployees: [eh({ id: "40213", firstName: " jack ", email: "jmitchell@old.example.com" })],
         }),
       );
       expect(rows.map((r) => [r.ctUserId, r.kind, r.candidates])).toEqual([
@@ -129,8 +129,8 @@ describe("buildLinkList", () => {
     });
 
     it("when another EH employee has the same name, beside the email match", () => {
-      const sameNameElsewhere = eh({ id: 40377, email: "jmitchell@old.example.com" });
-      const nameDiffers = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213, firstName: "John" }), sameNameElsewhere] }));
+      const sameNameElsewhere = eh({ id: "40377", email: "jmitchell@old.example.com" });
+      const nameDiffers = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: "40213", firstName: "John" }), sameNameElsewhere] }));
       expect(nameDiffers.rows[0]).toEqual(
         expect.objectContaining({
           kind: "choice",
@@ -140,7 +140,7 @@ describe("buildLinkList", () => {
           ],
         }),
       );
-      const bothAgree = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213 }), sameNameElsewhere] }));
+      const bothAgree = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: "40213" }), sameNameElsewhere] }));
       expect(bothAgree.rows[0]).toEqual(
         expect.objectContaining({
           kind: "choice",
@@ -153,7 +153,7 @@ describe("buildLinkList", () => {
     });
 
     it("when the EH employee already has a Payroll ID that is no Connecteam user's (linking would overwrite it)", () => {
-      const { rows } = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213, externalId: "EMP042" })] }));
+      const { rows } = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: "40213", externalId: "EMP042" })] }));
       expect(rows).toEqual([
         expect.objectContaining({
           kind: "choice",
@@ -163,7 +163,7 @@ describe("buildLinkList", () => {
     });
 
     it("when the EH employee is terminated, though email and name agree", () => {
-      const { rows } = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213, status: "Terminated" })] }));
+      const { rows } = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: "40213", status: "Terminated" })] }));
       expect(rows).toEqual([
         expect.objectContaining({
           kind: "choice",
@@ -179,8 +179,8 @@ describe("buildLinkList", () => {
       input({
         ctUsers: [ct({ email: "jack.new@example.com" })],
         ehEmployees: [
-          eh({ id: 40213 }),
-          eh({ id: 40377, firstName: "Jackson", email: "jm@example.com", status: "Terminated" }),
+          eh({ id: "40213" }),
+          eh({ id: "40377", firstName: "Jackson", email: "jm@example.com", status: "Terminated" }),
         ],
         employeeMap: [{ ctUserId: 100, ehEmployeeId: null, lastOutcome: "existing_match" }],
         heldCandidates: new Map([[100, ["40213", "40377"]]]),
@@ -216,7 +216,7 @@ describe("buildLinkList", () => {
     const { rows } = buildLinkList(
       input({
         ctUsers: [ct(), ct({ ctUserId: 101, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "101" })],
-        ehEmployees: [eh({ id: 40213, firstName: "John" })],
+        ehEmployees: [eh({ id: "40213", firstName: "John" })],
         employeeMap: [{ ctUserId: 101, ehEmployeeId: null, lastOutcome: "existing_match" }],
         pendingLinks: [
           { ctUserId: 100, ehEmployeeId: "40213" },
@@ -269,7 +269,7 @@ describe("buildLinkList", () => {
     const list = buildLinkList(
       input({
         ctUsers: [guard({ ...ct(), tfn: "123456782", dateOfBirth: "1990-01-01" })],
-        ehEmployees: [guard({ ...eh({ id: 40213 }), taxFileNumber: "123456782", dateOfBirth: "1990-01-01" })],
+        ehEmployees: [guard({ ...eh({ id: "40213" }), taxFileNumber: "123456782", dateOfBirth: "1990-01-01" })],
       }),
     );
     expect(list.rows).toEqual([expect.objectContaining({ kind: "matched", suggestion: "40213" })]);
@@ -282,7 +282,7 @@ describe("buildLinkList", () => {
       ct({ ctUserId: i + 1, firstName: `First${i}`, lastName: `Last${i}`, email: `p${i}@example.com`, payrollId: String(i + 1) }),
     );
     const ehs = Array.from({ length: n }, (_, i) =>
-      eh({ id: 50000 + i, firstName: `First${i}`, surname: `Last${i}`, email: i % 2 ? `p${i}@example.com` : `other${i}@example.com` }),
+      eh({ id: "50000" + i, firstName: `First${i}`, surname: `Last${i}`, email: i % 2 ? `p${i}@example.com` : `other${i}@example.com` }),
     );
     const { rows, ignoredEhCount } = buildLinkList(input({ ctUsers: users, ehEmployees: ehs }));
     expect(rows).toHaveLength(n);
@@ -299,9 +299,9 @@ describe("buildLinkList", () => {
       input({
         ctUsers: [...users, ct({ ctUserId: 555, email: "x@example.com", payrollId: "555" })],
         ehEmployees: [
-          eh({ id: 40001, email: "a@example.com" }),
-          eh({ id: 40002, email: "b@example.com", status: "Terminated" }),
-          eh({ id: 40004, email: "d@example.com" }),
+          eh({ id: "40001", email: "a@example.com" }),
+          eh({ id: "40002", email: "b@example.com", status: "Terminated" }),
+          eh({ id: "40004", email: "d@example.com" }),
         ],
         employeeMap: [{ ctUserId: 555, ehEmployeeId: "40004", lastOutcome: "ok" }],
         pendingLinks: [
@@ -326,8 +326,8 @@ describe("buildLinkList", () => {
         input({
           ctUsers: [ct(), ct({ ctUserId: 101, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "EMP042" })],
           ehEmployees: [
-            eh({ id: 40213, externalId: "100" }),
-            eh({ id: 40377, firstName: "Mia", surname: "Chen", email: "mia.c@example.com", externalId: "EMP042" }),
+            eh({ id: "40213", externalId: "100" }),
+            eh({ id: "40377", firstName: "Mia", surname: "Chen", email: "mia.c@example.com", externalId: "EMP042" }),
           ],
         }),
       );
@@ -341,7 +341,7 @@ describe("buildLinkList", () => {
       const { rows } = buildLinkList(
         input({
           ctUsers: [ct({ payrollId: "EMP042" }), ct({ ctUserId: 101, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "EMP042" })],
-          ehEmployees: [eh({ id: 40213, externalId: "EMP042" })],
+          ehEmployees: [eh({ id: "40213", externalId: "EMP042" })],
         }),
       );
       expect(rows.map((r) => [r.ctUserId, r.kind, r.candidates])).toEqual([
@@ -354,7 +354,7 @@ describe("buildLinkList", () => {
       const { rows } = buildLinkList(
         input({
           ctUsers: [ct(), ct({ ctUserId: 555, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "555" })],
-          ehEmployees: [eh({ id: 40213, externalId: "555" })],
+          ehEmployees: [eh({ id: "40213", externalId: "555" })],
         }),
       );
       expect(rows.find((r) => r.ctUserId === 100)).toEqual(
@@ -367,8 +367,8 @@ describe("buildLinkList", () => {
         input({
           ctUsers: [ct()],
           ehEmployees: [
-            eh({ id: 40213, externalId: "EMP777" }),
-            eh({ id: 40500, firstName: "Ana", surname: "Silva", email: "ana@example.com", externalId: "778" }),
+            eh({ id: "40213", externalId: "EMP777" }),
+            eh({ id: "40500", firstName: "Ana", surname: "Silva", email: "ana@example.com", externalId: "778" }),
           ],
           employeeMap: [
             { ctUserId: 777, ehEmployeeId: "40213", lastOutcome: "ok" },
@@ -386,7 +386,7 @@ describe("buildLinkList", () => {
       const { rows } = buildLinkList(
         input({
           ctUsers: [ct(), ct({ ctUserId: 555, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "555" })],
-          ehEmployees: [eh({ id: 40213, externalId: "555" })],
+          ehEmployees: [eh({ id: "40213", externalId: "555" })],
           employeeMap: [{ ctUserId: 555, ehEmployeeId: "40213", lastOutcome: "ok" }],
         }),
       );

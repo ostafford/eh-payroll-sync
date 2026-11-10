@@ -4,7 +4,9 @@
  * fetches both sides and the D1 rows. Matches on email and name only: TFN and
  * date of birth are never read, so they never reach the integrator's terminal.
  */
+import type { OnboardingAssignment } from "../../src/connecteam/types.js";
 import { isTerminated } from "../../src/sync/precheck.js";
+import { norm } from "./preflight.js";
 
 export interface LinkCtUser {
   ctUserId: number;
@@ -16,7 +18,8 @@ export interface LinkCtUser {
 }
 
 export interface LinkEhEmployee {
-  id: number;
+  /** As D1 stores it: a string. */
+  id: string;
   firstName: string;
   surname: string;
   email: string | null;
@@ -24,13 +27,28 @@ export interface LinkEhEmployee {
   status?: string;
 }
 
+export type LinkAssignment = Pick<OnboardingAssignment, "userId" | "status" | "isWaitingApproval">;
+
+/** The `employee_map` columns the link list needs. */
+export interface LinkMapRow {
+  ctUserId: number;
+  ehEmployeeId: string | null;
+  lastOutcome: string | null;
+}
+
+/** A `pending_link` row: a NULL `ehEmployeeId` is "New hire, not this person". */
+export interface LinkPendingRow {
+  ctUserId: number;
+  ehEmployeeId: string | null;
+}
+
 export interface LinkListInput {
   /** Every active Connecteam user, synced ones too: their Payroll IDs mark EH records as linked elsewhere. */
   ctUsers: readonly LinkCtUser[];
   ehEmployees: readonly LinkEhEmployee[];
-  assignments: readonly { userId: number; status: "in_progress" | "completed"; isWaitingApproval: boolean }[];
-  employeeMap: readonly { ctUserId: number; ehEmployeeId: string | null; lastOutcome: string | null }[];
-  pendingLinks: readonly { ctUserId: number; ehEmployeeId: string | null }[];
+  assignments: readonly LinkAssignment[];
+  employeeMap: readonly LinkMapRow[];
+  pendingLinks: readonly LinkPendingRow[];
   /** A Held employee's candidate EH ids, from their `existing_match` detail. */
   heldCandidates: ReadonlyMap<number, readonly string[]>;
 }
@@ -38,34 +56,34 @@ export interface LinkListInput {
 export type LinkRowKind = "matched" | "choice" | "newHire" | "alreadySynced" | "taken" | "held" | "onLinkList";
 
 /** Why a candidate needs the admin's choice instead of being proposed. */
-export type ChoiceReason = "nameDiffers" | "sameEmailSeveral" | "nameOnly" | "hasPayrollId" | "terminated" | "linkedElsewhere" | "goneFromEh" | "payrollIdShared";
+export type ChoiceReason =
+  | "nameDiffers"
+  | "sameEmailSeveral"
+  | "nameOnly"
+  | "hasPayrollId"
+  | "terminated"
+  | "linkedElsewhere"
+  | "goneFromEh"
+  | "payrollIdShared";
 
 export interface LinkCandidate {
   ehEmployeeId: string;
   reasons: ChoiceReason[];
   /** The Payroll ID EH already holds, shown so the admin knows what a link would overwrite. */
   payrollId?: string;
-  /** The Connecteam user whose Payroll ID this EH employee already carries. */
+  /** The Connecteam user this EH employee already belongs to. */
   linkedTo?: number;
 }
 
 /** Where the person's onboarding pack is, for the Pack column (#134). */
 export type PackStatus = "notAssigned" | "inProgress" | "readyForReview" | "approvedNotSynced";
 
-const PACK_ORDER: readonly PackStatus[] = ["notAssigned", "inProgress", "readyForReview", "approvedNotSynced"];
-
-/** CONTEXT.md "Onboarding pack": waiting for approval is still `in_progress`; `completed` is approved. */
-function packOf(a: LinkListInput["assignments"][number]): PackStatus {
-  if (a.status === "completed") return "approvedNotSynced";
-  return a.isWaitingApproval ? "readyForReview" : "inProgress";
-}
-
 export interface LinkRow {
   ctUserId: number;
   kind: LinkRowKind;
   /** The EH employee id proposed (matched) or already on the Link list (onLinkList; null there is "New hire, not this person"). */
   suggestion: string | null;
-  /** The EH employees the admin chooses between, for a choice row. */
+  /** The EH employees the admin chooses between, or the one a Link-list row points at, re-checked. */
   candidates: LinkCandidate[];
   /** A Held employee also offers "New hire, not this person". */
   newHireChoice?: true;
@@ -78,117 +96,160 @@ export interface LinkList {
   ignoredEhCount: number;
 }
 
-function norm(s: string | null): string {
-  return (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+const PACK_ORDER: readonly PackStatus[] = ["notAssigned", "inProgress", "readyForReview", "approvedNotSynced"];
+
+/** CONTEXT.md "Onboarding pack": waiting for approval is still `in_progress`; `completed` is approved. */
+function packOf(a: LinkAssignment): PackStatus {
+  if (a.status === "completed") return "approvedNotSynced";
+  return a.isWaitingApproval ? "readyForReview" : "inProgress";
+}
+
+function nameKey(first: string, last: string): string {
+  return `${norm(first)}\u0000${norm(last)}`;
 }
 
 function sameName(u: LinkCtUser, e: LinkEhEmployee): boolean {
-  return norm(u.firstName) === norm(e.firstName) && norm(u.lastName) === norm(e.surname);
+  return nameKey(u.firstName, u.lastName) === nameKey(e.firstName, e.surname);
 }
 
-export function buildLinkList(input: LinkListInput): LinkList {
-  const ctPerEmail = new Map<string, number>();
-  const ctByPayrollId = new Map<string, number[]>();
-  for (const u of input.ctUsers) {
-    const k = norm(u.email);
-    if (k) ctPerEmail.set(k, (ctPerEmail.get(k) ?? 0) + 1);
-    const id = u.payrollId.trim();
-    ctByPayrollId.set(id, [...(ctByPayrollId.get(id) ?? []), u.ctUserId]);
-  }
+function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  map.set(key, [...(map.get(key) ?? []), value]);
+}
 
+/** Lookups built once from the input, so each row is classified without rescanning it. */
+interface Index {
+  input: LinkListInput;
+  ehById: Map<string, LinkEhEmployee>;
+  ehByPayrollId: Map<string, LinkEhEmployee>;
+  ehByEmail: Map<string, LinkEhEmployee[]>;
+  ehByName: Map<string, LinkEhEmployee[]>;
+  ctByPayrollId: Map<string, number[]>;
+  ctPerEmail: Map<string, number>;
+  /** An EH employee already in employee_map belongs to that user, even one no longer active. */
+  ctByEhId: Map<string, number>;
+  held: Set<number>;
+  onLinkList: Map<number, string | null>;
+}
+
+function indexInput(input: LinkListInput): Index {
+  const ctByPayrollId = new Map<string, number[]>();
+  const ctPerEmail = new Map<string, number>();
+  for (const u of input.ctUsers) {
+    push(ctByPayrollId, u.payrollId.trim(), u.ctUserId);
+    const email = norm(u.email);
+    if (email) ctPerEmail.set(email, (ctPerEmail.get(email) ?? 0) + 1);
+  }
   const ehByPayrollId = new Map<string, LinkEhEmployee>();
+  const ehByEmail = new Map<string, LinkEhEmployee[]>();
+  const ehByName = new Map<string, LinkEhEmployee[]>();
   for (const e of input.ehEmployees) {
     const id = e.externalId?.trim();
     if (id) ehByPayrollId.set(id, e);
+    const email = norm(e.email);
+    if (email) push(ehByEmail, email, e);
+    push(ehByName, nameKey(e.firstName, e.surname), e);
+  }
+  return {
+    input,
+    ehById: new Map(input.ehEmployees.map((e) => [e.id, e])),
+    ehByPayrollId,
+    ehByEmail,
+    ehByName,
+    ctByPayrollId,
+    ctPerEmail,
+    ctByEhId: new Map(input.employeeMap.flatMap((m) => (m.ehEmployeeId ? [[m.ehEmployeeId, m.ctUserId] as const] : []))),
+    held: new Set(input.employeeMap.filter((m) => m.lastOutcome === "existing_match").map((m) => m.ctUserId)),
+    onLinkList: new Map(input.pendingLinks.map((p) => [p.ctUserId, p.ehEmployeeId])),
+  };
+}
+
+/** One EH employee as a candidate, with what EH says about them added to the match reasons. */
+function candidateFor(ix: Index, e: LinkEhEmployee, matchReasons: readonly ChoiceReason[]): LinkCandidate {
+  const reasons = isTerminated(e) ? [...matchReasons, "terminated" as const] : [...matchReasons];
+  const ehEmployeeId = e.id;
+  const payrollId = e.externalId?.trim();
+  const owners = payrollId ? (ix.ctByPayrollId.get(payrollId) ?? []) : [];
+  const linkedTo = ix.ctByEhId.get(e.id) ?? (owners.length === 1 ? owners[0] : undefined);
+  if (linkedTo !== undefined) return { ehEmployeeId, reasons: [...reasons, "linkedElsewhere"], linkedTo };
+  if (!payrollId) return { ehEmployeeId, reasons };
+  // Several Connecteam users hold this ID: fix it in Connecteam first (ADR-0011).
+  if (owners.length > 1) return { ehEmployeeId, reasons: [...reasons, "payrollIdShared"], payrollId };
+  return { ehEmployeeId, reasons: [...reasons, "hasPayrollId"], payrollId };
+}
+
+/** An EH employee named by an earlier run or the Pre-create check, re-checked now. */
+function recheck(ix: Index, id: string): LinkCandidate {
+  const e = ix.ehById.get(id);
+  return e ? candidateFor(ix, e, []) : { ehEmployeeId: id, reasons: ["goneFromEh"] };
+}
+
+/** Everyone in EH who could be this person: by email, by name alone, or by a Payroll ID they share. */
+function matchCandidates(ix: Index, u: LinkCtUser, sharedIdRecord: LinkEhEmployee | undefined): LinkCandidate[] {
+  const email = norm(u.email);
+  const sameEmail = email ? (ix.ehByEmail.get(email) ?? []) : [];
+  const several = sameEmail.length > 1 || (ix.ctPerEmail.get(email) ?? 0) > 1;
+  const byEmail = sameEmail.map((e) =>
+    candidateFor(ix, e, [...(sameName(u, e) ? [] : ["nameDiffers" as const]), ...(several ? ["sameEmailSeveral" as const] : [])]),
+  );
+  const byNameOnly = (ix.ehByName.get(nameKey(u.firstName, u.lastName)) ?? [])
+    .filter((e) => !sameEmail.includes(e))
+    .map((e) => candidateFor(ix, e, ["nameOnly"]))
+    // A name alone isn't a hit (#134): someone else's record is no reason to stop a new hire.
+    .filter((c) => !c.reasons.includes("linkedElsewhere"));
+  const seen = new Set([...byEmail, ...byNameOnly].map((c) => c.ehEmployeeId));
+  const bySharedId = sharedIdRecord && !seen.has(sharedIdRecord.id) ? [candidateFor(ix, sharedIdRecord, [])] : [];
+  return [...byEmail, ...byNameOnly, ...bySharedId];
+}
+
+/** The row for one Connecteam user not yet synced, in precedence order. */
+function classify(ix: Index, u: LinkCtUser): Omit<LinkRow, "pack"> {
+  const { ctUserId } = u;
+  if (ix.onLinkList.has(ctUserId)) {
+    const id = ix.onLinkList.get(ctUserId) ?? null;
+    return { ctUserId, kind: "onLinkList", suggestion: id, candidates: id ? [recheck(ix, id)] : [] };
+  }
+  if (ix.held.has(ctUserId)) {
+    const candidates = (ix.input.heldCandidates.get(ctUserId) ?? []).map((id) => recheck(ix, id));
+    return { ctUserId, kind: "held", suggestion: null, candidates, newHireChoice: true };
   }
 
-  // An EH employee already in employee_map belongs to that user, even one no longer active.
-  const ctByEhId = new Map(input.employeeMap.flatMap((m) => (m.ehEmployeeId ? [[m.ehEmployeeId, m.ctUserId] as const] : [])));
+  const payrollId = u.payrollId.trim();
+  const own = ix.ehByPayrollId.get(payrollId);
+  const idShared = (ix.ctByPayrollId.get(payrollId)?.length ?? 0) > 1;
+  if (own && !idShared) return { ctUserId, kind: "alreadySynced", suggestion: own.id, candidates: [] };
 
-  const candidate = (e: LinkEhEmployee, reasons: ChoiceReason[]): LinkCandidate => {
-    if (isTerminated(e)) reasons = [...reasons, "terminated"];
-    const payrollId = e.externalId?.trim();
-    const owners = payrollId ? (ctByPayrollId.get(payrollId) ?? []) : [];
-    const linkedTo = ctByEhId.get(String(e.id)) ?? (owners.length === 1 ? owners[0] : undefined);
-    if (!payrollId && linkedTo === undefined) return { ehEmployeeId: String(e.id), reasons };
-    // Several Connecteam users hold this ID: fix it in Connecteam first (ADR-0011).
-    if (linkedTo === undefined && owners.length > 1) {
-      return { ehEmployeeId: String(e.id), reasons: [...reasons, "payrollIdShared"], payrollId: payrollId! };
-    }
-    if (linkedTo !== undefined) return { ehEmployeeId: String(e.id), reasons: [...reasons, "linkedElsewhere"], linkedTo };
-    return { ehEmployeeId: String(e.id), reasons: [...reasons, "hasPayrollId"], payrollId: payrollId! };
-  };
+  const candidates = matchCandidates(ix, u, idShared ? own : undefined);
+  const [first] = candidates;
+  if (!first) return { ctUserId, kind: "newHire", suggestion: null, candidates };
+  if (candidates.every((c) => c.reasons.includes("linkedElsewhere"))) {
+    return { ctUserId, kind: "taken", suggestion: null, candidates };
+  }
+  if (candidates.length === 1 && first.reasons.length === 0) {
+    return { ctUserId, kind: "matched", suggestion: first.ehEmployeeId, candidates: [] };
+  }
+  return { ctUserId, kind: "choice", suggestion: null, candidates };
+}
 
-  const synced = new Set(input.employeeMap.filter((m) => m.ehEmployeeId).map((m) => m.ctUserId));
-
-  const ehById = new Map(input.ehEmployees.map((e) => [String(e.id), e]));
-  const held = new Set(input.employeeMap.filter((m) => m.lastOutcome === "existing_match").map((m) => m.ctUserId));
-
-  const onLinkList = new Map(input.pendingLinks.map((p) => [p.ctUserId, p.ehEmployeeId]));
+/** The link list's rows for everyone not already synced, plus how many EH employees nobody matched. */
+export function buildLinkList(input: LinkListInput): LinkList {
+  const ix = indexInput(input);
 
   const pack = new Map<number, PackStatus>();
   for (const a of input.assignments) {
     const p = packOf(a);
-    const was = pack.get(a.userId) ?? "notAssigned";
-    if (PACK_ORDER.indexOf(p) > PACK_ORDER.indexOf(was)) pack.set(a.userId, p);
+    if (PACK_ORDER.indexOf(p) > PACK_ORDER.indexOf(pack.get(a.userId) ?? "notAssigned")) pack.set(a.userId, p);
   }
 
-  /** An EH employee named by an earlier run or the Pre-create check, re-checked now. */
-  const recheck = (id: string): LinkCandidate => {
-    const e = ehById.get(id);
-    return e ? candidate(e, []) : { ehEmployeeId: id, reasons: ["goneFromEh"] };
-  };
-
-  const classify = (u: LinkCtUser): Omit<LinkRow, "pack"> => {
-    if (onLinkList.has(u.ctUserId)) {
-      const id = onLinkList.get(u.ctUserId) ?? null;
-      return { ctUserId: u.ctUserId, kind: "onLinkList", suggestion: id, candidates: id ? [recheck(id)] : [] };
-    }
-    if (held.has(u.ctUserId)) {
-      const candidates = (input.heldCandidates.get(u.ctUserId) ?? []).map(recheck);
-      return { ctUserId: u.ctUserId, kind: "held", suggestion: null, candidates, newHireChoice: true };
-    }
-
-    const own = ehByPayrollId.get(u.payrollId.trim());
-    const idShared = (ctByPayrollId.get(u.payrollId.trim())?.length ?? 0) > 1;
-    if (own && !idShared) return { ctUserId: u.ctUserId, kind: "alreadySynced", suggestion: String(own.id), candidates: [] };
-
-    const email = norm(u.email);
-    const sameEmail = email ? input.ehEmployees.filter((e) => norm(e.email) === email) : [];
-    const several = sameEmail.length > 1 || (ctPerEmail.get(email) ?? 0) > 1;
-    const byEmail = sameEmail.map((e) => {
-      const reasons: ChoiceReason[] = [];
-      if (!sameName(u, e)) reasons.push("nameDiffers");
-      if (several) reasons.push("sameEmailSeveral");
-      return candidate(e, reasons);
-    });
-    const byNameOnly = input.ehEmployees
-      .filter((e) => !sameEmail.includes(e) && sameName(u, e))
-      .map((e) => candidate(e, ["nameOnly"]))
-      // A name alone isn't a hit (#134): someone else's record is no reason to stop a new hire.
-      .filter((c) => !c.reasons.includes("linkedElsewhere"));
-    const bySharedId = own && idShared && !sameEmail.includes(own) && !sameName(u, own) ? [candidate(own, [])] : [];
-    const candidates = [...byEmail, ...byNameOnly, ...bySharedId];
-
-    if (candidates.length === 0) return { ctUserId: u.ctUserId, kind: "newHire", suggestion: null, candidates };
-    if (candidates.every((c) => c.reasons.includes("linkedElsewhere"))) {
-      return { ctUserId: u.ctUserId, kind: "taken", suggestion: null, candidates };
-    }
-    const [only] = candidates;
-    if (candidates.length === 1 && only!.reasons.length === 0) {
-      return { ctUserId: u.ctUserId, kind: "matched", suggestion: only!.ehEmployeeId, candidates: [] };
-    }
-    return { ctUserId: u.ctUserId, kind: "choice", suggestion: null, candidates };
-  };
-
+  const synced = new Set(input.employeeMap.filter((m) => m.ehEmployeeId).map((m) => m.ctUserId));
   const rows = input.ctUsers
     .filter((u) => !synced.has(u.ctUserId))
-    .map((u): LinkRow => ({ ...classify(u), pack: pack.get(u.ctUserId) ?? "notAssigned" }));
+    .map((u): LinkRow => ({ ...classify(ix, u), pack: pack.get(u.ctUserId) ?? "notAssigned" }));
+
   const active = new Set(input.ctUsers.map((u) => u.ctUserId));
   const touched = new Set(input.employeeMap.flatMap((m) => (m.ehEmployeeId && active.has(m.ctUserId) ? [m.ehEmployeeId] : [])));
   for (const r of rows) {
     if (r.suggestion) touched.add(r.suggestion);
     for (const c of r.candidates) touched.add(c.ehEmployeeId);
   }
-  return { rows, ignoredEhCount: input.ehEmployees.filter((e) => !touched.has(String(e.id))).length };
+  return { rows, ignoredEhCount: input.ehEmployees.filter((e) => !touched.has(e.id)).length };
 }
