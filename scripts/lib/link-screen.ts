@@ -131,8 +131,8 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
   /** What the admin chose, by row index; a row not here keeps its proposal. */
   const chosen = new Map<number, LinkDecision>();
   const review = new Set(rows.flatMap((r, i) => (toReview(r) ? [i] : [])));
-  /** Rows whose link the admin moved to another row: row index -> the row it went to. */
-  const movedTo = new Map<number, number>();
+  /** Rows whose link the admin moved to another row, with what `u` on that row puts back. */
+  const movedTo = new Map<number, { to: number; was: LinkDecision | undefined; wasInReview: boolean }>();
   /** An EH employee linked to another row, waiting on a second Enter to move here. */
   let pendingMove: string | null = null;
   let cursor = 0;
@@ -183,14 +183,25 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
         pendingMove = ehEmployeeId;
         return false;
       }
+      movedTo.set(other, { to: i, was: chosen.get(other), wasInReview: review.has(other) });
       chosen.delete(other);
-      movedTo.set(other, i);
       review.add(other);
     }
     pendingMove = null;
     chosen.set(i, { ctUserId: rows[i]!.ctUserId, onList: true, ehEmployeeId });
     if (!showAll) cursor = nextUnreviewed();
     return true;
+  };
+
+  /** Puts row i back the way it was, giving back any link that was moved here. */
+  const undo = (i: number) => {
+    chosen.delete(i);
+    for (const [from, m] of movedTo) {
+      if (m.to !== i) continue;
+      movedTo.delete(from);
+      if (m.was) chosen.set(from, m.was);
+      if (!m.wasInReview) review.delete(from);
+    }
   };
 
   /** The selected row's number keys and Enter: link the choice they pick. */
@@ -257,7 +268,7 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       if (mine && !mine.onList) return [p.mark.none, p.dim("(won't link)"), p.change("won't link")];
       if (mine?.onList) return mine.ehEmployeeId === null ? [p.mark.none, p.dim("(none)"), p.change("new hire, not this person")] : linked(mine.ehEmployeeId, p.change("linked"));
       const moved = movedTo.get(i);
-      if (moved !== undefined) return [p.mark.warn, p.dim("(none)"), p.change(`match moved to row ${moved + 1}`)];
+      if (moved !== undefined) return [p.mark.warn, p.dim("(none)"), p.change(`match moved to row ${moved.to + 1}`)];
       if (r.kind === "taken") return [p.mark.bad, p.dim("(none)"), p.bad("Can't link: already linked to someone else")];
       if (r.kind === "alreadySynced") return linked(r.suggestion!, p.dim("already matched by Payroll ID"));
       if (r.kind === "newHire") return [p.mark.none, p.dim("(no match)"), p.dim("new hire")];
@@ -323,9 +334,11 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       else if (str === "x") {
         chosen.set(i, { ctUserId: rows[i]!.ctUserId, onList: false });
         if (!showAll) cursor = nextUnreviewed();
-      } else if (str === "u") chosen.delete(i);
+      } else if (str === "u") undo(i);
       else if (str === "/") [searching, query, hits, hit] = [true, "", [], 0];
       else choose(i, str, key);
+      // An undo can take a row out of To review: keep the cursor on the list.
+      cursor = Math.max(0, Math.min(cursor, visible().length - 1));
       return null;
     },
     /** Everyone, as a plain table: for printing off a terminal. */

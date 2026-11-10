@@ -142,6 +142,13 @@ describe("link screen", () => {
     expect(decisionFor(fromIvy, 106)).toEqual({ ctUserId: 106, onList: false });
   });
 
+  it("u on the row a link was moved to gives it back to the row it came from", () => {
+    const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", "/", "j", "a", "c", "k", "<return>", "<return>", "u");
+    expect(decisionFor(s, 104)).toEqual({ ctUserId: 104, onList: false });
+    expect(decisionFor(s, 100)).toEqual({ ctUserId: 100, onList: true, ehEmployeeId: "40213" });
+    expect(frame(s)).not.toContain("match moved");
+  });
+
   it("drops a pending move when the admin backs out with Esc, so the next Enter asks again", () => {
     const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", "/", "j", "a", "c", "k", "<return>");
     expect(frame(s)).toContain("Enter again to move it here");
