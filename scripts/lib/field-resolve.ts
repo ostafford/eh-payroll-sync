@@ -3,6 +3,8 @@
  * (issue #112). Shared by field-check, create-fields and discover, so all three
  * agree on the field.
  */
+import type { PayrollIdSource } from "../../src/mapping/schema.js";
+import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
 import type { FieldSpec } from "./field-spec.js";
 
 export interface FieldDef {
@@ -67,12 +69,24 @@ export const syncedOptions = (options: OptionMap): Record<string, string> =>
 /** A pick's option map, if it has one. */
 export const optionsOf = (pick: FieldPick | undefined): OptionMap | undefined => (pick && "id" in pick ? pick.options : undefined);
 
+/** `identity.externalIdFrom` for the picked field, with its name for the notices (ADR-0011). */
+export function payrollIdFrom(
+  fields: readonly CustomFieldDefinition[],
+  id: number | undefined,
+): PayrollIdSource {
+  if (id === undefined) return "userId";
+  const name = fields.find((f) => f.customFieldId === id)?.name.trim();
+  return name ? { customFieldId: id, name } : { customFieldId: id };
+}
+
 /** The human's choices, by FieldSpec name (clients/<client>/field-picks.json). */
 export type FieldPicks = Record<string, FieldPick>;
 
 export function resolveField(spec: FieldSpec, fields: FieldDef[], picks: FieldPicks = {}): Resolution {
   const pick = picks[spec.name];
   if (pick && "skip" in pick) return { status: "skipped" };
+  // Never by name (ADR-0011): the wrong field would re-key everyone, so only a human's pick counts.
+  if (!pick && spec.target.kind === "payrollId") return { status: "none" };
   if (pick && "profile" in pick) return spec.profile ? { status: "profile" } : { status: "none" };
   // Not made yet: no name match stands in for it, so create-fields makes it.
   if (pick && "create" in pick) return { status: "none" };

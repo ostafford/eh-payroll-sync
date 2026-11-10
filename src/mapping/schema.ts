@@ -200,7 +200,23 @@ export const fieldMap = z
       }),
     identity: z
       .object({
-        externalIdFrom: z.literal("userId").default("userId"),
+        /**
+         * The Payroll ID (EH `externalId`): the Connecteam `userId`, or a
+         * Connecteam text field holding the Payroll IDs EH already has
+         * (ADR-0011). A blank field falls back to the `userId`, per person.
+         */
+        externalIdFrom: z
+          .union([
+            z.literal("userId"),
+            z
+              .object({
+                customFieldId: z.number().int().positive(),
+                /** The field's Connecteam name, for the notices: a blank field may not be on the profile to read it from. */
+                name: z.string().trim().min(1).optional(),
+              })
+              .strict(),
+          ])
+          .default("userId"),
         emailFallbackFrom: z.literal("email").default("email"),
       })
       .strict()
@@ -238,6 +254,8 @@ export type FieldMap = z.infer<typeof fieldMap>;
 export type FieldRule = z.infer<typeof fieldRule>;
 export type Rules = z.infer<typeof rules>;
 export type TransformName = z.infer<typeof transform>;
+/** Where each employee's Payroll ID comes from (ADR-0011). */
+export type PayrollIdSource = FieldMap["identity"]["externalIdFrom"];
 
 /** Each schema problem as `path: message`; empty when the map is valid. */
 export function fieldMapIssues(json: unknown): string[] {

@@ -28,10 +28,13 @@ describe("first client's setup, replayed", () => {
     let screen: string[] = [];
     const numberOf = (fieldName: string) => () =>
       screen.map((l) => /^\s*(\d+)\) Use "(.*)" \(/.exec(l)).find((m) => m?.[2] === fieldName)![1]!;
+    const skip = () => screen.map((l) => /^\s*(\d+)\) Skip/.exec(l)).find(Boolean)![1]!;
     // What a person answers to each question, keyed by the question.
     const answers: Array<[RegExp, string | (() => string)]> = [
-      [/^Fix the 4 problems now\?/, "y"],
+      [/^Fix the 5 problems now\?/, "y"],
       [/^Gender: /, "3"], // Indeterminate (EH leaves it blank)
+      // Asked about "Employee ID" (#167). The call predates the question, so it isn't answered from it.
+      [/^Pick .* for EH Payroll ID/, skip],
       [/^Employee Status: "Full-time"/, "1"],
       [/^Employee Status: "Part-time"/, "2"],
       [/^Employee Status: "PBV"/, "6"], // left out: the client says PBV staff don't go into EH
@@ -56,9 +59,9 @@ describe("first client's setup, replayed", () => {
       print: (...lines) => screen.push(...lines),
     });
 
-    // Fix prompt, Gender 3, Employee Status 4 (+1 confirm), pick the threshold question, its 3 answers (+2 confirms), pick HELP, finish.
-    expect(asked).toHaveLength(1 + 3 + 4 + 1 + 1 + 3 + 2 + 1 + 1);
-    expect(summarise(checkFields(raw, picks))).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1, toCreate: 0 });
+    // Fix prompt, Gender 3, EH Payroll ID, Employee Status 4 (+1 confirm), pick the threshold question, its 3 answers (+2 confirms), pick HELP, finish.
+    expect(asked).toHaveLength(1 + 3 + 1 + 4 + 1 + 1 + 3 + 2 + 1 + 1);
+    expect(summarise(checkFields(raw, picks))).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 2, toCreate: 0 });
     expect(picks["Employee Status"]).toMatchObject({ exclude: ["PBV"], options: { PBV: null, Contractor: null } });
     expect(picks["Claim tax-free threshold?"]).toMatchObject({ options: { "N/A": null, TBC: null } });
   });

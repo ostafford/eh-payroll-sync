@@ -12,8 +12,10 @@ const OPTIONS: Record<string, string[]> = {
   "Australian resident for tax purposes?": ["Yes", "No"],
   "Have a HELP/STSL study debt?": ["Yes", "No"],
 };
+// Without its "Employee ID", which the check asks about as a possible EH
+// Payroll ID (#167): those tests add it back.
 const demoRaw = () =>
-  DEMO_CUSTOM_FIELDS.map((f) => ({
+  DEMO_CUSTOM_FIELDS.filter((f) => f.name !== "Employee ID").map((f) => ({
     id: f.customFieldId,
     name: f.name,
     type: f.type,
@@ -28,15 +30,15 @@ const row = (rows: ReturnType<typeof checkFields>, name: string) => rows.find((r
 describe("checkFields", () => {
   it("passes the demo account: everything found but the optional hours field it doesn't have", () => {
     const rows = checkFields(demoRaw());
-    expect(rows.filter((r) => r.result.status !== "found").map((r) => r.name)).toEqual(["Standard hours per week"]);
-    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 1, toCreate: 0 });
+    expect(rows.filter((r) => r.result.status !== "found").map((r) => r.name)).toEqual(["EH Payroll ID", "Standard hours per week"]);
+    expect(summarise(rows)).toEqual({ ok: 28, blocking: 0, warnings: 0, skipped: 2, toCreate: 0 });
   });
 
   it("a missing required field blocks; a missing recommended one only warns", () => {
     const rows = checkFields(without("TFN").filter((f) => f.name !== "Suburb"));
     expect(row(rows, "TFN")).toMatchObject({ level: "required", blocking: true, result: { status: "missing" } });
     expect(row(rows, "Suburb")).toMatchObject({ level: "recommended", blocking: false, result: { status: "missing" } });
-    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1, skipped: 1, toCreate: 0 });
+    expect(summarise(rows)).toEqual({ ok: 26, blocking: 1, warnings: 1, skipped: 2, toCreate: 0 });
   });
 
   it("flags a wrong type, and blocks when the field is required", () => {
@@ -110,10 +112,48 @@ describe("checkFields", () => {
   it("a skipped recommended field is neither missing nor a warning", () => {
     const rows = checkFields(without("Suburb"), { Suburb: { skip: true } });
     expect(row(rows, "Suburb")).toMatchObject({ blocking: false, result: { status: "skipped" } });
-    expect(summarise(rows)).toEqual({ ok: 27, blocking: 0, warnings: 0, skipped: 2, toCreate: 0 });
+    expect(summarise(rows)).toEqual({ ok: 27, blocking: 0, warnings: 0, skipped: 3, toCreate: 0 });
     expect(renderFieldCheck(rows, { color: false }).trim().split("\n").at(-1)).toBe(
-      "27 ok · 0 required to fix · 0 to check · 2 not used",
+      "27 ok · 0 required to fix · 0 to check · 3 not used",
     );
+  });
+
+  describe("EH Payroll ID: a client's own Payroll IDs (#167, ADR-0011)", () => {
+    const text = { id: 910034, name: "Employee ID", type: "str", isEditableForUsers: false, dropdownOptions: [] };
+
+    it("isn't needed: a client without one uses the Connecteam user id", () => {
+      expect(row(checkFields(demoRaw()), "EH Payroll ID")).toMatchObject({ level: "optional", blocking: false, result: { status: "missing" } });
+    });
+
+    it("accepts a picked text field", () => {
+      const rows = checkFields([...demoRaw(), text], { "EH Payroll ID": { id: 910034 } });
+      expect(row(rows, "EH Payroll ID")).toMatchObject({ blocking: false, field: { id: 910034 }, result: { status: "found" } });
+    });
+
+    it("blocks a number field, which can drop leading zeros", () => {
+      const rows = checkFields([...demoRaw(), { ...text, type: "number" }], { "EH Payroll ID": { id: 910034 } });
+      expect(row(rows, "EH Payroll ID")).toMatchObject({ blocking: true, result: { status: "wrongType", got: "number", want: "str" } });
+      expect(renderFieldCheck(rows, { color: false }).replace(/\n {8}(?![\[WF])/g, " ")).toContain("leading zeros");
+    });
+
+    it("blocks a picked field that was since deleted: everyone would quietly fall back to the user id", () => {
+      const rows = checkFields(demoRaw(), { "EH Payroll ID": { id: 910034 } });
+      expect(row(rows, "EH Payroll ID")).toMatchObject({ blocking: true, result: { status: "stalePick", id: 910034 } });
+    });
+
+    it("never takes a field by name alone: an ID-like field waits for the human to decide", () => {
+      const rows = checkFields([...demoRaw(), text]);
+      expect(row(rows, "EH Payroll ID")).toMatchObject({ blocking: false, result: { status: "toAsk" } });
+      expect(row(rows, "EH Payroll ID").field).toBeUndefined();
+      expect(row(checkFields([...demoRaw(), text], { "EH Payroll ID": { skip: true } }), "EH Payroll ID").result.status).toBe("skipped");
+    });
+
+    it("asks even about a field named \"Payroll ID\": switching everyone's key needs a human", () => {
+      const named = { ...text, name: "Payroll ID" };
+      expect(row(checkFields([...demoRaw(), named]), "EH Payroll ID")).toMatchObject({
+        result: { status: "toAsk", candidates: [{ id: 910034, name: "Payroll ID" }] },
+      });
+    });
   });
 
   describe("with the client's options mapped (#112)", () => {
@@ -264,7 +304,7 @@ describe("renderFieldCheck: the combined table", () => {
   it("numbers the fields you can change (not the award row), and marks your changes", () => {
     const out = plain(rows, { numbered: true, explain: false, changed: new Set(["Suburb"]) });
     expect(out).toMatch(/\n {3}1\) \[ok\] Legal First Name/);
-    expect(line(out, "Suburb")).toMatch(/^\s+6\) .*"Suburb"\s+changed$/);
+    expect(line(out, "Suburb")).toMatch(/^\s+7\) .*"Suburb"\s+changed$/);
     expect(line(out, "EH Pay Rate Template")).not.toMatch(/\d\)/);
   });
 
@@ -276,7 +316,7 @@ describe("renderFieldCheck: the combined table", () => {
   });
 
   it("ends with a summary", () => {
-    expect(plain().trim().split("\n").at(-1)).toBe("27 ok · 1 required to fix · 0 to check · 1 not used");
+    expect(plain().trim().split("\n").at(-1)).toBe("27 ok · 1 required to fix · 0 to check · 2 not used");
   });
 
   it("fits a 100-column terminal, numbered or not", () => {

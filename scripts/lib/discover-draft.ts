@@ -3,8 +3,9 @@
  * resolving each field the sync needs (./field-spec.ts) from the human's picks,
  * then by name (./field-resolve.ts).
  */
+import type { PayrollIdSource } from "../../src/mapping/schema.js";
 import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
-import { optionsOf, resolveField, syncedOptions, type FieldPicks } from "./field-resolve.js";
+import { optionsOf, payrollIdFrom, resolveField, syncedOptions, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC, type FieldSpec } from "./field-spec.js";
 
 /** Read by the sync but not sent to EH (Direct manager): resolved like any spec field. */
@@ -38,7 +39,7 @@ export interface DraftResult {
     client: string;
     connecteam: { onboardingPackId: number };
     employmentHero: { businessId: string; payScheduleId: string; locationId: string };
-    identity: { externalIdFrom: string; emailFallbackFrom: string };
+    identity: { externalIdFrom: PayrollIdSource; emailFallbackFrom: string };
     fields: Array<{ eh: string; from: Record<string, unknown>; transform: string; [k: string]: unknown }>;
     rules: {
       taxDeclaration: Record<string, { customFieldId: number; options?: Record<string, string> }>;
@@ -77,6 +78,7 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
   );
   const ruleConsumed = new Set<number>();
   const specNotSynced = new Set<number>();
+  let payrollIdField: number | undefined;
   for (const spec of FIELD_SPEC) {
     const t = spec.target;
     // Confirmed in the picker: the Connecteam profile's own first / last name.
@@ -102,13 +104,14 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
       taxDeclaration[t.key] = { customFieldId: id, ...(options ? { options } : {}) };
       ruleConsumed.add(id);
     } else if (t.kind === "super") ruleConsumed.add(id);
+    else if (t.kind === "payrollId") payrollIdField = id;
     else specNotSynced.add(id);
   }
   const exclude = FIELD_SPEC.flatMap((spec) => {
     const pick = input.picks?.[spec.name];
     return pick && "id" in pick && pick.exclude?.length && idOf(spec) === pick.id ? [{ customFieldId: pick.id, values: pick.exclude }] : [];
   });
-  const used = new Set([...mapped.flatMap((r) => (typeof r.from.customFieldId === "number" ? [r.from.customFieldId] : [])), ...ruleConsumed, ...specNotSynced]);
+  const used = new Set([...mapped.flatMap((r) => (typeof r.from.customFieldId === "number" ? [r.from.customFieldId] : [])), ...ruleConsumed, ...specNotSynced, ...(payrollIdField === undefined ? [] : [payrollIdField])]);
 
   const draft: DraftResult["draft"] = {
     client: input.client,
@@ -118,7 +121,7 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
       payScheduleId: input.payScheduleId || "TODO",
       locationId: input.locationId || "TODO",
     },
-    identity: { externalIdFrom: "userId", emailFallbackFrom: "email" },
+    identity: { externalIdFrom: payrollIdFrom(fields, payrollIdField), emailFallbackFrom: "email" },
     fields: [
       { eh: "emailAddress", from: { userField: "email" }, transform: "lowerTrim" },
       { eh: "mobilePhone", from: { userField: "phoneNumber" }, transform: "phoneAu" },

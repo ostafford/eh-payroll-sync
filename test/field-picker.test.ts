@@ -70,8 +70,10 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
     "Australian resident for tax purposes?": ["Yes", "No"],
     "Have a HELP/STSL study debt?": ["Yes", "No"],
   };
+  // Without its "Employee ID", which the check asks about as a possible EH
+  // Payroll ID (#167): those tests add it back.
   const demo = (): any[] => [
-    ...DEMO_CUSTOM_FIELDS.map((f) => ({
+    ...DEMO_CUSTOM_FIELDS.filter((f) => f.name !== "Employee ID").map((f) => ({
       id: f.customFieldId,
       name: f.name,
       type: f.type,
@@ -122,7 +124,8 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
     expect(asked).toEqual([ALL_GOOD]);
     expect(out).toMatch(/Employment Hero needs\s+Your Connecteam field\s+Status/);
     expect(tableRow(out, "Legal First Name")).toMatch(/^\s+1\) \[ok\] Legal First Name\s+"Legal First Name"\s+matched by name$/);
-    expect(Object.keys(result)).toHaveLength(FIELD_SPEC.length);
+    // Every field but EH Payroll ID, which this account doesn't have.
+    expect(Object.keys(result)).toHaveLength(FIELD_SPEC.length - 1);
     expect(result.TFN).toEqual({ id: 42923222 });
   });
 
@@ -329,6 +332,27 @@ describe("reviewFields: the combined field check (scripted answers)", () => {
       const { result } = await run(noUsi(), {}, ["y", choice("Skip"), "n", choice("Create"), ""]);
       expect(result["Super Fund USI"]).toEqual({ create: true });
       expect(result["Super Fund ABN"]).toEqual({ id: 42920783 });
+    });
+  });
+
+  describe("EH Payroll ID: a client's own Payroll IDs (#167, ADR-0011)", () => {
+    const withEmployeeId = () => [...demo(), { id: 42920893, name: "Employee ID", type: "str" }];
+
+    it("asks once whether an ID-like field holds the EH Payroll ID, listing it first", async () => {
+      const { result, asked, out } = await run(withEmployeeId(), {}, ["y", choice('Use "Employee ID"'), ""]);
+      expect(asked[0]).toBe(fixPrompt(1));
+      const q = out.slice(out.lastIndexOf("EH Payroll ID (optional)"));
+      expect(q).toMatch(/^EH Payroll ID \(optional\): which Connecteam field holds the EH Payroll ID\? "Employee ID" may\./);
+      expect(q).toMatch(/^\s+1\) Use "Employee ID" \(text\)/m);
+      expect(q).toContain("Skip: keep using the Connecteam user ID");
+      expect(result["EH Payroll ID"]).toEqual({ id: 42920893 });
+    });
+
+    it("saves a skip, so a re-run asks nothing", async () => {
+      const first = await run(withEmployeeId(), {}, ["y", choice("Skip"), ""]);
+      expect(first.result["EH Payroll ID"]).toEqual({ skip: true });
+      const again = await run(withEmployeeId(), first.result, [""]);
+      expect(again.asked).toEqual([ALL_GOOD]);
     });
   });
 

@@ -39,6 +39,8 @@ export interface MappingIssue {
 
 export interface MappingResult {
   externalId: string;
+  /** The Payroll ID came from the client's own field (`identity.externalIdFrom`), not the `userId`. */
+  externalIdFromField: boolean;
   emailFallback: string | undefined;
   /** EH field name -> value. Ready to POST as the unstructured-employee body. */
   payload: Record<string, PayloadValue>;
@@ -413,6 +415,14 @@ export function leftOutBy(user: ConnecteamUser, map: FieldMap): string | undefin
   return undefined;
 }
 
+/** The trimmed value of the field `identity.externalIdFrom` names, or undefined when it's `userId` or blank. */
+function payrollIdOf(user: ConnecteamUser, map: FieldMap): string | undefined {
+  const from = map.identity.externalIdFrom;
+  if (from === "userId") return undefined;
+  const value = user.customFields.find((f) => f.customFieldId === from.customFieldId)?.value;
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
 export function applyFieldMap(
   user: ConnecteamUser,
   map: FieldMap,
@@ -441,7 +451,8 @@ export function applyFieldMap(
     blocking: payRunBlocking,
   } = applyPayRun(acc.payload, map.employmentHero, opts.payRate, opts.ehRecord);
 
-  const externalId = String(user.userId);
+  const copied = payrollIdOf(user, map);
+  const externalId = copied ?? String(user.userId);
   acc.payload.externalId = externalId;
 
   if (acc.payload.residentialState === "INTERNATIONAL") {
@@ -455,6 +466,7 @@ export function applyFieldMap(
 
   return {
     externalId,
+    externalIdFromField: copied !== undefined,
     emailFallback,
     payload: acc.payload,
     issues: acc.issues,

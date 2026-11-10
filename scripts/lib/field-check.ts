@@ -25,6 +25,8 @@ export type CheckResult =
   | { status: "ambiguous"; candidates: Array<{ id: number; name: string }> }
   /** The field picked earlier no longer exists. */
   | { status: "stalePick"; id: number }
+  /** An ID-like field might hold the EH Payroll ID: only the human can say (ADR-0011). */
+  | { status: "toAsk"; candidates: Array<{ id: number; name: string }> }
   /** The human chose not to use it (never a required field). */
   | { status: "skipped" }
   /** Picked as "create": create-fields makes it (blocking until it exists, if required). */
@@ -50,6 +52,9 @@ export interface CheckRow {
   /** Why a number field won't do (FieldSpec ct.numberNote). */
   numberNote?: string;
 }
+
+/** A text field that might hold the EH Payroll IDs, though not named "Payroll ID". */
+const LOOKS_LIKE_ID = /\bid\b|payroll|employee\s*(no|number|#)/i;
 
 /** As docs/connecteam-field-checklist.md's key: only the award field is "admin". */
 const levelOf = (spec: FieldSpec): Level =>
@@ -108,6 +113,7 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
     const resolved = resolveField(spec, defs, picks);
     const f = resolved.status === "matched" ? raw.find((x) => x?.id === resolved.field.id) : undefined;
     const level = levelOf(spec);
+    const ids = spec.target.kind === "payrollId" && !picks[spec.name] ? idLike(defs) : [];
     const result: CheckResult =
       resolved.status === "ambiguous"
         ? { status: "ambiguous", candidates: resolved.candidates.map(({ id, name }) => ({ id, name })) }
@@ -119,7 +125,9 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
               ? { status: "found" }
               : resolved.status === "none" && picks[spec.name] && "create" in picks[spec.name]!
                 ? { status: "toCreate" }
-                : checkOne(spec, f, optionsOf(picks[spec.name]));
+                : resolved.status === "none" && ids.length
+                  ? { status: "toAsk", candidates: ids }
+                  : checkOne(spec, f, optionsOf(picks[spec.name]));
     return {
       group: spec.group,
       name: spec.name,
@@ -128,8 +136,10 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
       ...(resolved.status === "matched" && resolved.picked ? { picked: true } : {}),
       result,
       // An unmapped option on a required field gets every employee who picks it a Correction (#112).
+      // A Payroll ID field that can't be read re-keys everyone to their user id.
       blocking:
-        level === "required" && ["missing", "wrongType", "ambiguous", "stalePick", "options", "toCreate"].includes(result.status),
+        (level === "required" && ["missing", "wrongType", "ambiguous", "stalePick", "options", "toCreate"].includes(result.status)) ||
+        (spec.target.kind === "payrollId" && ["wrongType", "stalePick"].includes(result.status)),
       ...(spec.ct.options ? { options: spec.ct.options } : {}),
       ...(spec.ct.numberNote ? { numberNote: spec.ct.numberNote } : {}),
       ...(resolved.status === "profile" && spec.profile ? { profile: spec.profile.label } : {}),
@@ -156,6 +166,10 @@ export function checkFields(raw: any[], picks: FieldPicks = {}): CheckRow[] {
     blocking: false,
   });
   return rows;
+}
+
+function idLike(defs: Array<{ id: number; name: string; type: string }>): Array<{ id: number; name: string }> {
+  return defs.filter((d) => d.type === "str" && LOOKS_LIKE_ID.test(d.name)).map(({ id, name }) => ({ id, name }));
 }
 
 /** "blocking" counts what still needs deciding; a required field waiting on create-fields is in "toCreate". */
@@ -232,6 +246,11 @@ function explain(r: CheckRow): { why: string; fix: string } {
         why: `More than one of your fields could be it (${res.candidates.map((c) => `"${c.name}"`).join(", ")}), so the sync won't guess.`,
         fix: "Pick which one in this check (npm run field-check, in a terminal).",
       };
+    case "toAsk":
+      return {
+        why: `${res.candidates.map((c) => `"${c.name}"`).join(", ")} may hold each employee's EH Payroll ID; the sync won't use one unless you say so.`,
+        fix: "Pick it, or skip to keep using the Connecteam user ID (npm run field-check, in a terminal).",
+      };
     case "stalePick":
       return {
         why: `The field picked for this earlier (id ${res.id}) no longer exists in Connecteam.`,
@@ -302,6 +321,7 @@ export function renderFieldCheck(rows: CheckRow[], opts: RenderOptions): string 
     if (res.status === "toCreate") return dim(fit("(new field to create)", CT_W));
     if (res.status === "ambiguous") return dim(fit(`(${res.candidates.length} fields match)`, CT_W));
     if (res.status === "stalePick") return dim(fit("(deleted)", CT_W));
+    if (res.status === "toAsk") return dim(fit("(not decided)", CT_W));
     if (r.field) return ct(fit(`"${r.field.name}"`, CT_W));
     return dim(fit("(none found)", CT_W));
   };
@@ -330,6 +350,8 @@ export function renderFieldCheck(rows: CheckRow[], opts: RenderOptions): string 
         return c(r.blocking ? "31" : "33", "more than one match");
       case "stalePick":
         return c(r.blocking ? "31" : "33", "picked field deleted");
+      case "toAsk":
+        return c("33", "to decide");
       case "userEditable":
         return c("33", "editable by employees");
       case "taxGuess":

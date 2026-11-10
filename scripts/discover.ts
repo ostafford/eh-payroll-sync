@@ -127,12 +127,12 @@ async function main(): Promise<void> {
   writeFileSync(outFile, JSON.stringify(draft, null, 2) + "\n");
   // A draft left by an earlier run would no longer describe the map.
   if (write.action !== "draft") rmSync(draftFile, { force: true });
-  // A kept map still takes the option mappings chosen in the field picker (#112).
+  // A kept map still takes the field picker's choices: option mappings (#112) and the Payroll ID field (#167).
   if (write.action === "draft" && existing) {
-    const { map, changed } = applyOptionMaps(existing, picks);
+    const { map, changed } = applyOptionMaps(existing, picks, fields);
     if (changed.length) {
       writeFileSync(mapFile, JSON.stringify(map, null, 2) + "\n");
-      console.log(`\nUpdated the dropdown option mappings in ${mapFile} for: ${changed.join(", ")}.`);
+      console.log(`\nUpdated ${mapFile} with your field picker choices for: ${changed.join(", ")}.`);
     }
   }
 

@@ -5,15 +5,26 @@
  * mapping made on a wizard re-run would never reach the sync.
  *
  * Only `map` (fields) and `options` (tax declaration) of an entry already
- * reading the picked field change, plus that field's entry in `rules.exclude`;
+ * reading the picked field change, plus that field's entry in `rules.exclude`
+ * and, from the EH Payroll ID pick, `identity.externalIdFrom` with the
+ * field's current name (#167);
  * everything else in the map is left alone.
  */
-import { optionsOf, syncedOptions, type FieldPicks } from "./field-resolve.js";
+import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
+import { optionsOf, payrollIdFrom, syncedOptions, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC } from "./field-spec.js";
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-export function applyOptionMaps<T>(fieldMap: T, picks: FieldPicks): { map: T; changed: string[] } {
+/**
+ * `fields`: the account's custom-field definitions, for the Payroll ID field's
+ * name. Required: without it a kept map would lose the stored name.
+ */
+export function applyOptionMaps<T>(
+  fieldMap: T,
+  picks: FieldPicks,
+  fields: readonly CustomFieldDefinition[],
+): { map: T; changed: string[] } {
   const map: any = structuredClone(fieldMap);
   const changed: string[] = [];
   const mark = (name: string) => {
@@ -30,6 +41,15 @@ export function applyOptionMaps<T>(fieldMap: T, picks: FieldPicks): { map: T; ch
         map.rules.exclude = want;
         mark(spec.name);
       }
+    }
+    if (pick && spec.target.kind === "payrollId" && ("id" in pick || "skip" in pick)) {
+      // Where the Payroll ID comes from (ADR-0011): the picked field, or the user id once skipped.
+      const want = payrollIdFrom(fields, "id" in pick ? pick.id : undefined);
+      if (!same(map.identity?.externalIdFrom ?? "userId", want)) {
+        map.identity = { ...map.identity, externalIdFrom: want };
+        mark(spec.name);
+      }
+      continue;
     }
     const options = optionsOf(pick);
     if (!options || !pick || !("id" in pick)) continue;

@@ -12,8 +12,9 @@
  *   6. Existing-match notice    -> the admin channel, when the Pre-create check
  *      holds someone (ADR-0010).
  *   7. Link notice              -> the admin channel, when a first approval
- *      links a Pre-existing employee (ADR-0009), or a System alert when a
- *      confirmed link can't be made.
+ *      links a Pre-existing employee (ADR-0009), or their first sync does by
+ *      a Payroll ID copied into Connecteam (ADR-0011), or a System alert when
+ *      a confirmed link can't be made.
  *
  * Messages to a person (1 and 4) end with a short "this is automated" note
  * (per-client `messages.automatedNote`), kept whole however long the rest runs.
@@ -355,12 +356,20 @@ const MATCH_KEY_NAMES: Record<MatchKey, string> = {
   nameDob: "name + date of birth",
 };
 
+/** "email and TFN differ", "TFN differs": key names only, with the verb agreeing. */
+function keyPhrase(keys: readonly MatchKey[], verb: "match" | "differ"): string {
+  return `${topicList(keys.map((k) => MATCH_KEY_NAMES[k]))} ${keys.length === 1 ? `${verb}${verb === "match" ? "es" : "s"}` : verb}`;
+}
+
 /** "EH 40213 (Terminated in EH): email and TFN match; name + date of birth differs". Key names only, never values. */
 export function existingMatchLine(m: ExistingMatch): string {
-  const names = (keys: readonly MatchKey[]) => topicList(keys.map((k) => MATCH_KEY_NAMES[k]));
-  const matched = `${names(m.matched)} ${m.matched.length === 1 ? "matches" : "match"}`;
-  const differs = m.differs.length ? `; ${names(m.differs)} ${m.differs.length === 1 ? "differs" : "differ"}` : "";
-  return `EH ${m.ehEmployeeId}${m.terminated ? " (Terminated in EH)" : ""}: ${matched}${differs}`;
+  const who = `EH ${m.ehEmployeeId}${m.terminated ? " (Terminated in EH)" : ""}`;
+  if (m.byPayrollId) {
+    const differ = m.differs.length ? ` (${keyPhrase(m.differs, "differ")})` : "";
+    return `${who}: Payroll ID matched, but no other detail agreed${differ}`;
+  }
+  const differs = m.differs.length ? `; ${keyPhrase(m.differs, "differ")}` : "";
+  return `${who}: ${keyPhrase(m.matched, "match")}${differs}`;
 }
 
 const EXISTING_MATCH_FOOT = [
@@ -368,20 +377,32 @@ const EXISTING_MATCH_FOOT = [
   "They'll sync at the next daily recheck, or straight away when their profile is edited.",
 ];
 
+/** An Existing-match notice's line for a Payroll ID copied into Connecteam that EH doesn't hold (ADR-0011). */
+export const PAYROLL_ID_TYPO_HINT = "Their Payroll ID in Connecteam isn't in EH; check it for a typo.";
+
+/**
+ * An Existing-match notice's line when their Payroll ID field was blank and a
+ * match already has a Payroll ID in EH: filling it in links them (ADR-0011).
+ */
+export function copyPayrollIdHint(fieldName: string): string {
+  return `Copy their EH Payroll ID into **${fieldName}** in Connecteam.`;
+}
+
 /**
  * Existing-match notice -> the admin channel, when the Pre-create check holds
  * someone (ADR-0010, #143 item 8): each possible EH match with the keys that
  * matched or disagreed, never their values, and how to fix it. One message
  * when it fits, otherwise numbered parts, each within the cap: the heading
  * opens the first, "To fix" closes the last. Past {@link MAX_PARTS} parts the
- * rest are counted, which takes dozens of candidates.
+ * rest are counted, which takes dozens of candidates. `notes` go before "To
+ * fix", e.g. {@link PAYROLL_ID_TYPO_HINT}.
  */
-export function existingMatchMessages(ref: PersonRef, matches: readonly ExistingMatch[]): string[] {
+export function existingMatchMessages(ref: PersonRef, matches: readonly ExistingMatch[], notes: readonly string[] = []): string[] {
   const head = [
     `⚠️ Held: ${personLabel(ref)} may already be in Employment Hero, so nothing was written for them.`,
     matches.length === 1 ? "Possible match:" : "Possible matches:",
   ];
-  return numberedParts(head, matches.map(existingMatchLine), EXISTING_MATCH_FOOT, "•", MAX_PARTS);
+  return numberedParts(head, matches.map(existingMatchLine), [...notes, ...EXISTING_MATCH_FOOT], "•", MAX_PARTS);
 }
 
 /**
@@ -390,11 +411,21 @@ export function existingMatchMessages(ref: PersonRef, matches: readonly Existing
  * notice; the employee gets nothing. The name isn't bold, as it would be on
  * the first line (see the module doc).
  */
-export function linkNoticeMessage(ref: PersonRef, ehEmployeeId: string, payrollIdSet: boolean): string {
+export function linkNoticeMessage(
+  ref: PersonRef,
+  ehEmployeeId: string,
+  payrollIdSet: boolean,
+  /** Keys that disagree with the EH record, for a link by a copied Payroll ID (ADR-0011). Names only. */
+  differs: readonly MatchKey[] = [],
+): string {
+  const differ = differs.length
+    ? `Their ${keyPhrase(differs, "differ")} in Employment Hero: check which is right.`
+    : "";
   return clamp(
     sections(
       `🔗 ${personLabel(ref)} is now linked to Employment Hero employee ${ehEmployeeId}.`,
       `${payrollIdSet ? "Only the Payroll ID was set." : "Their Payroll ID was already in Employment Hero, so nothing was written."} From now on, only what they change in Connecteam is synced.`,
+      differ,
     ),
   );
 }

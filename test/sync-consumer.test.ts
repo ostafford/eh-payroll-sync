@@ -1020,6 +1020,242 @@ describe("runSyncJob - the match key is fixed at first sync (#166, ADR-0011)", (
   });
 });
 
+describe("runSyncJob - Payroll ID from a Connecteam field (#167, ADR-0011)", () => {
+  const ME = 17760356;
+  const FIELD = 50000001;
+  const COPIED = "007421";
+  const byField = parseFieldMap({ ...fieldMap, identity: { externalIdFrom: { customFieldId: FIELD } } });
+
+  /** The synthetic user with their EH Payroll ID copied into Connecteam (blank: not filled in). */
+  const withCopiedId = (value = COPIED): ConnecteamUser => {
+    const user = cloneUser();
+    user.customFields.push({ customFieldId: FIELD, type: "str", name: "EH Payroll ID", value });
+    return user;
+  };
+
+  /** A hand-entered EH employee: the same person as the synthetic user unless overridden. */
+  const handEntered = (id: number, over: Record<string, unknown> = {}) => ({
+    id,
+    externalId: COPIED,
+    status: "Active",
+    firstName: "Samuel",
+    surname: "Rivera",
+    dateOfBirth: "1992-04-07T00:00:00",
+    emailAddress: "sam.rivera@example.com",
+    taxFileNumber: "123456782",
+    ...over,
+  });
+
+  /**
+   * A small stateful EH holding the given employees. Records every call; a
+   * Pre-create filter returns the employees whose field equals the filter's
+   * first value.
+   */
+  function payrollEh(...employees: Array<Record<string, unknown>>) {
+    const calls: string[] = [];
+    const filterValue = (filter: string) => /eq '((?:[^']|'')*)'/.exec(filter)![1]!.replace(/''/g, "'");
+    return {
+      calls,
+      async getByExternalId(externalId: string) {
+        calls.push(`GET externalid/${externalId}`);
+        return { outcome: "ok", data: employees.find((e) => e.externalId === externalId) ?? null };
+      },
+      async getEmployee(id: string) {
+        calls.push(`GET ${id}`);
+        return { outcome: "ok", data: employees.find((e) => String(e.id) === id) ?? null };
+      },
+      async findEmployees(filter: string) {
+        calls.push("FIND");
+        const field = filter.split(" ")[0]!;
+        const value = filterValue(filter).toLowerCase();
+        return { outcome: "ok", data: employees.filter((e) => String(e[field] ?? "").toLowerCase() === value) };
+      },
+      async setExternalId(id: string) {
+        calls.push(`PUT ${id}`);
+        return { outcome: "ok", data: null };
+      },
+      async upsertByExternalId(externalId: string) {
+        calls.push(`UPSERT ${externalId}`);
+        return { outcome: "ok", data: { id: 555, status: "Active", detailedStatus: null, operationType: "Create", created: true } };
+      },
+    };
+  }
+
+  const run = (eh: ReturnType<typeof payrollEh>, ct: CtFake, store = fakeGateway()) =>
+    runSyncJob(job(), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct, fieldMap: byField }));
+  const writes = (eh: ReturnType<typeof payrollEh>) => eh.calls.filter((c) => !c.startsWith("GET") && c !== "FIND");
+
+  it("links a copied ID that finds someone whose other details agree, writing nothing to EH", async () => {
+    const store = fakeGateway();
+    const eh = payrollEh(handEntered(40213));
+    const ct = fakeCt(withCopiedId());
+
+    const out = await run(eh, ct, store);
+
+    expect(out).toEqual({ status: "synced", reason: "linked: Payroll ID only", ehEmployeeId: "40213" });
+    expect(writes(eh)).toEqual([]);
+    expect(store.rows.get(ME)).toMatchObject({ ehEmployeeId: "40213", linkedAt: 1_000_000, externalId: COPIED });
+    expect(ct.dms).toEqual([]);
+    expect(ct.channels).toEqual([
+      {
+        id: "chan-1",
+        text:
+          "🔗 Sam Rivera (17760356) is now linked to Employment Hero employee 40213.\n\n" +
+          "Their Payroll ID was already in Employment Hero, so nothing was written. From now on, only what they change in Connecteam is synced.",
+      },
+    ]);
+  });
+
+  it("links when only some details agree, naming the ones that differ but never their values", async () => {
+    const eh = payrollEh(handEntered(40213, { taxFileNumber: "876543217", emailAddress: "sam@old.example.com" }));
+    const ct = fakeCt(withCopiedId());
+
+    expect(await run(eh, ct)).toMatchObject({ status: "synced", ehEmployeeId: "40213" });
+
+    expect(writes(eh)).toEqual([]);
+    expect(ct.channels).toHaveLength(1);
+    const notice = ct.channels[0]!.text;
+    expect(notice).toContain("🔗 Sam Rivera (17760356) is now linked to Employment Hero employee 40213.");
+    expect(notice).toContain("Their email and TFN differ in Employment Hero");
+    for (const value of ["876543217", "123456782", "sam@old.example.com", "sam.rivera@example.com"]) {
+      expect(notice).not.toContain(value);
+    }
+  });
+
+  // A typo'd ID landing on another real employee would send later edits into their pay record.
+  const someoneElse = handEntered(40377, {
+    firstName: "Priya",
+    surname: "Shah",
+    dateOfBirth: "1988-01-02T00:00:00",
+    emailAddress: "priya@example.com",
+    taxFileNumber: "876543217",
+  });
+
+  it("holds a copied ID that finds someone no other detail agrees with, writing nothing to EH", async () => {
+    const store = fakeGateway();
+    const eh = payrollEh(someoneElse);
+    const ct = fakeCt(withCopiedId());
+
+    const out = await run(eh, ct, store);
+
+    expect(out).toMatchObject({ status: "held" });
+    expect(writes(eh)).toEqual([]);
+    expect(ct.dms).toEqual([]);
+    expect(ct.channels).toHaveLength(1);
+    expect(ct.channels[0]!.text).toContain("⚠️ Held: Sam Rivera (17760356)");
+    expect(ct.channels[0]!.text).toContain("EH 40377: Payroll ID matched, but no other detail agreed");
+    expect(store.rows.get(ME)).toMatchObject({ ehEmployeeId: null, lastOutcome: "existing_match" });
+    expect(store.rows.get(ME)!.linkedAt).toBeUndefined();
+    expect(store.log.map((l) => l.detail)).toEqual(["existing_match: EH 40377 (Payroll ID; email, tfn, nameDob differs)"]);
+  });
+
+  const TYPO = "Their Payroll ID in Connecteam isn't in EH; check it for a typo.";
+
+  it("holds a copied ID that isn't in EH when the Pre-create check finds them, suggesting a typo", async () => {
+    // EH holds them under 007412: the copied 007421 finds nobody.
+    const eh = payrollEh(handEntered(40213, { externalId: "007412" }));
+    const ct = fakeCt(withCopiedId());
+
+    expect(await run(eh, ct)).toMatchObject({ status: "held" });
+
+    expect(writes(eh)).toEqual([]);
+    expect(ct.channels).toHaveLength(1);
+    expect(ct.channels[0]!.text).toContain("EH 40213: email, TFN and name + date of birth match");
+    expect(ct.channels[0]!.text).toContain(TYPO);
+    expect(ct.channels[0]!.text).not.toContain("007412");
+    expect(ct.channels[0]!.text).not.toContain(COPIED);
+  });
+
+  it("suggests no typo when the key is the userId", async () => {
+    const eh = payrollEh(handEntered(40213, { externalId: null }));
+    const ct = fakeCt(cloneUser());
+
+    expect(await runSyncJob(job(), deps({ eh: eh as unknown as SyncDeps["eh"], ct }))).toMatchObject({ status: "held" });
+    expect(ct.channels[0]!.text).not.toContain(TYPO);
+  });
+
+  const COPY_IT = "Copy their EH Payroll ID into **EH Payroll ID** in Connecteam.";
+
+  it("asks for the EH Payroll ID to be copied in when their field is blank and the match already has one", async () => {
+    const eh = payrollEh(handEntered(40213));
+    const ct = fakeCt(withCopiedId(""));
+
+    expect(await run(eh, ct)).toMatchObject({ status: "held" });
+
+    expect(writes(eh)).toEqual([]);
+    expect(ct.channels[0]!.text).toContain(COPY_IT);
+    expect(ct.channels[0]!.text).not.toContain(TYPO);
+    expect(ct.channels[0]!.text).not.toContain(COPIED);
+  });
+
+  it("posts the hold again when only its hint changes, so the admin sees the new fix", async () => {
+    const store = fakeGateway();
+    const ct = fakeCt(withCopiedId());
+    // Copied 007421, but EH holds them under 007412: the typo hint.
+    const eh = payrollEh(handEntered(40213, { externalId: "007412" }));
+    await runSyncJob(job(), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct, fieldMap: byField }));
+
+    // The admin clears the field: same match, now the copy-it-in hint.
+    const cleared = fakeCt(withCopiedId(""));
+    const again = job({ eventTimestamp: 2000 });
+    expect(await runSyncJob(again, deps({ store, eh: eh as unknown as SyncDeps["eh"], ct: cleared, fieldMap: byField }))).toMatchObject({
+      status: "held",
+    });
+    expect(cleared.channels).toHaveLength(1);
+    expect(cleared.channels[0]!.text).toContain(COPY_IT);
+  });
+
+  it("names the field from the field map, when Connecteam leaves the blank field off their profile", async () => {
+    const named = parseFieldMap({ ...fieldMap, identity: { externalIdFrom: { customFieldId: FIELD, name: "Payroll Number" } } });
+    const ct = fakeCt(cloneUser());
+
+    await runSyncJob(job(), deps({ eh: payrollEh(handEntered(40213)) as unknown as SyncDeps["eh"], ct, fieldMap: named }));
+
+    expect(ct.channels[0]!.text).toContain("Copy their EH Payroll ID into **Payroll Number** in Connecteam.");
+  });
+
+  it("names the field as their profile does now, when the client renamed it after the wizard ran", async () => {
+    const stale = parseFieldMap({ ...fieldMap, identity: { externalIdFrom: { customFieldId: FIELD, name: "Old Payroll Number" } } });
+    const ct = fakeCt(withCopiedId(""));
+
+    await runSyncJob(job(), deps({ eh: payrollEh(handEntered(40213)) as unknown as SyncDeps["eh"], ct, fieldMap: stale }));
+
+    expect(ct.channels[0]!.text).toContain(COPY_IT);
+  });
+
+  it("doesn't ask for it when the match has no Payroll ID, or the client doesn't use the setting", async () => {
+    const noId = fakeCt(withCopiedId(""));
+    await run(payrollEh(handEntered(40213, { externalId: null })), noId);
+    expect(noId.channels[0]!.text).not.toContain(COPY_IT);
+
+    const userIdKey = fakeCt(cloneUser());
+    await runSyncJob(job(), deps({ eh: payrollEh(handEntered(40213)) as unknown as SyncDeps["eh"], ct: userIdKey }));
+    expect(userIdKey.channels[0]!.text).toContain("⚠️ Held");
+    expect(userIdKey.channels[0]!.text).not.toContain("Copy their EH Payroll ID");
+  });
+
+  it("creates a copied ID that isn't in EH when the Pre-create check is clear, under that ID", async () => {
+    const eh = payrollEh();
+    expect(await run(eh, fakeCt(withCopiedId()))).toMatchObject({ status: "synced", ehEmployeeId: "555" });
+    expect(writes(eh)).toEqual([`UPSERT ${COPIED}`]);
+    // Once before the write (the copied-ID check is reused) and once to read it back.
+    expect(eh.calls.filter((c) => c === `GET externalid/${COPIED}`)).toHaveLength(2);
+  });
+
+  it("suggests no typo when the lookup used their stored key, not the copied one", async () => {
+    // Synced under their userId before the field was filled in; EH no longer has that record.
+    const store = fakeGateway({ ctUserId: ME, ehEmployeeId: "777", lastSyncedTs: 1, lastOutcome: "ok", externalId: String(ME) });
+    const ct = fakeCt(withCopiedId());
+
+    expect(await run(payrollEh(handEntered(40213, { externalId: "007412" })), ct, store)).toMatchObject({ status: "held" });
+    expect(ct.channels.some((c) => c.text.includes("⚠️ Held"))).toBe(true);
+    const said = ct.channels.map((c) => c.text).join("\n");
+    expect(said).not.toContain(TYPO);
+    // Their field isn't blank, so there's nothing to copy in either.
+    expect(said).not.toContain("Copy their EH Payroll ID");
+  });
+});
+
 describe("runSyncJob - EH identity collision (TFN match merges two people)", () => {
   it("detects a write landing on an EH employee id already linked to a different Connecteam user", async () => {
     const store = fakeGateway();

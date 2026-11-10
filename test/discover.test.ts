@@ -39,6 +39,29 @@ describe("buildFieldMapDraft", () => {
     def(43566281, "Super member number"),
   ].map(({ id, name, type }) => ({ customFieldId: id, name, type }));
 
+  describe("EH Payroll ID (#167, ADR-0011)", () => {
+    const fields = [{ customFieldId: 910034, name: "Employee ID", type: "str" }];
+
+    it("reads the Payroll ID from the picked field, and lists it as used", () => {
+      const { draft, notSynced, unmapped } = buildFieldMapDraft({ ...base, fields, picks: { "EH Payroll ID": { id: 910034 } } });
+      expect(draft.identity).toEqual({ externalIdFrom: { customFieldId: 910034, name: "Employee ID" }, emailFallbackFrom: "email" });
+      expect(notSynced).toEqual([]);
+      expect(unmapped).toEqual([]);
+      expect(draft.fields.some((r) => r.from.customFieldId === 910034)).toBe(false);
+    });
+
+    it("never takes a field named \"Payroll ID\" without a pick", () => {
+      const named = [{ customFieldId: 910034, name: "Payroll ID", type: "str" }];
+      expect(buildFieldMapDraft({ ...base, fields: named, picks: {} }).draft.identity.externalIdFrom).toBe("userId");
+    });
+
+    it("keeps the Connecteam user id when it's skipped or not picked", () => {
+      for (const picks of [{ "EH Payroll ID": { skip: true as const } }, {}]) {
+        expect(buildFieldMapDraft({ ...base, fields, picks }).draft.identity.externalIdFrom).toBe("userId");
+      }
+    });
+  });
+
   it("maps field definitions nobody has answered yet into the rules", () => {
     const { draft } = buildFieldMapDraft({ ...base, fields: rehearsalFields });
 
