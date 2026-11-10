@@ -61,6 +61,19 @@ describe("buildLinkList", () => {
     expect(rows).toEqual([expect.objectContaining({ ctUserId: 100, kind: "newHire", candidates: [] })]);
   });
 
+  it("never takes blank names as agreeing", () => {
+    const blank = { firstName: " ", lastName: "" };
+    const nameOnly = buildLinkList(
+      input({ ctUsers: [ct({ ...blank, email: null })], ehEmployees: [eh({ id: "40213", firstName: "", surname: " ", email: "x@example.com" })] }),
+    );
+    expect(nameOnly.rows).toEqual([expect.objectContaining({ kind: "newHire", candidates: [] })]);
+
+    const sameEmail = buildLinkList(input({ ctUsers: [ct(blank)], ehEmployees: [eh({ id: "40213", firstName: "", surname: "" })] }));
+    expect(sameEmail.rows).toEqual([
+      expect.objectContaining({ kind: "choice", candidates: [{ ehEmployeeId: "40213", reasons: ["nameDiffers"] }] }),
+    ]);
+  });
+
   it("counts EH employees no Connecteam user matches, without listing them", () => {
     const list = buildLinkList(
       input({

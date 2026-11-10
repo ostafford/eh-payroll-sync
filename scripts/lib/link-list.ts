@@ -104,12 +104,16 @@ function packOf(a: LinkAssignment): PackStatus {
   return a.isWaitingApproval ? "readyForReview" : "inProgress";
 }
 
-function nameKey(first: string, last: string): string {
-  return `${norm(first)}\u0000${norm(last)}`;
+/** A full name to compare on, or null when either part is blank: a blank name never agrees. */
+function nameKey(first: string, last: string): string | null {
+  const f = norm(first);
+  const l = norm(last);
+  return f && l ? `${f}\u0000${l}` : null;
 }
 
 function sameName(u: LinkCtUser, e: LinkEhEmployee): boolean {
-  return nameKey(u.firstName, u.lastName) === nameKey(e.firstName, e.surname);
+  const key = nameKey(u.firstName, u.lastName);
+  return key !== null && key === nameKey(e.firstName, e.surname);
 }
 
 function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
@@ -147,7 +151,8 @@ function indexInput(input: LinkListInput): Index {
     if (id) ehByPayrollId.set(id, e);
     const email = norm(e.email);
     if (email) push(ehByEmail, email, e);
-    push(ehByName, nameKey(e.firstName, e.surname), e);
+    const name = nameKey(e.firstName, e.surname);
+    if (name) push(ehByName, name, e);
   }
   return {
     input,
@@ -191,7 +196,8 @@ function matchCandidates(ix: Index, u: LinkCtUser, sharedIdRecord: LinkEhEmploye
   const byEmail = sameEmail.map((e) =>
     candidateFor(ix, e, [...(sameName(u, e) ? [] : ["nameDiffers" as const]), ...(several ? ["sameEmailSeveral" as const] : [])]),
   );
-  const byNameOnly = (ix.ehByName.get(nameKey(u.firstName, u.lastName)) ?? [])
+  const name = nameKey(u.firstName, u.lastName);
+  const byNameOnly = (name ? (ix.ehByName.get(name) ?? []) : [])
     .filter((e) => !sameEmail.includes(e))
     .map((e) => candidateFor(ix, e, ["nameOnly"]))
     // A name alone isn't a hit (#134): someone else's record is no reason to stop a new hire.
