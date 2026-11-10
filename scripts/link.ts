@@ -177,12 +177,10 @@ async function main(): Promise<void> {
   await runLinkStage({
     load,
     drive,
-    execute: async (sql) => {
-      if (file) console.log(`Rehearsal: nothing written. The stage would run:\n${sql}`);
-      else d1(sql);
-    },
+    execute: async (sql) => void d1(sql),
     print: (line) => console.log(line),
     now: () => Date.now(),
+    rehearsal: file !== undefined,
   });
 }
 

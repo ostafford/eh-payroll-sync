@@ -18,6 +18,8 @@ export interface LinkStageDeps {
   execute(sql: string): Promise<void>;
   print(line: string): void;
   now(): number;
+  /** Rehearsing against saved data: show the SQL, run nothing. */
+  rehearsal?: boolean;
 }
 
 export type LinkStageOutcome = "saved" | "unchanged" | "cancelled";
@@ -40,9 +42,15 @@ export async function runLinkStage(deps: LinkStageDeps): Promise<LinkStageOutcom
     deps.print("No changes to the Link list.");
     return "unchanged";
   }
-  await deps.execute(sql);
   const removed = changes.remove.length ? `, ${changes.remove.length} taken off the Link list` : "";
-  deps.print(`Saved: ${changes.upsert.length} link${changes.upsert.length === 1 ? "" : "s"} added or changed${removed}.`);
+  const what = `${changes.upsert.length} link${changes.upsert.length === 1 ? "" : "s"} added or changed${removed}`;
+  if (deps.rehearsal) {
+    deps.print(`Rehearsal: nothing written. It would save ${what}.`);
+    deps.print(sql);
+    return "saved";
+  }
+  await deps.execute(sql);
+  deps.print(`Saved: ${what}.`);
   deps.print("");
   deps.print("Held people sync at the next daily recheck, or straight away if their Connecteam profile is edited.");
   deps.print("Everyone else on the Link list is linked when their onboarding pack is approved.");

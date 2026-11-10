@@ -107,4 +107,14 @@ describe("runLinkStage", () => {
     expect(out).toContain("Everyone else on the Link list is linked when their onboarding pack is approved.");
     expect(out).toContain("Held people sync at the next daily recheck, or straight away if their Connecteam profile is edited.");
   });
+
+  it("in a rehearsal, shows what it would save and runs nothing", async () => {
+    const s = stage(["<return>"], { rehearsal: true });
+    await expect(s.run()).resolves.toBe("saved");
+    expect(s.execute).not.toHaveBeenCalled();
+    const out = s.out.join("\n");
+    expect(out).toContain("Rehearsal: nothing written. It would save 2 links added or changed.");
+    expect(out).toContain("INSERT INTO pending_link");
+    expect(out).not.toContain("Saved");
+  });
 });
