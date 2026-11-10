@@ -80,6 +80,31 @@ describe("ConnecteamClient.getUser", () => {
   });
 });
 
+describe("ConnecteamClient.listUsers", () => {
+  it("pages through every active user, up to 500 at a time, until it has the total", async () => {
+    const user = (userId: number) => ({ userId, firstName: "A", lastName: "B", customFields: [] });
+    const f = fakeFetch({
+      "GET /users/v1/users?limit=500&offset=0": {
+        status: 200,
+        // As the live API pages (demo account, 2026-11-10): `offset` is the next one to ask for.
+        body: { ...wrap({ users: [user(1), user(2)] }), paging: { offset: 2, total: 3 } },
+      },
+      "GET /users/v1/users?limit=500&offset=2": {
+        status: 200,
+        body: { ...wrap({ users: [user(3)] }), paging: { offset: 3, total: 3 } },
+      },
+    });
+    const r = await new ConnecteamClient(cfg(f)).listUsers();
+    expect(r).toEqual({ outcome: "ok", data: [user(1), user(2), user(3)] });
+  });
+
+  it("stops at the first page that fails", async () => {
+    const f = fakeFetch({ "GET /users/v1/users?limit=500&offset=0": { status: 503, body: "down" } });
+    const r = await new ConnecteamClient(cfg(f)).listUsers();
+    expect(r.outcome).toBe("retryable");
+  });
+});
+
 describe("ConnecteamClient.getPayRate", () => {
   it("sends the required date window and returns the user's payRate", async () => {
     const f = fakeFetch({

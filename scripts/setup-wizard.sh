@@ -186,7 +186,24 @@ finish() {
 
 
 ENV_FILE=".dev.vars"
-TOTAL_STAGES=13
+TOTAL_STAGES=14
+
+# --stage NAME runs one stage on its own, on a live deployment. Only "link" so far.
+# Read without shifting: the session log below re-runs this script with "$@".
+STAGE_ONLY=""
+_want_stage=""
+for _arg in "$@"; do
+  if [[ -n "$_want_stage" ]]; then STAGE_ONLY="$_arg"; _want_stage=""; continue; fi
+  case "$_arg" in
+    --stage) _want_stage=1 ;;
+    *) printf 'unknown option: %s\n' "$_arg" >&2; exit 2 ;;
+  esac
+done
+[[ -z "$_want_stage" ]] || { printf -- '--stage needs a name (the one stage that runs alone is: link)\n' >&2; exit 2; }
+case "$STAGE_ONLY" in
+  ""|link) ;;
+  *) printf 'unknown stage: %s (the one stage that runs alone is: link)\n' "$STAGE_ONLY" >&2; exit 2 ;;
+esac
 
 # ── extra helpers (below the marker, wizard-specific) ─────────────────────
 
@@ -351,6 +368,10 @@ health_str() {
 clean_log() {
   local f="$1"
   [[ -f "$f" ]] || return 0
+  # First, whole: anything drawn on the alternate screen (the link stage's list,
+  # #154), so names and emails stay on screen and out of the log. A screen
+  # left open by a crash is cut to the end.
+  perl -0777 -i -pe 's/\e\[\?1049h.*?(?:\e\[\?1049l|\z)//gs' "$f"
   perl -i -pe 's/\e\[[0-9;?]*[A-Za-z]//g; s/\e\][^\a]*\a//g; s/\e[()][A-Z0-9]//g; s/\r//g; s/[\x04\x08]//g' "$f"
   if [[ -f "$ENV_FILE" ]]; then
     local line val
@@ -391,6 +412,25 @@ done
 grep -q '"name": "eh-payroll-sync"' package.json 2>/dev/null \
   || { printf 'run this from the eh-payroll-sync repo root\n' >&2; exit 1; }
 [[ -d node_modules ]] || { printf 'installing dependencies...\n'; npm install; }
+
+# The link stage (#154): after the deploy, since it needs D1 and the field map.
+# `--stage link` runs it alone, e.g. for a client that's already live.
+link_stage() {
+  stage "Link Pre-existing employees"
+  why "Some of the client's people may already be in Employment Hero (entered by hand," \
+      "already paid). They should be linked to that record, not created a second time." \
+      "This lists every Connecteam user not yet synced beside their likely EH match."
+  todo "With the client's admin (a screen-share is fine), go down the list. Enter links a suggestion, / searches all of EH, x means don't link." \
+       "Press c, then y, to save. Nothing reaches Employment Hero yet: each link is made when that person's onboarding pack is approved."
+  # It checks the built config against the live Worker itself, before reading anything.
+  npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }
+}
+
+if [[ "$STAGE_ONLY" == "link" ]]; then
+  TOTAL_STAGES=1
+  link_stage
+  exit 0
+fi
 
 banner "eh-payroll-sync - client deployment"
 
@@ -713,6 +753,9 @@ else
   warn "Couldn't read the sync's address from the deploy - find it in the Cloudflare dashboard (Workers)."
   note "Full output: ${WIZARD_DETAILS#"$PWD"/}"
 fi
+next_up "link anyone already in Employment Hero."
+
+link_stage
 next_up "connect Connecteam's profile updates to the sync."
 
 # ─────────────────────────────────────────────────────────────────────────
