@@ -186,7 +186,20 @@ finish() {
 
 
 ENV_FILE=".dev.vars"
-TOTAL_STAGES=13
+TOTAL_STAGES=14
+
+# --stage NAME runs one stage on its own, on a live deployment. Only "link" so far.
+STAGE_ONLY=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --stage) STAGE_ONLY="${2:-}"; shift 2 || shift ;;
+    *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+case "$STAGE_ONLY" in
+  ""|link) ;;
+  *) printf 'unknown stage: %s (the one stage that runs alone is: link)\n' "$STAGE_ONLY" >&2; exit 2 ;;
+esac
 
 # ── extra helpers (below the marker, wizard-specific) ─────────────────────
 
@@ -391,6 +404,28 @@ done
 grep -q '"name": "eh-payroll-sync"' package.json 2>/dev/null \
   || { printf 'run this from the eh-payroll-sync repo root\n' >&2; exit 1; }
 [[ -d node_modules ]] || { printf 'installing dependencies...\n'; npm install; }
+
+# The link stage (#154): after the deploy, since it needs D1 and the field map.
+# `--stage link` runs it alone, e.g. for a client that's already live.
+link_stage() {
+  stage "Link Pre-existing employees"
+  why "Some of the client's people may already be in Employment Hero (entered by hand," \
+      "already paid). They should be linked to that record, not created a second time." \
+      "This lists every Connecteam user not yet synced beside their likely EH match."
+  todo "With the client's admin (a screen-share is fine), go down the list. Enter links a suggestion, / searches all of EH, x means don't link." \
+       "Press c, then y, to save. Nothing reaches Employment Hero yet: each link is made when that person's onboarding pack is approved."
+  # Every remote command uses wrangler.deploy.json, checked against this account.
+  if ! out=$(npm run --silent deploy:config -- --check-live 2>&1); then
+    fail "The deploy settings aren't ready:"; printf '%s\n' "$out" | sed 's/^/    /'; exit 1
+  fi
+  npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }
+}
+
+if [[ "$STAGE_ONLY" == "link" ]]; then
+  TOTAL_STAGES=1
+  link_stage
+  exit 0
+fi
 
 banner "eh-payroll-sync - client deployment"
 
@@ -713,6 +748,9 @@ else
   warn "Couldn't read the sync's address from the deploy - find it in the Cloudflare dashboard (Workers)."
   note "Full output: ${WIZARD_DETAILS#"$PWD"/}"
 fi
+next_up "link anyone already in Employment Hero."
+
+link_stage
 next_up "connect Connecteam's profile updates to the sync."
 
 # ─────────────────────────────────────────────────────────────────────────

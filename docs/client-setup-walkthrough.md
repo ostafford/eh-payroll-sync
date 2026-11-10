@@ -39,7 +39,7 @@ already share a TFN or an email. Fix everything it flags, re-run until it says
 "Safe to deploy", then deploy.
 
 **Allow about 30 minutes:** ~10 for stages 1–10, a few for deploy and
-webhook, and up to 15 for Cloudflare to start the first approval check
+webhook, longer for linking a large headcount, and up to 15 for Cloudflare to start the first approval check
 (the wizard can wait for it).
 
 ## Stage by stage
@@ -58,7 +58,8 @@ webhook, and up to 15 for Cloudflare to start the first approval check
 | 10 | Pay-run settings | Picks pay schedule, location and primary pay category from their EH lists, then the pay rate source | "Saved to …", then the tests pass | 1–2 min |
 | 11 | Provision Cloudflare resources | Confirms (the only question in this stage) | ✓ Database created · ✓ Database set up (4 steps) · ✓ Queues ready | 1 min |
 | 12 | Push secrets + deploy | Waits | ✓ Stored … (×3) · ✓ Deployed: the Worker's address · ✓ Health check passed | 1–2 min |
-| 13 | Register the webhook | Edits a test profile when asked | The webhook listed as `enabled`, then "the Worker accepted a profile update" | 2 min |
+| 13 | Link Pre-existing employees | Works down the list with you (Enter links, `/` searches EH, `x` don't link), then `c`, `y` to save. Re-run it alone later with `./scripts/setup-wizard.sh --stage link` | "Saved: N links added or changed", then when held people sync | 2–15 min, by headcount |
+| 14 | Register the webhook | Edits a test profile when asked | The webhook listed as `enabled`, then "the Worker accepted a profile update" | 2 min |
 | — | First approval check | Optionally waits | "✓ the first approval check ran" (up to 15 min on a first deploy) | 0–15 min |
 
 **A copy of the run** is saved as `setup-wizard-<date>-<time>.log` in the repo

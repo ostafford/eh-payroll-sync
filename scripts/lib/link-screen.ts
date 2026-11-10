@@ -219,6 +219,65 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
     }
   };
 
+  /** The list's columns, sized for the terminal and the rows shown: its headings and one line per row. */
+  const columns = (size: LinkScreenSize, shown: readonly number[]) => {
+    const p = palette(size.color);
+    const numW = String(rows.length).length;
+    const nameW = Math.max(10, Math.min(22, Math.floor((size.columns - 90) / 2)));
+    const ehName = (id: string) => {
+      const e = people.eh.get(id);
+      return e ? fullName(e.firstName, e.surname) : `EH ${id}`;
+    };
+
+    /** The mark, Employment Hero column and status for one row. */
+    const cells = (i: number): [string, string, string] => {
+      const r = rows[i]!;
+      const d = decision(i);
+      const mine = chosen.get(i);
+      const linked = (id: string, status: string): [string, string, string] => [
+        p.mark.ok,
+        `${p.eh(cut(ehName(id), nameW))} ${p.dim(id)}`,
+        status,
+      ];
+      if (mine && !mine.onList) return [p.mark.none, p.dim("(won't link)"), p.change("won't link")];
+      if (mine?.onList) return mine.ehEmployeeId === null ? [p.mark.none, p.dim("(none)"), p.change("new hire, not this person")] : linked(mine.ehEmployeeId, p.change("linked"));
+      const moved = movedTo.get(i);
+      if (moved !== undefined) return [p.mark.warn, p.dim("(none)"), p.change(`match moved to row ${moved + 1}`)];
+      if (r.kind === "taken") return [p.mark.bad, p.dim("(none)"), p.bad("Can't link: already linked to someone else")];
+      if (r.kind === "alreadySynced") return linked(r.suggestion!, p.dim("already matched by Payroll ID"));
+      if (r.kind === "newHire") return [p.mark.none, p.dim("(no match)"), p.dim("new hire")];
+      const problem = r.candidates.flatMap((c) => c.reasons);
+      if (d.onList && !problem.length) {
+        if (d.ehEmployeeId === null) return [p.mark.none, p.dim("(none)"), p.dim("new hire, not this person")];
+        return linked(d.ehEmployeeId, p.dim(r.kind === "matched" ? "matched by email" : "on the Link list"));
+      }
+      const several = r.candidates.length > 1;
+      const ehCol = several ? p.dim(`(${r.candidates.length} EH employees)`) : r.candidates[0] ? p.change(`${cut(ehName(r.candidates[0].ehEmployeeId), nameW)} ?`) : p.dim("(none)");
+      if (r.kind === "held") {
+        const what = several ? `${r.candidates.length} EH employees` : r.candidates[0] ? `EH ${r.candidates[0].ehEmployeeId}` : "EH";
+        return [p.mark.warn, ehCol, p.change(`held on approval: matches ${what}`)];
+      }
+      return [p.mark.warn, ehCol, p.change(several ? "pick one" : [...new Set(problem)].map((x) => REASON[x]).join(", "))];
+    };
+    const packCell = (pk: PackStatus) =>
+      pad(pk === "readyForReview" ? p.change(PACK_LABEL[pk]) : pk === "approvedNotSynced" ? p.bad(PACK_LABEL[pk]) : p.dim(PACK_LABEL[pk]), PACK_W);
+    const statusW = Math.max(6, ...shown.map((i) => visibleWidth(cells(i)[2])));
+    const fixedW = 2 + numW + 1 + p.markWidth + 1 + nameW + 1 + 3 + nameW + 7 + 1 + PACK_W + 1;
+    const emailW = Math.max(EMAIL_W.min, Math.min(EMAIL_W.max, size.columns - fixedW - statusW));
+    const heading = (label: string, w: number, colour: (s: string) => string = (x) => x) => p.bold(colour(pad(cut(label, w), w)));
+    const headings = [
+      `  ${"#".padStart(numW)} ${" ".repeat(p.markWidth)} ${heading("Connecteam user", nameW, p.ct)} ${heading("Connecteam email", emailW, p.ct)}   ${heading("Employment Hero match", nameW + 7, p.eh)} ${heading("Pack", PACK_W)} ${p.bold("Status")}`,
+    ];
+    const line = (i: number, selected: boolean) => {
+      const u = people.ct.get(rows[i]!.ctUserId);
+      const [m, ehCol, status] = cells(i);
+      const name = p.ct(pad(cut(u ? fullName(u.firstName, u.lastName) : `Connecteam ${rows[i]!.ctUserId}`, nameW), nameW));
+      const ptr = selected ? (size.color ? p.ct("▶") : ">") : " ";
+      return `${ptr} ${String(i + 1).padStart(numW)} ${pad(m, p.markWidth)} ${selected ? p.bold(name) : name} ${pad(cut(u?.email ?? "", emailW), emailW)} → ${pad(ehCol, nameW + 7)} ${packCell(rows[i]!.pack)} ${status}`;
+    };
+    return { p, headings, line };
+  };
+
   return {
     /** One keypress, as readline gives it: "save" or "cancel" ends the screen. */
     press(str: string | undefined, key: LinkKey): "save" | "cancel" | null {
@@ -251,62 +310,15 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       else choose(i, str, key);
       return null;
     },
+    /** Everyone, as a plain table: for printing off a terminal. */
+    table(size: Omit<LinkScreenSize, "rows">): string[] {
+      const all = rows.map((_, i) => i);
+      const { headings, line } = columns({ ...size, rows: 0 }, all);
+      return [...headings, ...all.map((i) => line(i, false))];
+    },
     /** The whole frame, one string per terminal line. */
     render(size: LinkScreenSize): string[] {
-      const p = palette(size.color);
-      const numW = String(rows.length).length;
-      const nameW = Math.max(10, Math.min(22, Math.floor((size.columns - 90) / 2)));
-      const ehName = (id: string) => {
-        const e = people.eh.get(id);
-        return e ? fullName(e.firstName, e.surname) : `EH ${id}`;
-      };
-
-      /** The mark, Employment Hero column and status for one row. */
-      const cells = (i: number): [string, string, string] => {
-        const r = rows[i]!;
-        const d = decision(i);
-        const mine = chosen.get(i);
-        const linked = (id: string, status: string): [string, string, string] => [
-          p.mark.ok,
-          `${p.eh(cut(ehName(id), nameW))} ${p.dim(id)}`,
-          status,
-        ];
-        if (mine && !mine.onList) return [p.mark.none, p.dim("(won't link)"), p.change("won't link")];
-        if (mine?.onList) return mine.ehEmployeeId === null ? [p.mark.none, p.dim("(none)"), p.change("new hire, not this person")] : linked(mine.ehEmployeeId, p.change("linked"));
-        const moved = movedTo.get(i);
-        if (moved !== undefined) return [p.mark.warn, p.dim("(none)"), p.change(`match moved to row ${moved + 1}`)];
-        if (r.kind === "taken") return [p.mark.bad, p.dim("(none)"), p.bad("Can't link: already linked to someone else")];
-        if (r.kind === "alreadySynced") return linked(r.suggestion!, p.dim("already matched by Payroll ID"));
-        if (r.kind === "newHire") return [p.mark.none, p.dim("(no match)"), p.dim("new hire")];
-        const problem = r.candidates.flatMap((c) => c.reasons);
-        if (d.onList && !problem.length) {
-          if (d.ehEmployeeId === null) return [p.mark.none, p.dim("(none)"), p.dim("new hire, not this person")];
-          return linked(d.ehEmployeeId, p.dim(r.kind === "matched" ? "matched by email" : "on the Link list"));
-        }
-        const several = r.candidates.length > 1;
-        const ehCol = several ? p.dim(`(${r.candidates.length} EH employees)`) : r.candidates[0] ? p.change(`${cut(ehName(r.candidates[0].ehEmployeeId), nameW)} ?`) : p.dim("(none)");
-        if (r.kind === "held") {
-          const what = several ? `${r.candidates.length} EH employees` : r.candidates[0] ? `EH ${r.candidates[0].ehEmployeeId}` : "EH";
-          return [p.mark.warn, ehCol, p.change(`held on approval: matches ${what}`)];
-        }
-        return [p.mark.warn, ehCol, p.change(several ? "pick one" : [...new Set(problem)].map((x) => REASON[x]).join(", "))];
-      };
-      const packCell = (pk: PackStatus) =>
-        pad(pk === "readyForReview" ? p.change(PACK_LABEL[pk]) : pk === "approvedNotSynced" ? p.bad(PACK_LABEL[pk]) : p.dim(PACK_LABEL[pk]), PACK_W);
-      const statusW = Math.max(6, ...visible().map((i) => visibleWidth(cells(i)[2])));
-      const fixedW = 2 + numW + 1 + p.markWidth + 1 + nameW + 1 + 3 + nameW + 7 + 1 + PACK_W + 1;
-      const emailW = Math.max(EMAIL_W.min, Math.min(EMAIL_W.max, size.columns - fixedW - statusW));
-      const heading = (label: string, w: number, colour: (s: string) => string = (x) => x) => p.bold(colour(pad(cut(label, w), w)));
-      const headings = [
-        `  ${"#".padStart(numW)} ${" ".repeat(p.markWidth)} ${heading("Connecteam user", nameW, p.ct)} ${heading("Connecteam email", emailW, p.ct)}   ${heading("Employment Hero match", nameW + 7, p.eh)} ${heading("Pack", PACK_W)} ${p.bold("Status")}`,
-      ];
-      const line = (i: number, selected: boolean) => {
-        const u = people.ct.get(rows[i]!.ctUserId);
-        const [m, ehCol, status] = cells(i);
-        const name = p.ct(pad(cut(u ? fullName(u.firstName, u.lastName) : `Connecteam ${rows[i]!.ctUserId}`, nameW), nameW));
-        const ptr = selected ? (size.color ? p.ct("▶") : ">") : " ";
-        return `${ptr} ${String(i + 1).padStart(numW)} ${pad(m, p.markWidth)} ${selected ? p.bold(name) : name} ${pad(cut(u?.email ?? "", emailW), emailW)} → ${pad(ehCol, nameW + 7)} ${packCell(rows[i]!.pack)} ${status}`;
-      };
+      const { p, headings, line } = columns(size, visible());
       const v = visible();
 
       /** The selected person and what they can be linked to. */
@@ -411,7 +423,7 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
         : `${p.bold(p.ct(`[To review (${review.size})]`))}  ${p.dim(`Everyone (${rows.length})`)}`;
       const head = [
         `${p.bold("Link Pre-existing employees")}   ${tabs}`,
-        `${p.bold(`Reviewed ${done} of ${review.size}`)} ${bar}   ${p.ok(`${toLink} to link`)} · ${p.change(`${wont} won't link`)} · ${newHires} new hires`,
+        `${p.bold(`Reviewed ${done} of ${review.size}`)} ${bar}   ${p.ok(`${toLink} to link`)} · ${p.change(`${wont} won't link`)} · ${newHires} new hire${newHires === 1 ? "" : "s"}`,
         p.dim("─".repeat(Math.max(1, W - 1))),
         ...headings,
       ].map((l) => fit(l, W));
@@ -438,3 +450,5 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
     decisions: (): LinkDecision[] => rows.map((_, i) => decision(i)),
   };
 }
+
+export type LinkScreen = ReturnType<typeof createLinkScreen>;

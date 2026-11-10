@@ -1,0 +1,16 @@
+{
+  "ctUsers": [
+    { "userId": 100, "firstName": "Jack", "lastName": "Mitchell", "email": "jack@example.com", "customFields": [] },
+    { "userId": 101, "firstName": "Mia", "lastName": "Chen", "email": "mia@example.com", "customFields": [] },
+    { "userId": 102, "firstName": "Omar", "lastName": "Haddad", "email": "omar@example.com", "customFields": [] }
+  ],
+  "ehEmployees": [
+    { "id": 40213, "firstName": "Jack", "surname": "Mitchell", "emailAddress": "jack@example.com", "externalId": null, "status": "Active" },
+    { "id": 40377, "firstName": "Mia", "surname": "Chen-Wong", "emailAddress": "mia@example.com", "externalId": null, "status": "Active" }
+  ],
+  "assignments": [],
+  "employeeMap": [],
+  "pendingLinks": [],
+  "heldDetails": [],
+  "payrollIdFrom": "userId"
+}
