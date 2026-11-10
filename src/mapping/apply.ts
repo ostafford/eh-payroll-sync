@@ -4,7 +4,7 @@
  * a list of per-field issues, and the plain-language follow-ups a payroll admin
  * still has to action by hand. Pure - no network, no logging.
  */
-import type { FieldMap, FieldRule, TransformName } from "./schema.js";
+import type { FieldMap, FieldRule, PayrollIdSource, TransformName } from "./schema.js";
 import * as t from "./transforms.js";
 import type { UnusableAnswer } from "../eh/errors.js";
 import { TransformError } from "./transforms.js";
@@ -416,8 +416,7 @@ export function leftOutBy(user: ConnecteamUser, map: FieldMap): string | undefin
 }
 
 /** The trimmed value of the field `identity.externalIdFrom` names, or undefined when it's `userId` or blank. */
-function payrollIdOf(user: ConnecteamUser, map: FieldMap): string | undefined {
-  const from = map.identity.externalIdFrom;
+export function payrollIdOf(user: ConnecteamUser, from: PayrollIdSource): string | undefined {
   if (from === "userId") return undefined;
   const value = user.customFields.find((f) => f.customFieldId === from.customFieldId)?.value;
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
@@ -451,7 +450,7 @@ export function applyFieldMap(
     blocking: payRunBlocking,
   } = applyPayRun(acc.payload, map.employmentHero, opts.payRate, opts.ehRecord);
 
-  const copied = payrollIdOf(user, map);
+  const copied = payrollIdOf(user, map.identity.externalIdFrom);
   const externalId = copied ?? String(user.userId);
   acc.payload.externalId = externalId;
 
