@@ -170,6 +170,36 @@ describe("link screen", () => {
     expect((press(s, "<pagedown>", "<pagedown>", "<pagedown>", "<pagedown>"), selected())).toBe("30");
   });
 
+  describe("a link saved on an earlier run that no longer checks out", () => {
+    const stale = () =>
+      createLinkScreen(
+        {
+          rows: [
+            // Saved to EH 40600, which now belongs to Connecteam user 999.
+            row({ ctUserId: 106, kind: "onLinkList", suggestion: "40600", candidates: [{ ehEmployeeId: "40600", reasons: ["linkedElsewhere"], linkedTo: 999 }] }),
+            // Saved to EH 40401, since terminated in EH: still possible.
+            row({ ctUserId: 102, kind: "onLinkList", suggestion: "40401", candidates: [{ ehEmployeeId: "40401", reasons: ["terminated", "hasPayrollId"], payrollId: "E-77" }] }),
+            row({ ctUserId: 101, kind: "choice", candidates: [{ ehEmployeeId: "40377", reasons: ["nameDiffers"] }] }),
+          ],
+          ignoredEhCount: 0,
+          ehOwners: new Map([["40600", 999]]),
+        },
+        people,
+      );
+
+    it("comes off the Link list when it can no longer be made, and says so", () => {
+      const s = stale();
+      expect(decisionFor(s, 106)).toEqual({ ctUserId: 106, onList: false });
+      expect(frame(s)).toMatch(/1 \[!\]\s+Ivy Reid .*saved link will be removed: linked to someone else/);
+    });
+
+    it("stays when it's still possible, and the save check counts it as kept, not left unlinked", () => {
+      const s = stale();
+      expect(decisionFor(s, 102)).toEqual({ ctUserId: 102, onList: true, ehEmployeeId: "40401" });
+      expect(frame(press(s, "c"))).toContain("1 to link · 1 kept as saved, not reviewed · 2 not reviewed - left unlinked, checked again on approval");
+    });
+  });
+
   describe("the frame", () => {
     it("tops the list with how many of the rows to review are done, and what the Link list will hold", () => {
       const s = screen();

@@ -24,9 +24,20 @@ export interface LinkKey {
   ctrl?: boolean;
 }
 
-/** The link a row has before the admin touches it: its match, or what an earlier run saved. */
+/** A candidate the admin can link: not someone else's, and still in EH. */
+const linkable = (c: LinkCandidate) => !c.reasons.includes("linkedElsewhere") && !c.reasons.includes("goneFromEh");
+
+/** A link saved on an earlier run that can no longer be made: its EH employee is someone else's, or gone. */
+const savedButUnlinkable = (r: LinkRow) => r.kind === "onLinkList" && r.candidates.some((c) => !linkable(c));
+
+/**
+ * The link a row has before the admin touches it: its match, or what an
+ * earlier run saved - unless that can no longer be made, when it comes off.
+ */
 function proposed(r: LinkRow): LinkDecision {
-  if (r.kind === "matched" || r.kind === "onLinkList") return { ctUserId: r.ctUserId, onList: true, ehEmployeeId: r.suggestion };
+  if (r.kind === "matched" || (r.kind === "onLinkList" && !savedButUnlinkable(r))) {
+    return { ctUserId: r.ctUserId, onList: true, ehEmployeeId: r.suggestion };
+  }
   return { ctUserId: r.ctUserId, onList: false };
 }
 
@@ -35,9 +46,6 @@ function toReview(r: LinkRow): boolean {
   if (r.kind === "choice" || r.kind === "held" || r.kind === "taken") return true;
   return r.kind === "onLinkList" && r.candidates.some((c) => c.reasons.length > 0);
 }
-
-/** A candidate the admin can link: not someone else's, and still in EH. */
-const linkable = (c: LinkCandidate) => !c.reasons.includes("linkedElsewhere") && !c.reasons.includes("goneFromEh");
 
 /** What a row's number keys pick, in order: null is "New hire, not this person". */
 function choicesOf(r: LinkRow): (LinkCandidate | null)[] {
@@ -260,6 +268,9 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       }
       const several = r.candidates.length > 1;
       const ehCol = several ? p.dim(`(${r.candidates.length} EH employees)`) : r.candidates[0] ? p.change(`${cut(ehName(r.candidates[0].ehEmployeeId), nameW)} ?`) : p.dim("(none)");
+      if (savedButUnlinkable(r)) {
+        return [p.mark.warn, ehCol, p.change(`saved link will be removed: ${[...new Set(problem)].map((x) => REASON[x]).join(", ")}`)];
+      }
       if (r.kind === "held") {
         const what = several ? `${r.candidates.length} EH employees` : r.candidates[0] ? `EH ${r.candidates[0].ehEmployeeId}` : "EH";
         return [p.mark.warn, ehCol, p.change(`held on approval: matches ${what}`)];
@@ -436,10 +447,18 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
         ...headings,
       ].map((l) => fit(l, W));
       const legendLines = wrap(legend(), W, "   ", "  ");
-      const left = review.size - done;
+      // Not reviewed: a saved link that's still possible stays as it was; anyone else is left unlinked.
+      const unreviewed = [...review].filter((i) => !chosen.has(i));
+      const kept = unreviewed.filter((i) => ds[i]!.onList).length;
+      const left = unreviewed.length - kept;
       const confirmText = [
         p.bold("  Save these links?"),
-        `  ${p.ok(`${toLink} to link`)} · ${left ? p.change(`${left} not reviewed - left unlinked, checked again on approval`) : p.ok("everything reviewed")}`,
+        `  ${[
+          p.ok(`${toLink} to link`),
+          ...(kept ? [p.change(`${kept} kept as saved, not reviewed`)] : []),
+          ...(left ? [p.change(`${left} not reviewed - left unlinked, checked again on approval`)] : []),
+          ...(unreviewed.length ? [] : [p.ok("everything reviewed")]),
+        ].join(" · ")}`,
       ];
       const panelLines = (confirming ? confirmText : panel()).flatMap((l) => wrap(l, W, "  "));
       // The panel gets up to 9 lines; the list keeps at least 1, and 3 when there's room.
