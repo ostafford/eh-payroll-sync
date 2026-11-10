@@ -18,7 +18,7 @@ function wizard(args: string[], env: Record<string, string> = {}) {
   const log = join(bin, "npm.log");
   writeFileSync(
     join(bin, "npm"),
-    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\nif [[ "$*" == *deploy:config* && -n "\${FAIL_CONFIG:-}" ]]; then echo "D1 database not found"; exit 1; fi\nexit 0\n`,
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\nif [[ "$*" == *link* && -n "\${FAIL_LINK:-}" ]]; then exit 1; fi\nexit 0\n`,
   );
   chmodSync(join(bin, "npm"), 0o755);
   const r = spawnSync("bash", [WIZARD, ...args], {
@@ -42,19 +42,18 @@ describe("setup wizard, link stage", () => {
     expect(spawnSync("bash", ["-n", WIZARD], { cwd: root, encoding: "utf8" }).status).toBe(0);
   });
 
-  it("--stage link runs only the link stage: checks the built config against the live Worker, then the screen", () => {
+  it("--stage link runs only the link stage", () => {
     const r = wizard(["--stage", "link"]);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("Stage 1/1 · Link Pre-existing employees");
     expect(r.stdout).not.toContain("Cloudflare account");
-    expect(r.calls).toEqual(["run --silent deploy:config -- --check-live", "run --silent link"]);
+    expect(r.calls).toEqual(["run --silent link"]);
   });
 
-  it("stops before the screen when the deploy settings don't check out", () => {
-    const r = wizard(["--stage", "link"], { FAIL_CONFIG: "1" });
+  it("stops, saying nothing changed, when the stage fails (e.g. the deploy settings don't check out)", () => {
+    const r = wizard(["--stage", "link"], { FAIL_LINK: "1" });
     expect(r.status).not.toBe(0);
-    expect(r.stdout).toContain("D1 database not found");
-    expect(r.calls).toEqual(["run --silent deploy:config -- --check-live"]);
+    expect(r.stdout).toContain("The link stage stopped: the Link list was not changed.");
   });
 
   it("refuses a stage it doesn't know", () => {

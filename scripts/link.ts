@@ -15,8 +15,9 @@
  * nothing written.
  *
  * Reads names, emails, Payroll IDs and status only: never a TFN or date of
- * birth. Run it after the deploy, with wrangler.deploy.json built
- * (`npm run deploy:config`).
+ * birth. Run it after the deploy: it first rebuilds wrangler.deploy.json and
+ * checks it against the live Worker (`npm run deploy:config -- --check-live`),
+ * so it never reads or writes a database other than the live one.
  *
  * Env (from .dev.vars or the shell): CT_API_KEY, EH_API_KEY, EH_BUSINESS_ID,
  * CT_ONBOARDING_PACK_ID, FIELD_MAP_CLIENT (optional).
@@ -61,6 +62,16 @@ function need(name: string): string {
 }
 
 // --- D1, through the built config ------------------------------------------
+
+/** Builds wrangler.deploy.json and checks it against the live Worker; throws if it doesn't check out. */
+function checkDeployConfig(): void {
+  try {
+    execFileSync("npm", ["run", "--silent", "deploy:config", "--", "--check-live"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string };
+    throw new Error(`The deploy settings aren't ready:\n${err.stdout ?? ""}${err.stderr ?? ""}`.trimEnd());
+  }
+}
 
 function d1(sql: string): unknown[] {
   let out: string;
@@ -161,6 +172,7 @@ function dataFile(argv: string[]): string | undefined {
 async function main(): Promise<void> {
   loadDevVars();
   const file = dataFile(process.argv);
+  if (!file) checkDeployConfig();
   const load = async (): Promise<LinkStageData> => (file ? (JSON.parse(readFileSync(file, "utf8")) as LinkStageData) : loadLive());
 
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {

@@ -418,10 +418,7 @@ link_stage() {
       "This lists every Connecteam user not yet synced beside their likely EH match."
   todo "With the client's admin (a screen-share is fine), go down the list. Enter links a suggestion, / searches all of EH, x means don't link." \
        "Press c, then y, to save. Nothing reaches Employment Hero yet: each link is made when that person's onboarding pack is approved."
-  # Every remote command uses wrangler.deploy.json, checked against this account.
-  if ! out=$(npm run --silent deploy:config -- --check-live 2>&1); then
-    fail "The deploy settings aren't ready:"; printf '%s\n' "$out" | sed 's/^/    /'; exit 1
-  fi
+  # It checks the built config against the live Worker itself, before reading anything.
   npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }
 }
 

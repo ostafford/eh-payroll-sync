@@ -135,12 +135,12 @@ describe("the secrets check is wired into every deploy path", () => {
   });
 
   it("the wizard skips the check only because it puts every required secret before deploying", () => {
-    // The link stage (#154) keeps the check: it runs after the deploy, or alone on a live Worker.
-    const linkStage = wizard.slice(wizard.indexOf("link_stage() {"), wizard.indexOf("\n}\n", wizard.indexOf("link_stage() {")));
     for (const line of wizard.split("\n").filter((l) => l.includes("deploy:config -- --check-live"))) {
-      if (linkStage.includes(line)) expect(line).not.toContain("--allow-missing-secrets");
-      else expect(line).toContain("--allow-missing-secrets");
+      expect(line).toContain("--allow-missing-secrets");
     }
+    // The link stage (#154) keeps the check: it runs after the deploy, or alone on a live Worker.
+    expect(read("scripts/link.ts")).toContain('"deploy:config", "--", "--check-live"]');
+    expect(read("scripts/link.ts")).not.toContain("--allow-missing-secrets");
     const deployAt = wizard.indexOf("wr_quiet deploy --config");
     expect(wizard.indexOf("\nlink_stage\n"), "the full run reaches the link stage after the deploy").toBeGreaterThan(deployAt);
     for (const name of REQUIRED_SECRETS) {
