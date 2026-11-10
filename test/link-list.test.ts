@@ -50,6 +50,17 @@ describe("buildLinkList", () => {
     expect(rows).toEqual([expect.objectContaining({ ctUserId: 100, kind: "newHire", suggestion: null })]);
   });
 
+  it("makes a new hire of someone who only shares a name with an EH employee linked to someone else", () => {
+    const { rows } = buildLinkList(
+      input({
+        ctUsers: [ct({ email: "jack.two@example.com" }), ct({ ctUserId: 555, email: "jack.one@example.com", payrollId: "555" })],
+        ehEmployees: [eh({ id: 40213, email: "jack.one@example.com", externalId: "555" })],
+        employeeMap: [{ ctUserId: 555, ehEmployeeId: "40213", lastOutcome: "ok" }],
+      }),
+    );
+    expect(rows).toEqual([expect.objectContaining({ ctUserId: 100, kind: "newHire", candidates: [] })]);
+  });
+
   it("counts EH employees no Connecteam user matches, without listing them", () => {
     const list = buildLinkList(
       input({
@@ -117,6 +128,30 @@ describe("buildLinkList", () => {
       ]);
     });
 
+    it("when another EH employee has the same name, beside the email match", () => {
+      const sameNameElsewhere = eh({ id: 40377, email: "jmitchell@old.example.com" });
+      const nameDiffers = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213, firstName: "John" }), sameNameElsewhere] }));
+      expect(nameDiffers.rows[0]).toEqual(
+        expect.objectContaining({
+          kind: "choice",
+          candidates: [
+            { ehEmployeeId: "40213", reasons: ["nameDiffers"] },
+            { ehEmployeeId: "40377", reasons: ["nameOnly"] },
+          ],
+        }),
+      );
+      const bothAgree = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213 }), sameNameElsewhere] }));
+      expect(bothAgree.rows[0]).toEqual(
+        expect.objectContaining({
+          kind: "choice",
+          candidates: [
+            { ehEmployeeId: "40213", reasons: [] },
+            { ehEmployeeId: "40377", reasons: ["nameOnly"] },
+          ],
+        }),
+      );
+    });
+
     it("when the EH employee already has a Payroll ID that is no Connecteam user's (linking would overwrite it)", () => {
       const { rows } = buildLinkList(input({ ctUsers: [ct()], ehEmployees: [eh({ id: 40213, externalId: "EMP042" })] }));
       expect(rows).toEqual([
@@ -164,7 +199,20 @@ describe("buildLinkList", () => {
     ]);
   });
 
-  it("shows a link saved on an earlier run as saved, so a re-run can keep or change it, held or not", () => {
+  it("keeps a Held employee's candidate that is no longer in EH, marked gone", () => {
+    const { rows } = buildLinkList(
+      input({
+        ctUsers: [ct({ email: "jack.new@example.com" })],
+        employeeMap: [{ ctUserId: 100, ehEmployeeId: null, lastOutcome: "existing_match" }],
+        heldCandidates: new Map([[100, ["40213"]]]),
+      }),
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({ kind: "held", candidates: [{ ehEmployeeId: "40213", reasons: ["goneFromEh"] }] }),
+    ]);
+  });
+
+  it("shows a link saved on an earlier run as on the Link list, so a re-run can keep or change it, held or not", () => {
     const { rows } = buildLinkList(
       input({
         ctUsers: [ct(), ct({ ctUserId: 101, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "101" })],
@@ -178,11 +226,12 @@ describe("buildLinkList", () => {
       }),
     );
     expect(rows.map((r) => [r.ctUserId, r.kind, r.suggestion])).toEqual([
-      [100, "saved", "40213"],
-      [101, "saved", null],
+      [100, "onLinkList", "40213"],
+      [101, "onLinkList", null],
     ]);
   });
 
+  // States as CONTEXT.md "Onboarding pack" defines them, verified live in #7.
   it("gives every row a pack status from Connecteam's status and isWaitingApproval, the furthest along when there are several", () => {
     const users = [100, 101, 102, 103, 104].map((id) =>
       ct({ ctUserId: id, firstName: `F${id}`, email: `u${id}@example.com`, payrollId: String(id) }),
@@ -192,7 +241,7 @@ describe("buildLinkList", () => {
         ctUsers: users,
         assignments: [
           { userId: 101, status: "in_progress", isWaitingApproval: false },
-          { userId: 102, status: "completed", isWaitingApproval: true },
+          { userId: 102, status: "in_progress", isWaitingApproval: true },
           { userId: 103, status: "completed", isWaitingApproval: false },
           { userId: 104, status: "completed", isWaitingApproval: false },
           { userId: 104, status: "in_progress", isWaitingApproval: false },
@@ -242,6 +291,35 @@ describe("buildLinkList", () => {
     expect(ignoredEhCount).toBe(0);
   });
 
+  it("re-checks a saved link's EH employee, so a stale one shows why", () => {
+    const users = [100, 101, 102, 103].map((id) =>
+      ct({ ctUserId: id, firstName: `F${id}`, email: `u${id}@example.com`, payrollId: String(id) }),
+    );
+    const { rows } = buildLinkList(
+      input({
+        ctUsers: [...users, ct({ ctUserId: 555, email: "x@example.com", payrollId: "555" })],
+        ehEmployees: [
+          eh({ id: 40001, email: "a@example.com" }),
+          eh({ id: 40002, email: "b@example.com", status: "Terminated" }),
+          eh({ id: 40004, email: "d@example.com" }),
+        ],
+        employeeMap: [{ ctUserId: 555, ehEmployeeId: "40004", lastOutcome: "ok" }],
+        pendingLinks: [
+          { ctUserId: 100, ehEmployeeId: "40001" },
+          { ctUserId: 101, ehEmployeeId: "40002" },
+          { ctUserId: 102, ehEmployeeId: "40003" },
+          { ctUserId: 103, ehEmployeeId: "40004" },
+        ],
+      }),
+    );
+    expect(rows.map((r) => [r.ctUserId, r.kind, r.suggestion, r.candidates])).toEqual([
+      [100, "onLinkList", "40001", [{ ehEmployeeId: "40001", reasons: [] }]],
+      [101, "onLinkList", "40002", [{ ehEmployeeId: "40002", reasons: ["terminated"] }]],
+      [102, "onLinkList", "40003", [{ ehEmployeeId: "40003", reasons: ["goneFromEh"] }]],
+      [103, "onLinkList", "40004", [{ ehEmployeeId: "40004", reasons: ["linkedElsewhere"], linkedTo: 555 }]],
+    ]);
+  });
+
   describe("on a live client", () => {
     it("shows as already synced when an EH employee carries this user's Payroll ID, copied from a field or not", () => {
       const { rows } = buildLinkList(
@@ -259,6 +337,19 @@ describe("buildLinkList", () => {
       ]);
     });
 
+    it("asks about every Connecteam user given the same Payroll ID, rather than picking one (ADR-0011)", () => {
+      const { rows } = buildLinkList(
+        input({
+          ctUsers: [ct({ payrollId: "EMP042" }), ct({ ctUserId: 101, firstName: "Mia", lastName: "Chen", email: "mia@example.com", payrollId: "EMP042" })],
+          ehEmployees: [eh({ id: 40213, externalId: "EMP042" })],
+        }),
+      );
+      expect(rows.map((r) => [r.ctUserId, r.kind, r.candidates])).toEqual([
+        [100, "choice", [{ ehEmployeeId: "40213", reasons: ["payrollIdShared"], payrollId: "EMP042" }]],
+        [101, "choice", [{ ehEmployeeId: "40213", reasons: ["payrollIdShared"], payrollId: "EMP042" }]],
+      ]);
+    });
+
     it("can't link when the EH match carries another Connecteam user's Payroll ID", () => {
       const { rows } = buildLinkList(
         input({
@@ -269,6 +360,26 @@ describe("buildLinkList", () => {
       expect(rows.find((r) => r.ctUserId === 100)).toEqual(
         expect.objectContaining({ kind: "taken", suggestion: null, candidates: [{ ehEmployeeId: "40213", reasons: ["linkedElsewhere"], linkedTo: 555 }] }),
       );
+    });
+
+    it("can't link to an EH employee already in employee_map for a user no longer active, and counts their unmatched record as ignored", () => {
+      const list = buildLinkList(
+        input({
+          ctUsers: [ct()],
+          ehEmployees: [
+            eh({ id: 40213, externalId: "EMP777" }),
+            eh({ id: 40500, firstName: "Ana", surname: "Silva", email: "ana@example.com", externalId: "778" }),
+          ],
+          employeeMap: [
+            { ctUserId: 777, ehEmployeeId: "40213", lastOutcome: "ok" },
+            { ctUserId: 778, ehEmployeeId: "40500", lastOutcome: "ok" },
+          ],
+        }),
+      );
+      expect(list.rows).toEqual([
+        expect.objectContaining({ kind: "taken", candidates: [{ ehEmployeeId: "40213", reasons: ["linkedElsewhere"], linkedTo: 777 }] }),
+      ]);
+      expect(list.ignoredEhCount).toBe(1);
     });
 
     it("skips anyone whose employee_map row has an EH id, but still sees their Payroll ID as taken", () => {
