@@ -364,6 +364,10 @@ health_str() {
 clean_log() {
   local f="$1"
   [[ -f "$f" ]] || return 0
+  # First, whole: anything drawn on the alternate screen (the link stage's list,
+  # #154), so names and emails stay on screen and out of the log. A screen
+  # left open by a crash is cut to the end.
+  perl -0777 -i -pe 's/\e\[\?1049h.*?(?:\e\[\?1049l|\z)//gs' "$f"
   perl -i -pe 's/\e\[[0-9;?]*[A-Za-z]//g; s/\e\][^\a]*\a//g; s/\e[()][A-Z0-9]//g; s/\r//g; s/[\x04\x08]//g' "$f"
   if [[ -f "$ENV_FILE" ]]; then
     local line val
