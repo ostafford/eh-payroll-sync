@@ -1214,6 +1214,15 @@ describe("runSyncJob - Payroll ID from a Connecteam field (#167, ADR-0011)", () 
     expect(ct.channels[0]!.text).toContain("Copy their EH Payroll ID into **Payroll Number** in Connecteam.");
   });
 
+  it("names the field as their profile does now, when the client renamed it after the wizard ran", async () => {
+    const stale = parseFieldMap({ ...fieldMap, identity: { externalIdFrom: { customFieldId: FIELD, name: "Old Payroll Number" } } });
+    const ct = fakeCt(withCopiedId(""));
+
+    await runSyncJob(job(), deps({ eh: payrollEh(handEntered(40213)) as unknown as SyncDeps["eh"], ct, fieldMap: stale }));
+
+    expect(ct.channels[0]!.text).toContain(COPY_IT);
+  });
+
   it("doesn't ask for it when the match has no Payroll ID, or the client doesn't use the setting", async () => {
     const noId = fakeCt(withCopiedId(""));
     await run(payrollEh(handEntered(40213, { externalId: null })), noId);

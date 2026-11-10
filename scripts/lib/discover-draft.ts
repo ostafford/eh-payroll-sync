@@ -3,8 +3,9 @@
  * resolving each field the sync needs (./field-spec.ts) from the human's picks,
  * then by name (./field-resolve.ts).
  */
+import type { PayrollIdSource } from "../../src/mapping/schema.js";
 import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
-import { optionsOf, resolveField, syncedOptions, type FieldPicks } from "./field-resolve.js";
+import { optionsOf, payrollIdFrom, resolveField, syncedOptions, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC, type FieldSpec } from "./field-spec.js";
 
 /** Read by the sync but not sent to EH (Direct manager): resolved like any spec field. */
@@ -38,7 +39,7 @@ export interface DraftResult {
     client: string;
     connecteam: { onboardingPackId: number };
     employmentHero: { businessId: string; payScheduleId: string; locationId: string };
-    identity: { externalIdFrom: "userId" | { customFieldId: number; name?: string }; emailFallbackFrom: string };
+    identity: { externalIdFrom: PayrollIdSource; emailFallbackFrom: string };
     fields: Array<{ eh: string; from: Record<string, unknown>; transform: string; [k: string]: unknown }>;
     rules: {
       taxDeclaration: Record<string, { customFieldId: number; options?: Record<string, string> }>;
@@ -148,16 +149,6 @@ export function buildFieldMapDraft(input: DraftInput): DraftResult {
       return reason ? [{ id: f.customFieldId, name: f.name, reason }] : [];
     }),
   };
-}
-
-/** `identity.externalIdFrom` for the picked field, with its name for the notices (ADR-0011). */
-export function payrollIdFrom(
-  fields: ReadonlyArray<{ customFieldId: number; name: string }>,
-  id: number | undefined,
-): "userId" | { customFieldId: number; name?: string } {
-  if (id === undefined) return "userId";
-  const name = fields.find((f) => f.customFieldId === id)?.name.trim();
-  return name ? { customFieldId: id, name } : { customFieldId: id };
 }
 
 function notSyncedReason(f: CustomFieldDefinition): string | undefined {

@@ -6,20 +6,24 @@
  *
  * Only `map` (fields) and `options` (tax declaration) of an entry already
  * reading the picked field change, plus that field's entry in `rules.exclude`
- * and, from the EH Payroll ID pick, `identity.externalIdFrom` (#167);
+ * and, from the EH Payroll ID pick, `identity.externalIdFrom` with the
+ * field's current name (#167);
  * everything else in the map is left alone.
  */
-import { optionsOf, syncedOptions, type FieldPicks } from "./field-resolve.js";
+import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
+import { optionsOf, payrollIdFrom, syncedOptions, type FieldPicks } from "./field-resolve.js";
 import { FIELD_SPEC } from "./field-spec.js";
-import { payrollIdFrom } from "./discover-draft.js";
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-/** `fields`: the account's custom-field definitions, for the Payroll ID field's name. */
+/**
+ * `fields`: the account's custom-field definitions, for the Payroll ID field's
+ * name. Required: without it a kept map would lose the stored name.
+ */
 export function applyOptionMaps<T>(
   fieldMap: T,
   picks: FieldPicks,
-  fields: ReadonlyArray<{ customFieldId: number; name: string }> = [],
+  fields: readonly CustomFieldDefinition[],
 ): { map: T; changed: string[] } {
   const map: any = structuredClone(fieldMap);
   const changed: string[] = [];

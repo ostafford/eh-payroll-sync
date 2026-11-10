@@ -3,6 +3,8 @@
  * (issue #112). Shared by field-check, create-fields and discover, so all three
  * agree on the field.
  */
+import type { PayrollIdSource } from "../../src/mapping/schema.js";
+import type { CustomFieldDefinition } from "./connecteam-custom-fields.js";
 import type { FieldSpec } from "./field-spec.js";
 
 export interface FieldDef {
@@ -66,6 +68,16 @@ export const syncedOptions = (options: OptionMap): Record<string, string> =>
 
 /** A pick's option map, if it has one. */
 export const optionsOf = (pick: FieldPick | undefined): OptionMap | undefined => (pick && "id" in pick ? pick.options : undefined);
+
+/** `identity.externalIdFrom` for the picked field, with its name for the notices (ADR-0011). */
+export function payrollIdFrom(
+  fields: readonly CustomFieldDefinition[],
+  id: number | undefined,
+): PayrollIdSource {
+  if (id === undefined) return "userId";
+  const name = fields.find((f) => f.customFieldId === id)?.name.trim();
+  return name ? { customFieldId: id, name } : { customFieldId: id };
+}
 
 /** The human's choices, by FieldSpec name (clients/<client>/field-picks.json). */
 export type FieldPicks = Record<string, FieldPick>;

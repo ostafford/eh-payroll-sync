@@ -549,8 +549,9 @@ function payrollIdNotes(
   if (from === "userId" || matchKey !== mapped.externalId) return [];
   if (mapped.externalIdFromField) return [PAYROLL_ID_TYPO_HINT];
   if (!matches.some((m) => m.hasPayrollId)) return [];
-  const name = from.name ?? user.customFields.find((f) => f.customFieldId === from.customFieldId)?.name;
-  return [copyPayrollIdHint(name?.trim() || "their Payroll ID field")];
+  // The profile's name is the current one; the stored one covers a blank field Connecteam leaves off the profile.
+  const live = user.customFields.find((f) => f.customFieldId === from.customFieldId)?.name.trim();
+  return [copyPayrollIdHint(live || from.name || "their Payroll ID field")];
 }
 
 /**
@@ -585,9 +586,9 @@ async function holdExisting(
   // not the payload hash: a later profile edit that changes none of that
   // doesn't repost it within the window. The digest is the only reminder
   // (#143 item 5). A hold with no hint keeps the key it had before hints.
-  const said = [detail, ...(held.notes ?? [])];
+  const shown = [detail, ...(held.notes ?? [])];
   for (const [i, text] of existingMatchMessages(person, matches, held.notes).entries()) {
-    const key = await noticeKey("existing_match", ctUserId, i === 0 ? said : [...said, `part ${i + 1}`]);
+    const key = await noticeKey("existing_match", ctUserId, i === 0 ? shown : [...shown, `part ${i + 1}`]);
     if (!(await shouldPostNotice(deps.store, key, FOLLOW_UP_NOTICE_DEDUPE_MS, held.now))) continue;
     const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
       deps.ct.sendChannelMessage(deps.adminChannelId, text),

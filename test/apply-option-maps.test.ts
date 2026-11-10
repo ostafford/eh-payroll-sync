@@ -17,7 +17,7 @@ describe("applyOptionMaps", () => {
       "Employee Status": { id: 60, options: { "Full-time": "FullTime", PBV: null } },
       "Claim tax-free threshold?": { id: 61, options: { "Yes, claim tax free threshold": "yes", No: "no", TBC: null } },
       Gender: { id: 62 },
-    });
+    }, []);
 
     expect(changed).toEqual(["Employee Status", "Claim tax-free threshold?"]);
     expect(map.fields[0]!.map).toEqual({ "Full-time": "FullTime" });
@@ -39,27 +39,27 @@ describe("applyOptionMaps", () => {
     // Renamed in Connecteam: the map takes the new name.
     const renamed = applyOptionMaps(picked.map, { "EH Payroll ID": { id: 70 } }, [{ ...fields[0]!, name: "Payroll Number" }]);
     expect((renamed.map as any).identity.externalIdFrom).toEqual({ customFieldId: 70, name: "Payroll Number" });
-    const skipped = applyOptionMaps(picked.map, { "EH Payroll ID": { skip: true } });
+    const skipped = applyOptionMaps(picked.map, { "EH Payroll ID": { skip: true } }, fields);
     expect(skipped.changed).toEqual(["EH Payroll ID"]);
     expect((skipped.map as any).identity.externalIdFrom).toBe("userId");
     // Never asked: the map is left as it is.
-    expect(applyOptionMaps(kept(), {})).toEqual({ map: kept(), changed: [] });
+    expect(applyOptionMaps(kept(), {}, [])).toEqual({ map: kept(), changed: [] });
   });
 
   it("reports nothing changed when the map already has them", () => {
     const picks = { "Employee Status": { id: 60, options: { FullTime: "FullTime" } } };
-    expect(applyOptionMaps(kept(), picks).changed).toEqual([]);
+    expect(applyOptionMaps(kept(), picks, []).changed).toEqual([]);
   });
 
   it("leaves a field the map reads from a different field ID alone", () => {
-    const { map, changed } = applyOptionMaps(kept(), { "Employee Status": { id: 99, options: { "Full-time": "FullTime" } } });
+    const { map, changed } = applyOptionMaps(kept(), { "Employee Status": { id: 99, options: { "Full-time": "FullTime" } } }, []);
     expect(changed).toEqual([]);
     expect(map.fields[0]!.map).toEqual({ FullTime: "FullTime" });
   });
 
   it("writes the answers to leave out into the kept map's rules.exclude, replacing that field's entry", () => {
     const map = { ...kept(), rules: { ...kept().rules, exclude: [{ customFieldId: 60, values: ["Old"] }, { customFieldId: 9, values: ["X"] }] } };
-    const { map: out, changed } = applyOptionMaps(map, { "Employee Status": { id: 60, options: { "Full-time": "FullTime", PBV: null }, exclude: ["PBV"] } });
+    const { map: out, changed } = applyOptionMaps(map, { "Employee Status": { id: 60, options: { "Full-time": "FullTime", PBV: null }, exclude: ["PBV"] } }, []);
     expect(out.rules.exclude).toEqual([{ customFieldId: 9, values: ["X"] }, { customFieldId: 60, values: ["PBV"] }]);
     expect(changed).toContain("Employee Status");
   });

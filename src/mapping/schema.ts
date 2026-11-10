@@ -254,6 +254,8 @@ export type FieldMap = z.infer<typeof fieldMap>;
 export type FieldRule = z.infer<typeof fieldRule>;
 export type Rules = z.infer<typeof rules>;
 export type TransformName = z.infer<typeof transform>;
+/** Where each employee's Payroll ID comes from (ADR-0011). */
+export type PayrollIdSource = FieldMap["identity"]["externalIdFrom"];
 
 /** Each schema problem as `path: message`; empty when the map is valid. */
 export function fieldMapIssues(json: unknown): string[] {
