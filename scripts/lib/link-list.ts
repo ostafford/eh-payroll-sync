@@ -173,31 +173,37 @@ function indexInput(input: LinkListInput): Index {
   };
 }
 
-/** The Connecteam user an EH employee already belongs to: their `employee_map` row, or the one user holding its Payroll ID. */
-function ownerOf(ix: Index, e: LinkEhEmployee): number | undefined {
-  const payrollId = e.externalId?.trim();
-  const owners = payrollId ? (ix.ctByPayrollId.get(payrollId) ?? []) : [];
-  return ix.ctByEhId.get(e.id) ?? (owners.length === 1 ? owners[0] : undefined);
+/** Who an EH employee belongs to: their `employee_map` row, or the one user holding its Payroll ID. */
+interface Ownership {
+  owner: number | undefined;
+  payrollId: string | undefined;
+  /** Every Connecteam user holding that Payroll ID. */
+  holders: readonly number[];
 }
 
-/** One EH employee as a candidate, with what EH says about them added to the match reasons. */
-function candidateFor(ix: Index, e: LinkEhEmployee, matchReasons: readonly ChoiceReason[]): LinkCandidate {
+function ownership(ix: Index, e: LinkEhEmployee): Ownership {
+  const payrollId = e.externalId?.trim() || undefined;
+  const holders = payrollId ? (ix.ctByPayrollId.get(payrollId) ?? []) : [];
+  return { owner: ix.ctByEhId.get(e.id) ?? (holders.length === 1 ? holders[0] : undefined), payrollId, holders };
+}
+
+/** One EH employee as a candidate for `forUser`, with what EH says about them added to the match reasons. */
+function candidateFor(ix: Index, e: LinkEhEmployee, forUser: number, matchReasons: readonly ChoiceReason[]): LinkCandidate {
   const reasons = isTerminated(e) ? [...matchReasons, "terminated" as const] : [...matchReasons];
   const ehEmployeeId = e.id;
-  const payrollId = e.externalId?.trim();
-  const owners = payrollId ? (ix.ctByPayrollId.get(payrollId) ?? []) : [];
-  const linkedTo = ownerOf(ix, e);
-  if (linkedTo !== undefined) return { ehEmployeeId, reasons: [...reasons, "linkedElsewhere"], linkedTo };
-  if (!payrollId) return { ehEmployeeId, reasons };
+  const { owner, payrollId, holders } = ownership(ix, e);
+  if (owner !== undefined && owner !== forUser) return { ehEmployeeId, reasons: [...reasons, "linkedElsewhere"], linkedTo: owner };
+  // Their own Payroll ID is nothing a link would overwrite.
+  if (!payrollId || owner === forUser) return { ehEmployeeId, reasons };
   // Several Connecteam users hold this ID: fix it in Connecteam first (ADR-0011).
-  if (owners.length > 1) return { ehEmployeeId, reasons: [...reasons, "payrollIdShared"], payrollId };
+  if (holders.length > 1) return { ehEmployeeId, reasons: [...reasons, "payrollIdShared"], payrollId };
   return { ehEmployeeId, reasons: [...reasons, "hasPayrollId"], payrollId };
 }
 
-/** An EH employee named by an earlier run or the Pre-create check, re-checked now. */
-function recheck(ix: Index, id: string): LinkCandidate {
+/** An EH employee named by an earlier run or the Pre-create check, re-checked for `forUser` now. */
+function recheck(ix: Index, id: string, forUser: number): LinkCandidate {
   const e = ix.ehById.get(id);
-  return e ? candidateFor(ix, e, []) : { ehEmployeeId: id, reasons: ["goneFromEh"] };
+  return e ? candidateFor(ix, e, forUser, []) : { ehEmployeeId: id, reasons: ["goneFromEh"] };
 }
 
 /** Everyone in EH who could be this person: by email, by name alone, or by a Payroll ID they share. */
@@ -206,16 +212,16 @@ function matchCandidates(ix: Index, u: LinkCtUser, sharedIdRecord: LinkEhEmploye
   const sameEmail = email ? (ix.ehByEmail.get(email) ?? []) : [];
   const several = sameEmail.length > 1 || (ix.ctPerEmail.get(email) ?? 0) > 1;
   const byEmail = sameEmail.map((e) =>
-    candidateFor(ix, e, [...(sameName(u, e) ? [] : ["nameDiffers" as const]), ...(several ? ["sameEmailSeveral" as const] : [])]),
+    candidateFor(ix, e, u.ctUserId, [...(sameName(u, e) ? [] : ["nameDiffers" as const]), ...(several ? ["sameEmailSeveral" as const] : [])]),
   );
   const name = nameKey(u.firstName, u.lastName);
   const byNameOnly = (name ? (ix.ehByName.get(name) ?? []) : [])
     .filter((e) => !sameEmail.includes(e))
-    .map((e) => candidateFor(ix, e, ["nameOnly"]))
+    .map((e) => candidateFor(ix, e, u.ctUserId, ["nameOnly"]))
     // A name alone isn't a hit (#134): someone else's record is no reason to stop a new hire.
     .filter((c) => !c.reasons.includes("linkedElsewhere"));
   const seen = new Set([...byEmail, ...byNameOnly].map((c) => c.ehEmployeeId));
-  const bySharedId = sharedIdRecord && !seen.has(sharedIdRecord.id) ? [candidateFor(ix, sharedIdRecord, [])] : [];
+  const bySharedId = sharedIdRecord && !seen.has(sharedIdRecord.id) ? [candidateFor(ix, sharedIdRecord, u.ctUserId, [])] : [];
   return [...byEmail, ...byNameOnly, ...bySharedId];
 }
 
@@ -224,10 +230,10 @@ function classify(ix: Index, u: LinkCtUser): Omit<LinkRow, "pack"> {
   const { ctUserId } = u;
   if (ix.onLinkList.has(ctUserId)) {
     const id = ix.onLinkList.get(ctUserId) ?? null;
-    return { ctUserId, kind: "onLinkList", suggestion: id, candidates: id ? [recheck(ix, id)] : [] };
+    return { ctUserId, kind: "onLinkList", suggestion: id, candidates: id ? [recheck(ix, id, ctUserId)] : [] };
   }
   if (ix.held.has(ctUserId)) {
-    const candidates = (ix.input.heldCandidates.get(ctUserId) ?? []).map((id) => recheck(ix, id));
+    const candidates = (ix.input.heldCandidates.get(ctUserId) ?? []).map((id) => recheck(ix, id, ctUserId));
     return { ctUserId, kind: "held", suggestion: null, candidates, newHireChoice: true };
   }
 
@@ -269,11 +275,11 @@ export function buildLinkList(input: LinkListInput): LinkList {
     if (r.suggestion) touched.add(r.suggestion);
     for (const c of r.candidates) touched.add(c.ehEmployeeId);
   }
-  return { rows, ignoredEhCount: input.ehEmployees.filter((e) => !touched.has(e.id)).length, ehOwners: new Map(
-      input.ehEmployees.flatMap((e) => {
-        const owner = ownerOf(ix, e);
-        return owner === undefined ? [] : [[e.id, owner] as const];
-      }),
-    ),
-  };
+  const ehOwners = new Map(
+    input.ehEmployees.flatMap((e) => {
+      const { owner } = ownership(ix, e);
+      return owner === undefined ? [] : [[e.id, owner] as const];
+    }),
+  );
+  return { rows, ignoredEhCount: input.ehEmployees.filter((e) => !touched.has(e.id)).length, ehOwners };
 }

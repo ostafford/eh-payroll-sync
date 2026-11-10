@@ -244,6 +244,19 @@ describe("buildLinkList", () => {
     ]);
   });
 
+  it("re-checks a saved link whose EH employee now carries this person's own Payroll ID as still fine", () => {
+    const { rows } = buildLinkList(
+      input({
+        ctUsers: [ct({ payrollId: "P-100" })],
+        ehEmployees: [eh({ id: "40213", externalId: "P-100" })],
+        pendingLinks: [{ ctUserId: 100, ehEmployeeId: "40213" }],
+      }),
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({ kind: "onLinkList", suggestion: "40213", candidates: [{ ehEmployeeId: "40213", reasons: [] }] }),
+    ]);
+  });
+
   // States as CONTEXT.md "Onboarding pack" defines them, verified live in #7.
   it("gives every row a pack status from Connecteam's status and isWaitingApproval, the furthest along when there are several", () => {
     const users = [100, 101, 102, 103, 104].map((id) =>
