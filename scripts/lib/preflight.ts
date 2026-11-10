@@ -55,7 +55,8 @@ export function isBlocking(outcome: PreflightOutcome): boolean {
   return BLOCKING.has(outcome);
 }
 
-function norm(s: string | null): string {
+/** Lower-cased and trimmed, with runs of spaces collapsed: for comparing names and emails. */
+export function norm(s: string | null): string {
   return (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
