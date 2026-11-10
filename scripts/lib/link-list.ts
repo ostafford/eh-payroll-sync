@@ -94,6 +94,11 @@ export interface LinkList {
   rows: LinkRow[];
   /** EH employees no Connecteam user matched: shown as a count only. */
   ignoredEhCount: number;
+  /**
+   * EH employees that already belong to a Connecteam user: in `employee_map`,
+   * or carrying their Payroll ID. Nobody else can be linked to them.
+   */
+  ehOwners: ReadonlyMap<string, number>;
 }
 
 const PACK_ORDER: readonly PackStatus[] = ["notAssigned", "inProgress", "readyForReview", "approvedNotSynced"];
@@ -168,13 +173,20 @@ function indexInput(input: LinkListInput): Index {
   };
 }
 
+/** The Connecteam user an EH employee already belongs to: their `employee_map` row, or the one user holding its Payroll ID. */
+function ownerOf(ix: Index, e: LinkEhEmployee): number | undefined {
+  const payrollId = e.externalId?.trim();
+  const owners = payrollId ? (ix.ctByPayrollId.get(payrollId) ?? []) : [];
+  return ix.ctByEhId.get(e.id) ?? (owners.length === 1 ? owners[0] : undefined);
+}
+
 /** One EH employee as a candidate, with what EH says about them added to the match reasons. */
 function candidateFor(ix: Index, e: LinkEhEmployee, matchReasons: readonly ChoiceReason[]): LinkCandidate {
   const reasons = isTerminated(e) ? [...matchReasons, "terminated" as const] : [...matchReasons];
   const ehEmployeeId = e.id;
   const payrollId = e.externalId?.trim();
   const owners = payrollId ? (ix.ctByPayrollId.get(payrollId) ?? []) : [];
-  const linkedTo = ix.ctByEhId.get(e.id) ?? (owners.length === 1 ? owners[0] : undefined);
+  const linkedTo = ownerOf(ix, e);
   if (linkedTo !== undefined) return { ehEmployeeId, reasons: [...reasons, "linkedElsewhere"], linkedTo };
   if (!payrollId) return { ehEmployeeId, reasons };
   // Several Connecteam users hold this ID: fix it in Connecteam first (ADR-0011).
@@ -257,5 +269,11 @@ export function buildLinkList(input: LinkListInput): LinkList {
     if (r.suggestion) touched.add(r.suggestion);
     for (const c of r.candidates) touched.add(c.ehEmployeeId);
   }
-  return { rows, ignoredEhCount: input.ehEmployees.filter((e) => !touched.has(e.id)).length };
+  return { rows, ignoredEhCount: input.ehEmployees.filter((e) => !touched.has(e.id)).length, ehOwners: new Map(
+      input.ehEmployees.flatMap((e) => {
+        const owner = ownerOf(ix, e);
+        return owner === undefined ? [] : [[e.id, owner] as const];
+      }),
+    ),
+  };
 }

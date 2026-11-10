@@ -49,6 +49,8 @@ const list: LinkList = {
     row({ ctUserId: 106, kind: "taken", candidates: [{ ehEmployeeId: "40600", reasons: ["linkedElsewhere"], linkedTo: 999 }] }),
   ],
   ignoredEhCount: 3,
+  // EH 40600 belongs to Connecteam user 999, who isn't on the screen.
+  ehOwners: new Map([["40600", 999]]),
 };
 const people = {
   ct: new Map(ctUsers.map((u) => [u.ctUserId, u])),
@@ -132,6 +134,14 @@ describe("link screen", () => {
     expect(decisionFor(press(ruby(), "<down>", "<return>"), 103)).toEqual({ ctUserId: 103, onList: true, ehEmployeeId: "40377" });
   });
 
+  it("finds an EH employee who belongs to someone else in search, but won't link them", () => {
+    const fromTheo = press(screen(), "<tab>", "<down>", "<down>", "<down>", "/", "i", "v", "y", "<return>", "<return>");
+    expect(decisionFor(fromTheo, 104)).toEqual({ ctUserId: 104, onList: false });
+    expect(frame(fromTheo)).toMatch(/Ivy Reid .*EH 40600 .*linked to someone else/);
+    const fromIvy = press(screen(), "<down>", "<down>", "/", "i", "v", "y", "<return>");
+    expect(decisionFor(fromIvy, 106)).toEqual({ ctUserId: 106, onList: false });
+  });
+
   it("drops a pending move when the admin backs out with Esc, so the next Enter asks again", () => {
     const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", "/", "j", "a", "c", "k", "<return>");
     expect(frame(s)).toContain("Enter again to move it here");
@@ -153,7 +163,7 @@ describe("link screen", () => {
 
   it("PgDn and PgUp move ten rows at a time, stopping at either end", () => {
     const many = Array.from({ length: 30 }, (_, k) => row({ ctUserId: 1000 + k, kind: "newHire" }));
-    const s = press(createLinkScreen({ rows: many, ignoredEhCount: 0 }, people), "<tab>", "<pagedown>");
+    const s = press(createLinkScreen({ rows: many, ignoredEhCount: 0, ehOwners: new Map() }, people), "<tab>", "<pagedown>");
     const selected = () => /Row (\d+)/.exec(frame(s))?.[1];
     expect(selected()).toBe("11");
     expect((press(s, "<pageup>"), selected())).toBe("1");

@@ -161,8 +161,14 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       const d = decision(i);
       return d.onList && d.ehEmployeeId === ehEmployeeId;
     });
+  /** An EH employee who belongs to a Connecteam user other than row i's: never linkable. */
+  const ownedElsewhere = (i: number, ehEmployeeId: string) => {
+    const owner = list.ehOwners.get(ehEmployeeId);
+    return owner !== undefined && owner !== rows[i]!.ctUserId;
+  };
   /** Links row i, or asks first when the EH employee is linked to another row. False until it's done. */
   const link = (i: number, ehEmployeeId: string | null): boolean => {
+    if (ehEmployeeId !== null && ownedElsewhere(i, ehEmployeeId)) return false;
     const other = ehEmployeeId === null ? -1 : linkedRow(ehEmployeeId);
     if (other >= 0 && other !== i) {
       if (pendingMove !== ehEmployeeId) {
@@ -196,7 +202,8 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
     // Closest first: this person's name, then anyone not linked to another row.
     const rank = (e: LinkEhEmployee) => {
       const other = linkedRow(e.id);
-      return (fullName(e.firstName, e.surname).toLowerCase() === own ? 0 : 2) + (other >= 0 && other !== i ? 1 : 0);
+      const taken = (other >= 0 && other !== i) || ownedElsewhere(i, e.id);
+      return (fullName(e.firstName, e.surname).toLowerCase() === own ? 0 : 2) + (taken ? 1 : 0);
     };
     return [...people.eh.values()]
       .filter((e) => fullName(e.firstName, e.surname).toLowerCase().includes(q) || (e.email ?? "").toLowerCase().includes(q))
@@ -344,6 +351,7 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
           if (e.externalId) parts.push(p.change(`Payroll ID ${e.externalId}`));
           const other = linkedRow(id);
           if (other >= 0 && other !== i) parts.push(p.dim(`linked to row ${other + 1}`));
+          else if (ownedElsewhere(i, id) && !reasons.includes("linkedElsewhere")) parts.push(p.bad("linked to someone else"));
           const why = reasons.filter((x) => !asFields.has(x)).map((x) => REASON[x]);
           if (why.length) parts.push(`${p.mark.warn} ${why.join(", ")}`);
           return `${lead}${parts.join("  ")}`;

@@ -406,4 +406,24 @@ describe("buildLinkList", () => {
       expect(rows.map((r) => [r.ctUserId, r.kind])).toEqual([[100, "taken"]]);
     });
   });
+
+  it("lists who each EH employee already belongs to: an employee_map row, even for a user no longer active, or a Payroll ID one user holds", () => {
+    const { ehOwners } = buildLinkList(
+      input({
+        ctUsers: [
+          ct({ ctUserId: 100, payrollId: "P-100" }),
+          ct({ ctUserId: 200, firstName: "Ann", email: "a@example.com", payrollId: "P-SHARED" }),
+          ct({ ctUserId: 201, firstName: "Ben", email: "b@example.com", payrollId: "P-SHARED" }),
+        ],
+        ehEmployees: [
+          eh({ id: "40001", externalId: "P-100", email: "x1@example.com" }),
+          eh({ id: "40002", externalId: null, email: "x2@example.com" }),
+          eh({ id: "40003", externalId: "P-SHARED", email: "x3@example.com" }),
+          eh({ id: "40004", externalId: "P-NOBODY", email: "x4@example.com" }),
+        ],
+        employeeMap: [{ ctUserId: 777, ehEmployeeId: "40002", lastOutcome: "ok" }],
+      }),
+    );
+    expect(ehOwners).toEqual(new Map([["40001", 100], ["40002", 777]]));
+  });
 });
