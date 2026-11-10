@@ -203,8 +203,8 @@ describe("link screen", () => {
       createLinkScreen(
         {
           rows: [
-            // Saved to EH 40600, which now belongs to Connecteam user 999.
-            row({ ctUserId: 106, kind: "onLinkList", suggestion: "40600", candidates: [{ ehEmployeeId: "40600", reasons: ["linkedElsewhere"], linkedTo: 999 }] }),
+            // Saved to EH 40600, which now belongs to Connecteam user 999 (and was terminated).
+            row({ ctUserId: 106, kind: "onLinkList", suggestion: "40600", candidates: [{ ehEmployeeId: "40600", reasons: ["terminated", "linkedElsewhere"], linkedTo: 999 }] }),
             // Saved to EH 40401, since terminated in EH: still possible.
             row({ ctUserId: 102, kind: "onLinkList", suggestion: "40401", candidates: [{ ehEmployeeId: "40401", reasons: ["terminated", "hasPayrollId"], payrollId: "E-77" }] }),
             row({ ctUserId: 101, kind: "choice", candidates: [{ ehEmployeeId: "40377", reasons: ["nameDiffers"] }] }),
@@ -218,7 +218,8 @@ describe("link screen", () => {
     it("comes off the Link list when it can no longer be made, and says so", () => {
       const s = stale();
       expect(decisionFor(s, 106)).toEqual({ ctUserId: 106, onList: false });
-      expect(frame(s)).toMatch(/1 \[!\]\s+Ivy Reid .*saved link will be removed: linked to someone else/);
+      // Only what stops the link: being terminated alone wouldn't.
+      expect(frame(s)).toMatch(/1 \[!\]\s+Ivy Reid .*saved link will be removed: linked to someone else$/m);
     });
 
     it("stays when it's still possible, and the save check counts it as kept, not left unlinked", () => {

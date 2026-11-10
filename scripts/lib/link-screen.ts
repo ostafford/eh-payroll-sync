@@ -33,8 +33,10 @@ export interface LinkKey {
   ctrl?: boolean;
 }
 
-/** A candidate the admin can link: not someone else's, and still in EH. */
-const linkable = (c: LinkCandidate) => !c.reasons.includes("linkedElsewhere") && !c.reasons.includes("goneFromEh");
+/** The reasons that stop a link outright: the EH employee is someone else's, or gone. */
+const UNLINKABLE: readonly ChoiceReason[] = ["linkedElsewhere", "goneFromEh"];
+/** A candidate the admin can link. */
+const linkable = (c: LinkCandidate) => !c.reasons.some((x) => UNLINKABLE.includes(x));
 
 /** A link saved on an earlier run that can no longer be made: its EH employee is someone else's, or gone. */
 const savedButUnlinkable = (r: LinkRow) => r.kind === "onLinkList" && r.candidates.some((c) => !linkable(c));
@@ -296,7 +298,8 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       const several = r.candidates.length > 1;
       const ehCol = several ? p.dim(`(${r.candidates.length} EH employees)`) : r.candidates[0] ? p.change(`${cut(ehName(r.candidates[0].ehEmployeeId), nameW)} ?`) : p.dim("(none)");
       if (savedButUnlinkable(r)) {
-        return [p.mark.warn, ehCol, p.change(`saved link will be removed: ${[...new Set(problem)].map((x) => REASON[x]).join(", ")}`)];
+        const why = [...new Set(problem.filter((x) => UNLINKABLE.includes(x)))].map((x) => REASON[x]);
+        return [p.mark.warn, ehCol, p.change(`saved link will be removed: ${why.join(", ")}`)];
       }
       if (r.kind === "held") {
         const what = several ? `${r.candidates.length} EH employees` : r.candidates[0] ? `EH ${r.candidates[0].ehEmployeeId}` : "EH";
