@@ -5,20 +5,29 @@
  */
 import { palette } from "./field-check.js";
 import type { LinkDecision } from "./link-changes.js";
-import type { ChoiceReason, LinkCandidate, LinkCtUser, LinkEhEmployee, LinkList, LinkRow, PackStatus } from "./link-list.js";
+import type { ChoiceReason, LinkCandidate, LinkCtUser, LinkEhEmployee, LinkList, LinkListInput, LinkRow, PackStatus } from "./link-list.js";
 
 export interface LinkScreenPeople {
   ct: ReadonlyMap<number, LinkCtUser>;
   eh: ReadonlyMap<string, LinkEhEmployee>;
 }
 
-/** A keypress as readline's `keypress` event gives it. */
+/** The people the screen shows, by id, from the link list's input. */
+export function linkScreenPeople(input: Pick<LinkListInput, "ctUsers" | "ehEmployees">): LinkScreenPeople {
+  return {
+    ct: new Map(input.ctUsers.map((u) => [u.ctUserId, u])),
+    eh: new Map(input.ehEmployees.map((e) => [e.id, e])),
+  };
+}
+
+/** The terminal the frame is drawn for. */
 export interface LinkScreenSize {
   columns: number;
   rows: number;
   color: boolean;
 }
 
+/** A keypress as readline's `keypress` event gives it. */
 export interface LinkKey {
   name?: string;
   ctrl?: boolean;

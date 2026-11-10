@@ -74,6 +74,7 @@ describe("runLinkStage", () => {
     await expect(s.run()).resolves.toBe("cancelled");
     expect(s.execute).not.toHaveBeenCalled();
     expect(s.out.join("\n")).toContain("Nothing saved");
+    expect(s.out.join("\n")).not.toContain("Held people sync");
   });
 
   it("writes nothing on a re-run that changes nothing", async () => {
@@ -85,6 +86,8 @@ describe("runLinkStage", () => {
     await expect(s.run()).resolves.toBe("unchanged");
     expect(s.execute).not.toHaveBeenCalled();
     expect(s.out.join("\n")).toContain("No changes to the Link list");
+    // A re-run is when the reminder of when people sync is wanted.
+    expect(s.out.join("\n")).toContain("Held people sync at the next daily recheck");
   });
 
   it("writes 'New hire, not this person' for a Held employee as a row with no EH id", async () => {
@@ -110,7 +113,7 @@ describe("runLinkStage", () => {
 
   it("in a rehearsal, shows what it would save and runs nothing", async () => {
     const s = stage(["<return>"], { rehearsal: true });
-    await expect(s.run()).resolves.toBe("saved");
+    await expect(s.run()).resolves.toBe("rehearsed");
     expect(s.execute).not.toHaveBeenCalled();
     const out = s.out.join("\n");
     expect(out).toContain("Rehearsal: nothing written. It would save 2 links added or changed.");

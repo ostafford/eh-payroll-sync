@@ -32,7 +32,7 @@ import { DEPLOY_CONFIG_PATH } from "./lib/deploy-config.js";
 import type { LinkStageData, LinkStageMapRow } from "./lib/link-input.js";
 import { linkListInput } from "./lib/link-input.js";
 import { buildLinkList, type LinkPendingRow } from "./lib/link-list.js";
-import { createLinkScreen, type LinkScreen } from "./lib/link-screen.js";
+import { createLinkScreen, linkScreenPeople, type LinkScreen } from "./lib/link-screen.js";
 import { runLinkStage } from "./lib/link-stage.js";
 
 const DATABASE = "eh-payroll-sync";
@@ -177,10 +177,7 @@ async function main(): Promise<void> {
 
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     const input = linkListInput(await load());
-    const screen = createLinkScreen(buildLinkList(input), {
-      ct: new Map(input.ctUsers.map((u) => [u.ctUserId, u])),
-      eh: new Map(input.ehEmployees.map((e) => [e.id, e])),
-    });
+    const screen = createLinkScreen(buildLinkList(input), linkScreenPeople(input));
     console.log(screen.table({ columns: 160, color: false }).join("\n"));
     console.error("\nThe link stage needs a terminal (it reads single keys): nothing was saved.");
     return;
