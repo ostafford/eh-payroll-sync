@@ -4,6 +4,8 @@
  *
  * Verified against the live API (issue #3):
  *  - GET  /users/v1/users?userIds={id}                     (no single-user GET)
+ *  - GET  /users/v1/users?limit=&offset=   active users only by default; limit <= 500;
+ *         paging { offset: next offset, total } (#154, demo account 2026-11-10)
  *  - GET  /onboarding/v1/packs/{packId}/assignments
  *  - GET  /pay-rates/v1/pay-rates?userIds={id}&startDate=&endDate=  (dates required)
  *  - GET  /chat/v1/conversations
@@ -31,6 +33,7 @@ export interface CtClientConfig {
 
 const DEFAULT_BASE = "https://api.connecteam.com";
 const MAX_TEXT = 500;
+const USERS_PAGE = 500;
 
 export class ConnecteamClient {
   readonly #base: string;
@@ -68,6 +71,25 @@ export class ConnecteamClient {
       const users = (b as Wrapped<{ users: ConnecteamUser[] }>).data.users;
       return users.find((u) => u.userId === userId) ?? null;
     });
+  }
+
+  /**
+   * Every active user (the API leaves archived ones out unless asked), paging
+   * until `paging.total`. 500 is the largest page the API accepts.
+   */
+  async listUsers(): Promise<CtResult<ConnecteamUser[]>> {
+    const users: ConnecteamUser[] = [];
+    for (let offset = 0; ; ) {
+      const r = await this.#call("GET", `/users/v1/users?limit=${USERS_PAGE}&offset=${offset}`);
+      const page = unwrap(r, (b) => {
+        const body = b as Wrapped<{ users: ConnecteamUser[] }> & { paging: { offset: number; total: number } };
+        return { users: body.data.users, next: body.paging.offset, total: body.paging.total };
+      });
+      if (page.outcome !== "ok") return page;
+      users.push(...page.data.users);
+      if (!page.data.users.length || page.data.next >= page.data.total) return { outcome: "ok", data: users };
+      offset = page.data.next;
+    }
   }
 
   /**
