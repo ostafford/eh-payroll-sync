@@ -24,7 +24,6 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { emitKeypressEvents } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
@@ -32,7 +31,8 @@ import { DEPLOY_CONFIG_PATH } from "./lib/deploy-config.js";
 import type { LinkStageData, LinkStageMapRow } from "./lib/link-input.js";
 import { linkListInput } from "./lib/link-input.js";
 import { buildLinkList, type LinkPendingRow } from "./lib/link-list.js";
-import { createLinkScreen, linkScreenPeople, type LinkScreen } from "./lib/link-screen.js";
+import { createLinkScreen, linkScreenPeople } from "./lib/link-screen.js";
+import { driveLinkScreen } from "./lib/link-terminal.js";
 import { runLinkStage } from "./lib/link-stage.js";
 
 const DATABASE = "eh-payroll-sync";
@@ -132,36 +132,6 @@ async function loadLive(): Promise<LinkStageData> {
   };
 }
 
-// --- the terminal ----------------------------------------------------------
-
-/** Runs the screen full-screen, in the alternate screen, until the admin saves or cancels. */
-function drive(screen: LinkScreen): Promise<"save" | "cancel"> {
-  const color = !process.env.NO_COLOR;
-  const draw = () =>
-    process.stdout.write(
-      "\u001b[H\u001b[2J" + screen.render({ columns: process.stdout.columns || 100, rows: process.stdout.rows || 30, color }).join("\n"),
-    );
-  process.stdout.write("\u001b[?1049h\u001b[?25l"); // alternate screen, hide cursor
-  emitKeypressEvents(process.stdin);
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  return new Promise((resolve) => {
-    const onKey = (str: string | undefined, key: { name?: string; ctrl?: boolean } = {}) => {
-      const done = screen.press(str, key);
-      if (!done) return draw();
-      process.stdin.off("keypress", onKey);
-      process.stdout.off("resize", draw);
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      process.stdout.write("\u001b[?25h\u001b[?1049l");
-      resolve(done);
-    };
-    process.stdin.on("keypress", onKey);
-    process.stdout.on("resize", draw);
-    draw();
-  });
-}
-
 // --- main --------------------------------------------------------------
 
 function dataFile(argv: string[]): string | undefined {
@@ -185,7 +155,7 @@ async function main(): Promise<void> {
 
   await runLinkStage({
     load,
-    drive,
+    drive: (screen) => driveLinkScreen(screen, { stdin: process.stdin, stdout: process.stdout, color: !process.env.NO_COLOR }),
     execute: async (sql) => void d1(sql),
     print: (line) => console.log(line),
     now: () => Date.now(),
