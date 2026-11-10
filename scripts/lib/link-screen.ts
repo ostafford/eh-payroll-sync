@@ -141,7 +141,7 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
   const chosen = new Map<number, LinkDecision>();
   const review = new Set(rows.flatMap((r, i) => (toReview(r) ? [i] : [])));
   /** Rows whose link the admin moved to another row, with what `u` on that row puts back. */
-  const movedTo = new Map<number, { to: number; was: LinkDecision | undefined; wasInReview: boolean }>();
+  const movedTo = new Map<number, { to: number; ehEmployeeId: string; was: LinkDecision | undefined; wasInReview: boolean }>();
   /** An EH employee linked to another row, waiting on a second Enter to move here. */
   let pendingMove: string | null = null;
   let cursor = 0;
@@ -187,12 +187,12 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
   const link = (i: number, ehEmployeeId: string | null): boolean => {
     if (ehEmployeeId !== null && ownedElsewhere(i, ehEmployeeId)) return false;
     const other = ehEmployeeId === null ? -1 : linkedRow(ehEmployeeId);
-    if (other >= 0 && other !== i) {
+    if (ehEmployeeId !== null && other >= 0 && other !== i) {
       if (pendingMove !== ehEmployeeId) {
         pendingMove = ehEmployeeId;
         return false;
       }
-      movedTo.set(other, { to: i, was: chosen.get(other), wasInReview: review.has(other) });
+      movedTo.set(other, { to: i, ehEmployeeId, was: chosen.get(other), wasInReview: review.has(other) });
       chosen.delete(other);
       review.add(other);
     }
@@ -202,11 +202,14 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
     return true;
   };
 
-  /** Puts row i back the way it was, giving back any link that was moved here. */
+  /**
+   * Puts row i back the way it was, giving back any link that was moved here -
+   * unless it has since moved on, so no EH employee is ever linked twice.
+   */
   const undo = (i: number) => {
     chosen.delete(i);
     for (const [from, m] of movedTo) {
-      if (m.to !== i) continue;
+      if (m.to !== i || linkedRow(m.ehEmployeeId) >= 0) continue;
       movedTo.delete(from);
       if (m.was) chosen.set(from, m.was);
       if (!m.wasInReview) review.delete(from);
@@ -277,7 +280,11 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       if (mine && !mine.onList) return [p.mark.none, p.dim("(won't link)"), p.change("won't link")];
       if (mine?.onList) return mine.ehEmployeeId === null ? [p.mark.none, p.dim("(none)"), p.change("new hire, not this person")] : linked(mine.ehEmployeeId, p.change("linked"));
       const moved = movedTo.get(i);
-      if (moved !== undefined) return [p.mark.warn, p.dim("(none)"), p.change(`match moved to row ${moved.to + 1}`)];
+      if (moved !== undefined) {
+        // Wherever it is now: it may have moved on since.
+        const holder = linkedRow(moved.ehEmployeeId);
+        return [p.mark.warn, p.dim("(none)"), p.change(`match moved to row ${(holder >= 0 ? holder : moved.to) + 1}`)];
+      }
       if (r.kind === "taken") return [p.mark.bad, p.dim("(none)"), p.bad("Can't link: already linked to someone else")];
       if (r.kind === "alreadySynced") return linked(r.suggestion!, p.dim("already matched by Payroll ID"));
       if (r.kind === "newHire") return [p.mark.none, p.dim("(no match)"), p.dim("new hire")];

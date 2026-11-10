@@ -149,6 +149,27 @@ describe("link screen", () => {
     expect(frame(s)).not.toContain("match moved");
   });
 
+  it("after a chain of moves, u never links one EH employee twice: the link stays where it went last", () => {
+    const jack = ["/", "j", "a", "c", "k", "<return>", "<return>"];
+    // Row 1's match moves to row 5, then on to row 6; then u on row 5.
+    const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", ...jack, "<down>", ...jack, "<up>", "u");
+    expect(s.decisions().filter((d) => d.onList && d.ehEmployeeId === "40213")).toEqual([
+      { ctUserId: 105, onList: true, ehEmployeeId: "40213" },
+    ]);
+    expect(decisionFor(s, 100)).toEqual({ ctUserId: 100, onList: false });
+    expect(frame(s)).toMatch(/1 \[!\]\s+Jack Mitchell .*match moved to row 6/);
+    expect(frame(s)).not.toContain("match moved to row 5");
+  });
+
+  it("after a chain of moves, u on the last row hands the link back one step", () => {
+    const jack = ["/", "j", "a", "c", "k", "<return>", "<return>"];
+    const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", ...jack, "<down>", ...jack, "u");
+    expect(s.decisions().filter((d) => d.onList && d.ehEmployeeId === "40213")).toEqual([
+      { ctUserId: 104, onList: true, ehEmployeeId: "40213" },
+    ]);
+    expect(frame(s)).toMatch(/1 \[!\]\s+Jack Mitchell .*match moved to row 5/);
+  });
+
   it("drops a pending move when the admin backs out with Esc, so the next Enter asks again", () => {
     const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", "/", "j", "a", "c", "k", "<return>");
     expect(frame(s)).toContain("Enter again to move it here");
