@@ -45,6 +45,8 @@ function choicesOf(r: LinkRow): (LinkCandidate | null)[] {
 }
 
 const SEARCH_HITS = 8;
+/** Rows PgUp / PgDn move. */
+const PAGE = 10;
 /** The list's email column: up to 34, down to 12 to leave room for Status (the panel shows emails in full). */
 const EMAIL_W = { max: 34, min: 12 };
 const PACK_W = 20;
@@ -221,6 +223,8 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
     /** One keypress, as readline gives it: "save" or "cancel" ends the screen. */
     press(str: string | undefined, key: LinkKey): "save" | "cancel" | null {
       if (key.ctrl && key.name === "c") return "cancel";
+      // Only pressing the same Enter (or number) again confirms a move; anything else drops it.
+      if (key.name !== "return" && !(str && /^[1-9]$/.test(str))) pendingMove = null;
       if (confirming) {
         if (str === "y") return "save";
         if (str === "n" || key.name === "escape") confirming = false;
@@ -231,6 +235,8 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
       if (searching && i !== undefined) searchKey(i, str, key);
       else if (key.name === "up") cursor = Math.max(0, cursor - 1);
       else if (key.name === "down") cursor = Math.min(v.length - 1, cursor + 1);
+      else if (key.name === "pageup") cursor = Math.max(0, cursor - PAGE);
+      else if (key.name === "pagedown") cursor = Math.max(0, Math.min(v.length - 1, cursor + PAGE));
       else if (key.name === "tab" || str === "s") {
         if (str === "s") byPack = !byPack;
         else showAll = !showAll;
@@ -370,6 +376,7 @@ export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
         if (searching) return `  ${k("↑↓", "choose")}   ${k("Enter", "link")}   ${k("Esc", "back")}`;
         const i = v[cursor];
         const parts = [k("↑↓", "move")];
+        if (v.length > PAGE) parts.push(k("PgUp/PgDn", "page"));
         if (i !== undefined) {
           const mine = chosen.get(i);
           const n = choicesOf(rows[i]!).length;

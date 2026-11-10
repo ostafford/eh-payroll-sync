@@ -132,6 +132,16 @@ describe("link screen", () => {
     expect(decisionFor(press(ruby(), "<down>", "<return>"), 103)).toEqual({ ctUserId: 103, onList: true, ehEmployeeId: "40377" });
   });
 
+  it("drops a pending move when the admin backs out with Esc, so the next Enter asks again", () => {
+    const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", "/", "j", "a", "c", "k", "<return>");
+    expect(frame(s)).toContain("Enter again to move it here");
+    press(s, "<escape>");
+    expect(frame(s)).not.toContain("Enter again to move it here");
+    press(s, "/", "j", "a", "c", "k", "<return>");
+    expect(decisionFor(s, 100)).toEqual({ ctUserId: 100, onList: true, ehEmployeeId: "40213" });
+    expect(decisionFor(s, 104)).toEqual({ ctUserId: 104, onList: false });
+  });
+
   it("moves an EH employee linked to another row only on a second Enter, taking the link off that row", () => {
     const s = press(screen(), "<tab>", "<down>", "<down>", "<down>", "/", "j", "a", "c", "k", "<return>");
     expect(decisionFor(s, 104)).toEqual({ ctUserId: 104, onList: false });
@@ -139,6 +149,15 @@ describe("link screen", () => {
     press(s, "<return>");
     expect(decisionFor(s, 104)).toEqual({ ctUserId: 104, onList: true, ehEmployeeId: "40213" });
     expect(decisionFor(s, 100)).toEqual({ ctUserId: 100, onList: false });
+  });
+
+  it("PgDn and PgUp move ten rows at a time, stopping at either end", () => {
+    const many = Array.from({ length: 30 }, (_, k) => row({ ctUserId: 1000 + k, kind: "newHire" }));
+    const s = press(createLinkScreen({ rows: many, ignoredEhCount: 0 }, people), "<tab>", "<pagedown>");
+    const selected = () => /Row (\d+)/.exec(frame(s))?.[1];
+    expect(selected()).toBe("11");
+    expect((press(s, "<pageup>"), selected())).toBe("1");
+    expect((press(s, "<pagedown>", "<pagedown>", "<pagedown>", "<pagedown>"), selected())).toBe("30");
   });
 
   describe("the frame", () => {
