@@ -278,6 +278,27 @@ function wrap(text: string, indent: string): string[] {
   return out;
 }
 
+/**
+ * The check's colours and marks, shared by the screens that follow its
+ * conventions (the link stage, #154): Employment Hero purple, Connecteam cyan,
+ * changes yellow. With `color` off, plain text and `[ok]` / `[!]` / `[x]` / `[-]`.
+ */
+export function palette(color: boolean) {
+  const c = (code: string) => (s: string) => (color ? `\u001b[${code}m${s}\u001b[0m` : s);
+  const p = { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1"), ok: c("32"), bad: c("31") };
+  return {
+    ...p,
+    mark: {
+      ok: p.ok(color ? "✓" : "[ok]"),
+      warn: p.change(color ? "⚠" : "[!]"),
+      bad: p.bad(color ? "✗" : "[x]"),
+      none: p.dim(color ? "–" : "[-]"),
+    },
+    /** The visible width of a mark. */
+    markWidth: color ? 1 : 4,
+  };
+}
+
 export interface RenderOptions {
   color: boolean;
   /** Number the fields that can be changed (the interactive check). */
