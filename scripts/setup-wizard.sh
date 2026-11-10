@@ -189,13 +189,17 @@ ENV_FILE=".dev.vars"
 TOTAL_STAGES=14
 
 # --stage NAME runs one stage on its own, on a live deployment. Only "link" so far.
+# Read without shifting: the session log below re-runs this script with "$@".
 STAGE_ONLY=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --stage) STAGE_ONLY="${2:-}"; shift 2 || shift ;;
-    *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
+_want_stage=""
+for _arg in "$@"; do
+  if [[ -n "$_want_stage" ]]; then STAGE_ONLY="$_arg"; _want_stage=""; continue; fi
+  case "$_arg" in
+    --stage) _want_stage=1 ;;
+    *) printf 'unknown option: %s\n' "$_arg" >&2; exit 2 ;;
   esac
 done
+[[ -z "$_want_stage" ]] || { printf -- '--stage needs a name (the one stage that runs alone is: link)\n' >&2; exit 2; }
 case "$STAGE_ONLY" in
   ""|link) ;;
   *) printf 'unknown stage: %s (the one stage that runs alone is: link)\n' "$STAGE_ONLY" >&2; exit 2 ;;

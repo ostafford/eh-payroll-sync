@@ -62,4 +62,26 @@ describe("setup wizard, link stage", () => {
     expect(r.stderr).toContain("unknown stage: nope");
     expect(r.calls).toEqual([]);
   });
+
+  it("refuses --stage with no name, rather than running the whole wizard", () => {
+    const r = wizard(["--stage"]);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("--stage needs a name");
+    expect(r.calls).toEqual([]);
+  });
+
+  it("in a terminal, passes --stage link on to the copy of itself that keeps the session log", () => {
+    // The log wrapper only runs in a terminal: give the wizard one with the real `script`,
+    // and put a stub `script` first on PATH that records what the wrapper hands on.
+    const bin = mkdtempSync(join(tmpdir(), "wizard-script-"));
+    const log = join(bin, "script.log");
+    writeFileSync(join(bin, "script"), `#!/usr/bin/env bash\n[[ "\${1:-}" == "--version" ]] && exit 1\nprintf '%s\\n' "$*" >> "${log}"\n`);
+    chmodSync(join(bin, "script"), 0o755);
+    const inner = `PATH="${bin}:$PATH" bash ${WIZARD} --stage link`;
+    const outer = process.platform === "darwin" ? ["-q", "/dev/null", "bash", "-c", inner] : ["-qec", inner, "/dev/null"];
+    // stdin from /dev/null: `script` refuses a pipe or socket.
+    const r = spawnSync("/usr/bin/script", outer, { cwd: root, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 30_000 });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(readFileSync(log, "utf8")).toMatch(/setup-wizard-\S+\.log bash scripts\/setup-wizard\.sh --stage link$/m);
+  });
 });
