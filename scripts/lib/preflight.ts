@@ -16,9 +16,15 @@
  *     copied in since (ADR-0011).
  *   - The Payroll ID is the one copied into the client's Connecteam field when
  *     `identity.externalIdFrom` names one and it's filled, else the Connecteam
- *     `userId`. A copied one that finds one EH employee links them with no EH
- *     write, but only when one of the Pre-create check's keys also agrees
- *     (email, TFN, name + DOB); otherwise they're held.
+ *     `userId`. An EH record it finds that the sync already holds for someone
+ *     else is refused (a System alert), so it's flagged with "used twice".
+ *   - A copied one that finds one EH employee links them with no EH write, but
+ *     only when one of the Pre-create check's keys also agrees (email, TFN,
+ *     name + DOB); otherwise they're held.
+ *   - Any other Payroll ID that finds one EH employee updates it, with no
+ *     agreement check. A stored one means the sync wrote that record (already
+ *     synced); without one, approval overwrites a record the sync has no
+ *     record of, e.g. a previous deployment's after a reset.
  *   - Found nobody: a "New hire, not this person" row on the Link list is
  *     created. Anyone else goes through the Pre-create check (ADR-0010): any EH
  *     employee one of those keys agrees with holds them, else they're created.
@@ -143,6 +149,7 @@ interface PersonContext {
   payrollId: string;
   /** The Payroll ID stored at their first sync or link. */
   stored: string | null;
+  /** Their details don't map yet. A row's `waitsForDetails` is this where the sync checks details before writing. */
   detailsIncomplete: boolean;
   newHire: boolean;
 }
@@ -180,6 +187,12 @@ export function classifyAll(
     return { p, base, decided, payrollId, stored, detailsIncomplete, newHire: linkTo === null };
   });
 
+  // EH records employee_map already gives to someone: the sync refuses a link
+  // or update onto one of these for anyone else (findByEhEmployeeId; the Link
+  // list isn't checked there).
+  const ownerOf = new Map<string, number>();
+  for (const m of opts.records?.employeeMap ?? []) if (m.ehEmployeeId !== null) ownerOf.set(m.ehEmployeeId, m.ctUserId);
+
   // Only people who reach the comparison can collide on a Payroll ID.
   const idCount = new Map<string, number>();
   for (const c of contexts) if (!c.decided) idCount.set(c.payrollId, (idCount.get(c.payrollId) ?? 0) + 1);
@@ -191,6 +204,8 @@ export function classifyAll(
     if ((idCount.get(payrollId) ?? 0) > 1 || holders.length > 1) return { ...base, outcome: "id-used-twice", eh: holders };
 
     const [holder] = holders;
+    const owner = holder ? ownerOf.get(String(holder.ehEmployeeId)) : undefined;
+    if (holder && owner !== undefined && owner !== p.ctUserId) return { ...base, outcome: "id-used-twice", eh: [holder] };
     if (holder) {
       // Only a Payroll ID from the client's field is checked for agreement
       // (consumer.ts gates on it); for any other key the sync updates that
@@ -222,7 +237,7 @@ const GROUPS = {
   "id-used-twice": {
     mark: "⛔",
     title: "Payroll ID used twice",
-    action: "Two Connecteam people share one Payroll ID, or EH holds it on more than one record. Fix the Payroll ID field in Connecteam (or the duplicate in EH).",
+    action: "Two Connecteam people share one Payroll ID, EH holds it on more than one record, or the EH record it finds is already someone else's in the sync. Fix the Payroll ID field in Connecteam (or the duplicate in EH).",
     attention: true,
   },
   "found-no-agreement": {

@@ -36,8 +36,10 @@ person is one of:
   pack answers don't map yet is marked `details incomplete`: the sync asks them
   to finish first, then goes ahead. The same mark shows on anyone the sync would
   update (not a Linked employee, who gets only their changes).
-- **Payroll ID used twice.** Two Connecteam people share one, or EH holds it on
-  two records. Fix it before either is approved.
+- **Payroll ID used twice.** Two Connecteam people share one, EH holds it on
+  two records, or the EH record it finds already belongs to someone else the
+  sync has synced (the sync would refuse it with a System alert). Fix it before
+  either is approved.
 - **No Payroll ID:** the client's Payroll ID field is set but blank for them,
   so they get their Connecteam ID. Always listed; it needs a look only when
   they'd also be held.

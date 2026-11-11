@@ -138,17 +138,6 @@ describe("classifyAll", () => {
   });
 
   describe("already synced", () => {
-    it("not with no database: their userId in EH is a previous deployment's, so approval overwrites it", () => {
-      const r = one(person({ payrollId: "100", payrollIdFromField: false }), [eh({ id: 8, externalId: "100" })], { payrollIdField: false });
-      expect(r).toMatchObject({ outcome: "in-eh-not-synced", eh: [{ ehEmployeeId: 8 }] });
-      expect(needsAttention(r)).toBe(true);
-    });
-
-    it("not with no database and a copied Payroll ID: that's what the sync looks up, so their old record is a Pre-create hit", () => {
-      const r = one(person(), [eh({ id: 9, externalId: "100", emailAddress: "jack@example.com" })]);
-      expect(r).toMatchObject({ outcome: "not-found", hits: [{ ehEmployeeId: 9, agree: ["email"] }] });
-    });
-
     it("from the database, when they synced or were linked under a copied Payroll ID", () => {
       const synced = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "10", lastOutcome: "ok" })] });
       const r = one(person(), [eh({ id: 10, externalId: "E0042" })], { records: synced });
@@ -158,6 +147,39 @@ describe("classifyAll", () => {
     it("not from a database row that never synced (held, or a failed first attempt)", () => {
       const held = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: null, lastOutcome: "existing_match" })] });
       expect(one(person(), [eh({ id: 11, externalId: "E0042" })], { records: held }).outcome).toBe("found-no-agreement");
+    });
+  });
+
+  describe("no database yet (before the first deploy): the same empty start as the sync", () => {
+    it("their userId in EH is a previous deployment's, so approval overwrites it", () => {
+      const r = one(person({ payrollId: "100", payrollIdFromField: false }), [eh({ id: 8, externalId: "100" })], { payrollIdField: false });
+      expect(r).toMatchObject({ outcome: "in-eh-not-synced", eh: [{ ehEmployeeId: 8 }] });
+      expect(needsAttention(r)).toBe(true);
+    });
+
+    it("with a copied Payroll ID, that's what the sync looks up, so their old record is a Pre-create hit", () => {
+      const r = one(person(), [eh({ id: 9, externalId: "100", emailAddress: "jack@example.com" })]);
+      expect(r).toMatchObject({ outcome: "not-found", hits: [{ ehEmployeeId: 9, agree: ["email"] }] });
+    });
+  });
+
+  describe("an EH record the sync already gives to someone else", () => {
+    const takenBy200 = records({ employeeMap: [mapRow({ ctUserId: 200, ehEmployeeId: "60", lastOutcome: "ok", externalId: "E0042" })] });
+
+    it("is refused for a copied Payroll ID that agrees, so it's 'used twice', not 'will be linked'", () => {
+      const r = one(person(), [eh({ id: 60, externalId: "E0042", emailAddress: "jack@example.com" })], { records: takenBy200 });
+      expect(r).toMatchObject({ outcome: "id-used-twice", eh: [{ ehEmployeeId: 60 }] });
+      expect(needsAttention(r)).toBe(true);
+    });
+
+    it("is refused for any other Payroll ID too (the collision alert)", () => {
+      const r = one(person({ payrollId: "E0042", payrollIdFromField: false }), [eh({ id: 60, externalId: "E0042" })], { payrollIdField: false, records: takenBy200 });
+      expect(r.outcome).toBe("id-used-twice");
+    });
+
+    it("isn't checked against the Link list, as the sync doesn't", () => {
+      const listed = records({ pendingLinks: [{ ctUserId: 200, ehEmployeeId: "60" }] });
+      expect(one(person(), [eh({ id: 60, externalId: "E0042", emailAddress: "jack@example.com" })], { records: listed }).outcome).toBe("found");
     });
   });
 
