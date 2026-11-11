@@ -12,7 +12,11 @@ const store = new SyncStore(env.DB);
 const baseline = { keyId: "k1", units: { phone: "fp-phone", bankAccount1: "fp-bank" } };
 
 beforeEach(async () => {
-  await env.DB.batch([env.DB.prepare("DELETE FROM employee_map"), env.DB.prepare("DELETE FROM pending_link")]);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM employee_map"),
+    env.DB.prepare("DELETE FROM pending_link"),
+    env.DB.prepare("DELETE FROM onboarding_state"),
+  ]);
 });
 
 describe("pending_link", () => {
@@ -153,5 +157,53 @@ describe("migration 0006 backfill", () => {
       await Promise.all([7, 8, 9, 10].map(async (id) => [id, (await store.getEmployeeLink(id))?.externalId])),
     );
     expect(keys).toEqual({ 7: "7", 8: "8", 9: null, 10: null });
+  });
+});
+
+describe("pending links the sweep picks up (#155)", () => {
+  const approve = (ctUserId: number, status: "completed" | "in_progress" = "completed") =>
+    store.writeOnboardingState([{ id: ctUserId + 1000, userId: ctUserId, status, isWaitingApproval: false }], 1);
+  const pending = (ctUserId: number) => store.savePendingLink({ ctUserId, ehEmployeeId: "40213", confirmedAt: 100 });
+
+  it("lists an approved person with a pending link and no employee_map row, and nobody else", async () => {
+    await approve(1);
+    await pending(1); // approved, never synced: listed
+    await approve(2); // approved, no pending link
+    await approve(3, "in_progress");
+    await pending(3); // pending link, not approved yet
+    await approve(4);
+    await pending(4);
+    await store.saveEmployeeLink({ ctUserId: 4, ehEmployeeId: null, lastSyncedTs: 1, lastPayloadHash: null, lastOutcome: "existing_match" }); // Held: the recheck's job
+
+    expect(await store.listUnsyncedLinks()).toEqual([1]);
+  });
+
+  it("drops someone once marked queued, until their link is confirmed again", async () => {
+    await approve(1);
+    await pending(1);
+
+    await store.markLinksQueued([1, 99]); // 99 is a fresh approval with no pending link: a no-op
+    expect(await store.listUnsyncedLinks()).toEqual([]);
+
+    await store.savePendingLink({ ctUserId: 1, ehEmployeeId: "40999", confirmedAt: 300 });
+    expect(await store.listUnsyncedLinks()).toEqual([1]);
+    expect(await store.getPendingLink(1)).toEqual({ ctUserId: 1, ehEmployeeId: "40999", confirmedAt: 300 });
+  });
+});
+
+describe("Held employees the daily recheck re-queues (#155)", () => {
+  const row = (ctUserId: number, lastOutcome: string, updatedAt: number) =>
+    env.DB.prepare("INSERT INTO employee_map (ct_user_id, last_outcome, updated_at) VALUES (?, ?, ?)")
+      .bind(ctUserId, lastOutcome, updatedAt)
+      .run();
+
+  it("lists every existing_match row, least recently updated first, and nobody else", async () => {
+    await row(1, "existing_match", 300);
+    await row(2, "ok", 100);
+    await row(3, "existing_match", 100);
+    await row(4, "follow_up", 200);
+    await row(5, "existing_match", 200);
+
+    expect(await store.listHeldLinks()).toEqual([3, 5, 1]);
   });
 });

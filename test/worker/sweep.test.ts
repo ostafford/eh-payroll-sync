@@ -22,6 +22,8 @@ function deps(list: OnboardingAssignment[]) {
     rateLimit: () => null,
     readState: () => store.readOnboardingState(),
     writeState: (a, seenAt) => store.writeOnboardingState(a, seenAt),
+    listUnsyncedLinks: () => store.listUnsyncedLinks(),
+    markLinksQueued: (ids) => store.markLinksQueued(ids),
     enqueue: async (jobs) => {
       enqueued.push(...jobs);
     },

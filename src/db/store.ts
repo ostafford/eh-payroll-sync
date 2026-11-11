@@ -4,7 +4,7 @@
  * unit tests use a fake gateway instead.
  */
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, notExists, sql } from "drizzle-orm";
 import { employeeMap, onboardingState, pendingLink, syncLog, syncMeta } from "./schema.js";
 import type {
   Baseline,
@@ -84,6 +84,16 @@ export class SyncStore implements SyncGateway, LinkGateway {
       .from(employeeMap)
       .where(and(eq(employeeMap.lastOutcome, "follow_up"), isNotNull(employeeMap.ehEmployeeId)));
     return rows.map(toEmployeeLink);
+  }
+
+  /** The ctUserId of every Held employee (`existing_match`), least recently updated first (#155). */
+  async listHeldLinks(): Promise<number[]> {
+    const rows = await this.#db
+      .select({ ctUserId: employeeMap.ctUserId })
+      .from(employeeMap)
+      .where(eq(employeeMap.lastOutcome, "existing_match"))
+      .orderBy(asc(employeeMap.updatedAt), asc(employeeMap.ctUserId));
+    return rows.map((r) => r.ctUserId);
   }
 
   async getFailureCount(ctUserId: number): Promise<number> {
@@ -175,9 +185,44 @@ export class SyncStore implements SyncGateway, LinkGateway {
 
   // --- linking Pre-existing employees (ADR-0009, ADR-0010) ---
 
+  /**
+   * Approved, never-synced people with a pending link (#155): their pack is
+   * `completed` but they have no `employee_map` row. A Held employee has a
+   * row, so the daily recheck picks them up instead.
+   */
+  async listUnsyncedLinks(): Promise<number[]> {
+    const rows = await this.#db
+      .select({ ctUserId: pendingLink.ctUserId })
+      .from(pendingLink)
+      .where(
+        and(
+          isNull(pendingLink.queuedAt),
+          exists(
+            this.#db
+              .select({ one: sql`1` })
+              .from(onboardingState)
+              .where(and(eq(onboardingState.ctUserId, pendingLink.ctUserId), eq(onboardingState.status, "completed"))),
+          ),
+          notExists(
+            this.#db.select({ one: sql`1` }).from(employeeMap).where(eq(employeeMap.ctUserId, pendingLink.ctUserId)),
+          ),
+        ),
+      );
+    return rows.map((r) => r.ctUserId);
+  }
+
+  /** Mark these people's pending links as queued; anyone without one is skipped. */
+  async markLinksQueued(ctUserIds: readonly number[]): Promise<void> {
+    if (ctUserIds.length === 0) return;
+    await this.#db
+      .update(pendingLink)
+      .set({ queuedAt: Date.now() })
+      .where(inArray(pendingLink.ctUserId, [...ctUserIds]));
+  }
+
   async getPendingLink(ctUserId: number): Promise<PendingLink | null> {
     const [row] = await this.#db
-      .select()
+      .select(pendingLinkColumns)
       .from(pendingLink)
       .where(eq(pendingLink.ctUserId, ctUserId))
       .limit(1);
@@ -185,7 +230,7 @@ export class SyncStore implements SyncGateway, LinkGateway {
   }
 
   async listPendingLinks(): Promise<PendingLink[]> {
-    return this.#db.select().from(pendingLink);
+    return this.#db.select(pendingLinkColumns).from(pendingLink);
   }
 
   async savePendingLink(link: PendingLink): Promise<void> {
@@ -194,7 +239,7 @@ export class SyncStore implements SyncGateway, LinkGateway {
       .values(link)
       .onConflictDoUpdate({
         target: pendingLink.ctUserId,
-        set: { ehEmployeeId: link.ehEmployeeId, confirmedAt: link.confirmedAt },
+        set: { ehEmployeeId: link.ehEmployeeId, confirmedAt: link.confirmedAt, queuedAt: null },
       });
   }
 
@@ -297,6 +342,13 @@ function toEmployeeLink(row: typeof employeeMap.$inferSelect): EmployeeLink {
 }
 
 /** On an upsert, the stored match key wins over the new one: it's fixed at first sync (ADR-0011). */
+/** A `pending_link` row as {@link PendingLink}: the sweep's own `queued_at` stays inside the store. */
+const pendingLinkColumns = {
+  ctUserId: pendingLink.ctUserId,
+  ehEmployeeId: pendingLink.ehEmployeeId,
+  confirmedAt: pendingLink.confirmedAt,
+};
+
 const keepFirstExternalId = sql`coalesce(${employeeMap.externalId}, excluded.external_id)`;
 
 /** The stored Baseline, or null when there is none or it isn't the shape we write. */

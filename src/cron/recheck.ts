@@ -24,12 +24,19 @@
  *     apart from an unchanged one via `detailedStatus`, which needs a write;
  *     surfacing a new admin reason stays the job of the next real sync
  *     (profile edit or approval), same as before this pass existed.
+ *
+ * It also re-queues every Held employee (#155, #165). Their hold can be
+ * resolved without a profile edit - a link confirmed in the link list, or the
+ * Payroll ID filled in in Connecteam (ADR-0011) - and D1 can't see the second,
+ * so each one simply runs again. Deciding who that is is a D1 read, never an
+ * EH call.
  */
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { EhPayrollClient } from "../eh/client.js";
 import type { RecheckGateway } from "../sync/gateway.js";
 import { resolvedNoticeMessage, type PersonRef } from "../sync/messages.js";
 import { logEvent } from "../log.js";
+import type { SyncJob } from "../sync/job.js";
 
 export interface RecheckDeps {
   eh: Pick<EhPayrollClient, "getByExternalId">;
@@ -37,6 +44,8 @@ export interface RecheckDeps {
   store: RecheckGateway;
   /** Connecteam conversation id for the "EH Sync Alerts" channel. */
   adminChannelId: string;
+  /** Put sync jobs on the queue: how Held employees run again. */
+  enqueue: (jobs: SyncJob[]) => Promise<void>;
   now?: () => number;
   /**
    * Cap on EH lookups this run. The approval sweep's own Connecteam budget
@@ -46,6 +55,12 @@ export interface RecheckDeps {
    * cap are simply picked up on the next daily run.
    */
   maxPerRun?: number;
+  /**
+   * Cap on Held employees queued this run: the sweep's pacing of 20 a tick
+   * (#155). The store lists them least recently updated first, and a re-held
+   * row is updated, so any past the cap are queued on a later day.
+   */
+  maxHeldPerRun?: number;
 }
 
 export interface RecheckResult {
@@ -61,14 +76,23 @@ export interface RecheckResult {
    * failed, the record has vanished, or the resolved notice failed to send.
    */
   skipped: number;
+  /** Held employees queued to run again. */
+  requeued: number;
 }
 
 const DEFAULT_MAX_RECHECK = 25;
+const DEFAULT_MAX_HELD = 20;
 const INCOMPLETE = "incomplete";
 
 export async function runRecheck(deps: RecheckDeps): Promise<RecheckResult> {
   const now = deps.now ?? Date.now;
   const max = deps.maxPerRun ?? DEFAULT_MAX_RECHECK;
+
+  const held = (await deps.store.listHeldLinks()).slice(0, deps.maxHeldPerRun ?? DEFAULT_MAX_HELD);
+  if (held.length > 0) {
+    const at = now();
+    await deps.enqueue(held.map((ctUserId) => ({ reason: "approval", ctUserId, eventTimestamp: at })));
+  }
 
   const links = (await deps.store.listFollowUpLinks()).slice(0, max);
 
@@ -134,7 +158,7 @@ export async function runRecheck(deps: RecheckDeps): Promise<RecheckResult> {
     });
   }
 
-  return { status: "ok", checked: links.length, resolved, stillIncomplete, skipped };
+  return { status: "ok", checked: links.length, resolved, stillIncomplete, skipped, requeued: held.length };
 }
 
 /** Best-effort name for the notice; falls back to the id-only ref. */

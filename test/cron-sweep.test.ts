@@ -123,8 +123,12 @@ function sweepDeps(over: Partial<SweepDeps> = {}): {
   enqueued: SyncJob[][];
   persisted: Array<{ assignments: readonly OnboardingAssignment[]; seenAt: number }>;
   state: OnboardingStateRow[];
+  /** Approved, never-synced people with a pending link, before the queued marker (what D1 would match). */
+  unsynced: number[];
 } {
   const enqueued: SyncJob[][] = [];
+  const unsynced: number[] = [];
+  const queuedLinks = new Set<number>();
   const persisted: Array<{ assignments: readonly OnboardingAssignment[]; seenAt: number }> = [];
   const state: OnboardingStateRow[] = [];
   const deps: SweepDeps = {
@@ -149,10 +153,16 @@ function sweepDeps(over: Partial<SweepDeps> = {}): {
         }
       }),
     enqueue: over.enqueue ?? (async (jobs) => { enqueued.push(jobs); }),
+    listUnsyncedLinks: over.listUnsyncedLinks ?? (async () => unsynced.filter((id) => !queuedLinks.has(id))),
+    markLinksQueued:
+      over.markLinksQueued ??
+      (async (ctUserIds) => {
+        for (const id of ctUserIds) queuedLinks.add(id);
+      }),
     now: over.now ?? (() => 1_700_000_000_000),
     ...(over.maxEnqueuePerSweep !== undefined ? { maxEnqueuePerSweep: over.maxEnqueuePerSweep } : {}),
   };
-  return { deps, enqueued, persisted, state };
+  return { deps, enqueued, persisted, state, unsynced };
 }
 
 describe("runSweep", () => {
@@ -251,5 +261,65 @@ describe("runSweep", () => {
     expect(res.status).toBe("retry");
     expect(enqueue).not.toHaveBeenCalled();
     expect(writeState).not.toHaveBeenCalled();
+  });
+});
+
+describe("runSweep - approved, never-synced people with a pending link (#155)", () => {
+  it("queues them for their link, with no new approval needed", async () => {
+    const h = sweepDeps();
+    h.unsynced.push(201);
+
+    const res = await runSweep(h.deps);
+
+    expect(res).toMatchObject({ status: "ok", enqueued: 1 });
+    expect(h.enqueued).toEqual([[{ reason: "approval", ctUserId: 201, eventTimestamp: 1_700_000_000_000 }]]);
+  });
+
+  it("queues each one once: the next tick, with their job still in flight, queues nobody", async () => {
+    const h = sweepDeps();
+    h.unsynced.push(201);
+
+    await runSweep(h.deps);
+    const second = await runSweep(h.deps);
+
+    expect(second.enqueued).toBe(0);
+    expect(h.enqueued.flat().map((j) => j.ctUserId)).toEqual([201]);
+  });
+
+  it("a fresh approval counts as queued for its link, so the next tick doesn't queue it again", async () => {
+    const h = sweepDeps({
+      listAssignments: async () => ({ outcome: "ok", data: [asg({ id: 1, userId: 101, status: "completed" })] }),
+    });
+
+    await runSweep(h.deps);
+    h.unsynced.push(101); // now completed in onboarding_state, still pending, job not yet run
+    const second = await runSweep(h.deps);
+
+    expect(second.enqueued).toBe(0);
+    expect(h.enqueued.flat().map((j) => j.ctUserId)).toEqual([101]);
+  });
+
+  it("share the tick's budget with fresh approvals, which go first; the rest wait for the next tick", async () => {
+    const h = sweepDeps({
+      maxEnqueuePerSweep: 2,
+      listAssignments: async () => ({ outcome: "ok", data: [asg({ id: 1, userId: 101, status: "completed" })] }),
+    });
+    h.unsynced.push(201, 202, 203);
+
+    const r1 = await runSweep(h.deps);
+    const r2 = await runSweep(h.deps);
+
+    expect([r1.enqueued, r2.enqueued]).toEqual([2, 2]);
+    expect(h.enqueued.map((b) => b.map((j) => j.ctUserId))).toEqual([[101, 201], [202, 203]]);
+  });
+
+  it("queue none under Connecteam rate pressure", async () => {
+    const h = sweepDeps({ rateLimit: () => ({ minuteRemaining: 3, minuteLimit: 200, dayRemaining: 9000 }) });
+    h.unsynced.push(201);
+
+    const res = await runSweep(h.deps);
+
+    expect(res.enqueued).toBe(0);
+    expect(h.enqueued).toEqual([]);
   });
 });
