@@ -29,6 +29,13 @@ const PAY_RUN_KEYS: ReadonlySet<string> = new Set([
   "awardId",
 ]);
 
+/**
+ * What the pay-run unit's fingerprint covers: the Connecteam pay rate only.
+ * The rest of the set comes from the field map, so a client changing a
+ * default doesn't send every Linked employee's set again (ADR-0009).
+ */
+const PAY_RATE_KEYS: ReadonlySet<string> = new Set(["rate", "rateUnit"]);
+
 const TAX_DECLARATION_KEYS: ReadonlySet<string> = new Set([
   "claimTaxFreeThreshold",
   "australianResident",
@@ -97,6 +104,7 @@ export async function baselineKeyId(secret: string): Promise<string> {
 /**
  * The Baseline of a mapped payload: one fingerprint per unit. The unit name is
  * part of what's signed, so two units holding the same values still differ.
+ * The pay-run unit signs only {@link PAY_RATE_KEYS}.
  */
 export async function takeBaseline(
   payload: Record<string, unknown>,
@@ -108,7 +116,13 @@ export async function takeBaseline(
   const key = await hmacKey(secret);
   const units: Record<string, string> = {};
   for (const [unit, values] of Object.entries(unitsOf(payload, map, unmapped))) {
-    units[unit] = await hmacHex(key, canonicalJson({ unit, values }));
+    const signed = unit === "payRun" ? Object.fromEntries(Object.entries(values).filter(([k]) => PAY_RATE_KEYS.has(k))) : values;
+    units[unit] = await hmacHex(key, canonicalJson({ unit, values: signed }));
   }
   return { keyId: await baselineKeyId(secret), units };
+}
+
+/** The units whose fingerprint differs between two Baselines: what changed since `before` was taken. */
+export function changedUnits(before: Baseline, now: Baseline): string[] {
+  return Object.keys(now.units).filter((unit) => now.units[unit] !== before.units[unit]);
 }

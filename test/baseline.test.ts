@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { baselineKeyId, takeBaseline, unitOf, unitsOf } from "../src/sync/baseline.js";
+import { baselineKeyId, changedUnits, takeBaseline, unitOf, unitsOf } from "../src/sync/baseline.js";
 
 const map = { rules: { constants: { bankAccount1_AllocatedPercentage: 100, bankAccount1: "Electronic" } } };
 
@@ -86,5 +86,25 @@ describe("takeBaseline", () => {
 
   it("refuses to fingerprint without a key", async () => {
     await expect(takeBaseline(payload, map, "")).rejects.toThrow("BASELINE_KEY is not set");
+  });
+});
+
+describe("changedUnits", () => {
+  it("names each unit that differs, a group once however many of its values changed", async () => {
+    const before = await takeBaseline(payload, map, "k-one");
+    const now = await takeBaseline({ ...payload, bankAccount1_BSB: "063000", bankAccount1_AccountNumber: "99999999", firstName: "Sam" }, map, "k-one");
+    expect(changedUnits(before, now).sort()).toEqual(["bankAccount1", "firstName"]);
+    expect(changedUnits(before, before)).toEqual([]);
+  });
+});
+
+describe("the pay-run unit's fingerprint", () => {
+  it("moves with the Connecteam pay rate, not with a field-map default", async () => {
+    const before = await takeBaseline(payload, map, "k-one");
+    const newDefault = await takeBaseline({ ...payload, paySchedule: "Monthly" }, map, "k-one");
+    const newRate = await takeBaseline({ ...payload, rate: 35 }, map, "k-one");
+
+    expect(newDefault.units.payRun).toBe(before.units.payRun);
+    expect(newRate.units.payRun).not.toBe(before.units.payRun);
   });
 });

@@ -19,6 +19,7 @@
  */
 import type { SyncJob } from "./job.js";
 import type { FieldMap } from "../mapping/schema.js";
+import { FOLLOW_UP } from "../mapping/rules.js";
 import { applyFieldMap, leftOutBy, type ConnecteamUser as MappingUser, type MappingResult } from "../mapping/apply.js";
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { CtResult, PayRate } from "../connecteam/types.js";
@@ -55,7 +56,7 @@ import {
 import { runPreCreateCheck, existingMatchDetail, compareKeys, isTerminated, type ExistingMatch, type MatchKey } from "./precheck.js";
 import { advanceCycle, directManagerUserId, MANAGER_ESCALATION_CYCLE } from "./cycles.js";
 import { payloadHash } from "./canonical.js";
-import { takeBaseline } from "./baseline.js";
+import { changedUnits, takeBaseline, unitOf } from "./baseline.js";
 import { logEvent } from "../log.js";
 import {
   noticeKey,
@@ -79,7 +80,7 @@ export interface SyncDeps {
    * `getPendingLink`: a confirmed link is made on the first approval, and a
    * "New hire, not this person" row skips the Pre-create check.
    */
-  store: SyncGateway & Pick<LinkGateway, "getPendingLink" | "completeLink">;
+  store: SyncGateway & Pick<LinkGateway, "getPendingLink" | "completeLink" | "saveBaseline">;
   /** `BASELINE_KEY`: keys a Linked employee's Baseline fingerprints (ADR-0009). */
   baselineKey: string;
   fieldMap: FieldMap;
@@ -224,9 +225,10 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   }
 
   // A Linked employee never gets a full-profile sync (ADR-0009): that would
-  // overwrite what EH holds for them. Until the changed-units sync (#151)
-  // exists, their edits write nothing.
-  if (link?.linkedAt) return { status: "skipped", reason: "linked employee: changed-units sync not built yet" };
+  // overwrite what EH holds for them. Only what changed since their Baseline goes.
+  if (link?.linkedAt) {
+    return syncChangedUnits(deps, { link, user, person, mapped, payRate, matchKey, hash, eventTimestamp, now });
+  }
 
   // A confirmed link (ADR-0009): someone never synced before, with a
   // pending link to an EH employee, is linked on this approval. Only the
@@ -408,6 +410,30 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
     });
   }
 
+  return settle(deps, { link, user, person, hash, decision, ehEmployeeId, keyToStore, eventTimestamp, now });
+}
+
+/**
+ * The end of every sync that reached a decision: send its messages, move the
+ * failure cycle, and record the outcome. Each send is claimed first and
+ * checked (ADR-0007, #89), so a retry re-runs this safely.
+ */
+async function settle(
+  deps: SyncDeps,
+  s: {
+    link: EmployeeLink | null;
+    user: { customFields: Parameters<typeof directManagerUserId>[0] };
+    person: PersonRef;
+    hash: string;
+    decision: SyncDecision;
+    ehEmployeeId: string | undefined;
+    keyToStore: string | null;
+    eventTimestamp: number;
+    now: () => number;
+  },
+): Promise<SyncJobOutcome> {
+  const { link, user, person, hash, decision, ehEmployeeId, keyToStore, eventTimestamp, now } = s;
+  const { ctUserId } = person;
   if (decision.kind === "retry") return { status: "retry", reason: decision.detail };
 
   let managerNotified = false;
@@ -704,6 +730,143 @@ async function linkOnApproval(
   if ((linking.link?.failureCycleCount ?? 0) > 0) await deps.store.setFailureCount(ctUserId, 0);
   await deps.store.appendSyncLog({ ctUserId, at: linking.now, outcome: "ok", detail: LINKED_DETAIL });
   return { status: "synced", reason: LINKED_DETAIL, ehEmployeeId };
+}
+
+/** The unit each mapping follow-up is about. One not listed here is always posted. */
+const FOLLOW_UP_UNIT: Record<string, string> = {
+  [FOLLOW_UP.nonResident]: "taxDeclaration",
+  [FOLLOW_UP.smsfSuper]: "super",
+  [FOLLOW_UP.internationalAddress]: "residentialAddress",
+};
+
+/**
+ * A Linked employee's sync (ADR-0009, #151): send EH only the units that
+ * differ from their Baseline, never the whole profile.
+ */
+async function syncChangedUnits(
+  deps: SyncDeps,
+  sync: {
+    link: EmployeeLink;
+    user: { customFields: Parameters<typeof directManagerUserId>[0] };
+    person: PersonRef;
+    mapped: MappingResult;
+    payRate: PayRate | null | undefined;
+    matchKey: string;
+    hash: string;
+    eventTimestamp: number;
+    now: () => number;
+  },
+): Promise<SyncJobOutcome> {
+  const { link, mapped } = sync;
+  const { ctUserId } = link;
+  const { baseline } = link;
+  // No readable Baseline (a bad stored value): re-baseline from the pack as
+  // it is now and send nothing, as for a lost key (ADR-0009). A full sync
+  // would overwrite EH. Edits not yet pushed are absorbed into it.
+  if (!baseline) {
+    const unmapped = mapped.issues.map((i) => i.ehField);
+    await deps.store.saveBaseline(ctUserId, await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped));
+    await deps.store.saveEmployeeLink({
+      ctUserId,
+      ehEmployeeId: link.ehEmployeeId,
+      lastSyncedTs: sync.eventTimestamp,
+      lastPayloadHash: sync.hash,
+    });
+    return { status: "skipped", reason: "Baseline unreadable: re-baselined, nothing sent" };
+  }
+  // A Connecteam rate the sync can't map leaves no pay-run keys on the
+  // payload. Marked as unmapped, its unit reads as changed (and back once the
+  // rate is usable again). A field-map gap (`payRunBlocking`) isn't a change
+  // to the rate, so it isn't marked: once fixed, a rate that differs is sent.
+  // A Baseline with no pay-run unit is left to #152 (units it doesn't hold yet).
+  const rateUnusable = mapped.payRunIssues.length > 0 && !mapped.payRunBlocking;
+  const payRunUnmapped = rateUnusable && baseline.units.payRun ? ["rate"] : [];
+  const unmapped = [...mapped.issues.map((i) => i.ehField), ...payRunUnmapped];
+  const current = await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped);
+  const changed = new Set(changedUnits(baseline, current));
+  // A new hash with nothing new in it (e.g. only a constant moved): store the
+  // hash so the next identical delivery stops at the hash check, write nothing.
+  if (changed.size === 0) {
+    await deps.store.saveEmployeeLink({
+      ctUserId,
+      ehEmployeeId: link.ehEmployeeId,
+      lastSyncedTs: sync.eventTimestamp,
+      lastPayloadHash: sync.hash,
+    });
+    return { status: "skipped", reason: "no change since the link" };
+  }
+  // A mapping issue counts only inside a unit that changed: that unit can't
+  // be sent, so it's a Correction, as in a full sync.
+  const issues = mapped.issues.filter((i) => changed.has(unitOf(i.ehField)));
+  let decision: SyncDecision;
+  let ehEmployeeId = link.ehEmployeeId ?? undefined;
+  // The units the accepted write carried: only their fingerprints move.
+  let sent = new Set<string>();
+  if (issues.length > 0) {
+    decision = decide({ mappingIssues: issues });
+  } else {
+    // A changed, usable pay-run set is re-mapped against EH's current record
+    // (#102): a `defaults` value EH already holds is left off, so one set by
+    // hand survives. An unusable rate sends nothing about pay, whatever EH
+    // holds: the Connecteam rate didn't change to anything EH can take.
+    const payRunIssues = changed.has("payRun") && rateUnusable ? mapped.payRunIssues : [];
+    let sending = mapped;
+    let ehRecord: EhEmployee | null | undefined;
+    if (changed.has("payRun") && !rateUnusable) {
+      const found = await deps.eh.getByExternalId(sync.matchKey);
+      if (found.outcome !== "ok") return ehRetry(found);
+      ehRecord = found.data;
+      sending = applyFieldMap(sync.user as unknown as MappingUser, deps.fieldMap, { payRate: sync.payRate, ehRecord });
+    }
+    // As with mapping issues, a follow-up counts only for a unit that changed.
+    const followUps = sending.followUps.filter((f) => !(f in FOLLOW_UP_UNIT) || changed.has(FOLLOW_UP_UNIT[f]!));
+    const payload = Object.fromEntries(Object.entries(sending.payload).filter(([key]) => changed.has(unitOf(key))));
+
+    if (Object.keys(payload).length === 0) {
+      // Only the unusable rate changed: nothing to write, the reasons go to the admin.
+      decision = decide({ payRunUnresolved: payRunIssues, followUps });
+    } else {
+      const write = await deps.eh.upsertByExternalId(sync.matchKey, payload, ehRecord);
+      if (write.outcome === "retryable" || write.outcome === "client_error") return ehRetry(write);
+      // Only what was sent is read back: EH is the source of truth for the rest.
+      let readBack: ReadBackResult | undefined;
+      if (write.outcome === "ok") {
+        ehEmployeeId = String(write.data.id);
+        // A unit counts as sent only if the write carried a key of it.
+        sent = new Set(Object.keys(payload).map(unitOf));
+        const rb = await deps.eh.getByExternalId(sync.matchKey);
+        if (rb.outcome === "ok" && rb.data) {
+          readBack = compareReadBack(payload, rb.data as Record<string, unknown>, readBackFields(deps.fieldMap));
+        }
+      }
+      decision = decide({
+        write,
+        followUps: [...payRunIssues, ...followUps],
+        payRunDefaultsComplete: sending.payRunDefaultsComplete,
+        ...(readBack ? { readBack } : {}),
+      });
+    }
+  }
+
+  const outcome = await settle(deps, {
+    link,
+    user: sync.user,
+    person: sync.person,
+    hash: sync.hash,
+    decision,
+    ehEmployeeId,
+    keyToStore: null,
+    eventTimestamp: sync.eventTimestamp,
+    now: sync.now,
+  });
+  // EH accepted what was sent: those units' fingerprints move, once its
+  // messages are out (a retry after a failed send must still see the change).
+  // On a Correction they stay, so the next edit sends them again.
+  if (outcome.status !== "retry" && decision.kind !== "correction" && sent.size > 0) {
+    const moved = Object.fromEntries([...sent].map((unit) => [unit, current.units[unit]!]));
+    await deps.store.saveBaseline(ctUserId, { keyId: baseline.keyId, units: { ...baseline.units, ...moved } });
+  }
+  return outcome;
 }
 
 /** The `sync_log` detail of a link (#143 item 2). */
