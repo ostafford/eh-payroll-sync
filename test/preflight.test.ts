@@ -162,6 +162,19 @@ describe("classifyAll", () => {
       expect(r).toMatchObject({ outcome: "found", eh: [{ ehEmployeeId: 33 }] });
     });
 
+    it("with the database read, trusts it over a Connecteam ID found in EH (e.g. after a reset)", () => {
+      const r = one(person(), [eh({ id: 37, externalId: "100" })], { records: records() });
+      expect(r.outcome).toBe("not-found");
+    });
+
+    it("a stored Payroll ID, with their field now blank, is updated with no agreement check, not held", () => {
+      const stored = records({ employeeMap: [mapRow({ ctUserId: 100, lastOutcome: "correction", externalId: "E0001" })] });
+      const blank = person({ payrollId: "100", payrollIdFromField: false });
+      expect(one(blank, [eh({ id: 38, externalId: "E0001" })], { records: stored })).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 38 }] });
+      // And it isn't "no ID": the stored one is used.
+      expect(one(blank, [eh()], { records: stored }).outcome).toBe("not-found");
+    });
+
     it("doesn't count someone excluded, synced or on the Link list towards 'used twice'", () => {
       const rec = records({
         employeeMap: [mapRow({ ctUserId: 2, ehEmployeeId: "35", lastOutcome: "ok" })],

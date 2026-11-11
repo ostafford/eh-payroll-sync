@@ -84,6 +84,12 @@ export type RenderResult =
  * with a value in `.dev.vars` takes it; the rest keep the template's value.
  * Fails, naming each one, when the database id or a required var is blank.
  */
+/** The database id `.dev.vars` names, or undefined while it's blank or still the placeholder. */
+export function databaseIdOf(devVars: Record<string, string>): string | undefined {
+  const id = devVars[DATABASE_ID_KEY]?.trim() ?? "";
+  return id && id !== DATABASE_ID_PLACEHOLDER ? id : undefined;
+}
+
 export function renderDeployConfig(templateText: string, devVars: Record<string, string>): RenderResult {
   const config = JSON.parse(stripJsonc(templateText)) as WranglerConfig;
   const vars = { ...(config.vars ?? {}) };
@@ -91,14 +97,14 @@ export function renderDeployConfig(templateText: string, devVars: Record<string,
     const value = devVars[key]?.trim();
     if (value) vars[key] = value;
   }
-  const databaseId = devVars[DATABASE_ID_KEY]?.trim() ?? "";
+  const databaseId = databaseIdOf(devVars);
   const db = config.d1_databases?.find((d) => d.binding === "DB");
 
   const missing: string[] = [];
-  if (!databaseId || databaseId === DATABASE_ID_PLACEHOLDER) missing.push(DATABASE_ID_KEY);
+  if (!databaseId) missing.push(DATABASE_ID_KEY);
   if (!db) missing.push("a DB entry in wrangler.jsonc d1_databases");
   for (const key of REQUIRED_VARS) if (!vars[key]?.trim()) missing.push(key);
-  if (missing.length > 0) return { ok: false, missing };
+  if (missing.length > 0 || !databaseId) return { ok: false, missing };
 
   db!.database_id = databaseId;
   return { ok: true, config: { ...config, vars }, databaseId, vars };

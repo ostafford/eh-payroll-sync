@@ -139,9 +139,12 @@ describe("the secrets check is wired into every deploy path", () => {
       expect(line).toContain("--allow-missing-secrets");
     }
     // The link stage (#154) and the preflight read D1 only through the check: they run after the deploy, or alone on a live Worker.
-    expect(read("scripts/lib/remote-d1.ts")).toContain('"deploy:config", "--", "--check-live"]');
+    expect(read("scripts/lib/remote-d1.ts")).toContain('"deploy:config", "--", "--check-live"');
     expect(read("scripts/lib/remote-d1.ts")).not.toContain("--allow-missing-secrets");
     expect(read("scripts/link.ts")).toContain('from "./lib/remote-d1.js"');
+    expect(read("scripts/link.ts")).toContain("checkDeployConfig()");
+    // The preflight only reads, so it doesn't need the live Worker's secrets (#168).
+    expect(read("scripts/preflight.ts")).toContain('checkDeployConfig(["--allow-missing-secrets"])');
     const deployAt = wizard.indexOf("wr_quiet deploy --config");
     expect(wizard.indexOf("\nlink_stage\n"), "the full run reaches the link stage after the deploy").toBeGreaterThan(deployAt);
     for (const name of REQUIRED_SECRETS) {

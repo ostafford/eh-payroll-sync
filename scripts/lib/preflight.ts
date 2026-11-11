@@ -136,54 +136,52 @@ export function classifyAll(
 ): PreflightRow[] {
   const mapRows = new Map(opts.records?.employeeMap.map((m) => [m.ctUserId, m]));
   const pending = new Map(opts.records?.pendingLinks.map((l) => [l.ctUserId, l.ehEmployeeId]));
-  const rowOf = (p: PreflightPerson, over: Partial<PreflightRow>): PreflightRow => ({
-    ctUserId: p.ctUserId,
-    outcome: "not-found",
-    eh: [],
-    hits: [],
-    newHire: false,
-    detailsComplete: p.detailsComplete,
-    ...over,
+
+  const steps = people.map((p) => {
+    const base: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, detailsComplete: p.detailsComplete };
+    const synced = mapRows.get(p.ctUserId);
+    const linkTo = pending.get(p.ctUserId);
+    // The Payroll ID the sync compares (consumer.ts's matchKey): the one stored
+    // at their first sync or link, else the mapped one.
+    const stored = synced?.externalId ?? null;
+    const payrollId = payrollIdKey(stored ?? p.payrollId);
+
+    // Decided before the Payroll ID is compared, in the sync's order.
+    let decided: PreflightRow | null = null;
+    if (p.excluded) decided = { ...base, outcome: "excluded" };
+    else if (synced && (synced.linkedAt !== null || hasSyncedBefore(synced))) {
+      decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh) };
+    } else if (linkTo) decided = { ...base, outcome: "on-link-list", eh: byId(linkTo, eh) };
+    else if (opts.records === null) {
+      // No database to ask: their Connecteam ID as a Payroll ID in EH means
+      // the sync wrote it, so they've synced before.
+      const holdsUserId = eh.filter((e) => externalIdOf(e) === String(p.ctUserId));
+      if (holdsUserId.length > 0) decided = { ...base, outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)) };
+    }
+    return { p, base, decided, payrollId, stored, newHire: linkTo === null };
   });
 
-  /** What's decided before their Payroll ID is compared, or null to go on. */
-  const decidedFirst = (p: PreflightPerson): PreflightRow | null => {
-    if (p.excluded) return rowOf(p, { outcome: "excluded" });
-    // Linked, or synced before. Without the database, their `userId` in EH
-    // says the same, since only the sync writes it there.
-    const synced = mapRows.get(p.ctUserId);
-    if (synced && (synced.linkedAt !== null || hasSyncedBefore(synced))) {
-      return rowOf(p, { outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh) });
-    }
-    const holdsUserId = eh.filter((e) => externalIdOf(e) === String(p.ctUserId));
-    if (holdsUserId.length > 0) return rowOf(p, { outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)) });
-    const linkTo = pending.get(p.ctUserId);
-    if (linkTo) return rowOf(p, { outcome: "on-link-list", eh: byId(linkTo, eh) });
-    return null;
-  };
-
-  const first = people.map(decidedFirst);
-  // The Payroll ID the sync compares: the one stored at their first sync, else the mapped one.
-  const payrollIds = people.map((p) => payrollIdKey(mapRows.get(p.ctUserId)?.externalId ?? p.payrollId));
   // Only people who reach the comparison can collide on a Payroll ID.
   const idCount = new Map<string, number>();
-  payrollIds.forEach((id, i) => first[i] === null && idCount.set(id, (idCount.get(id) ?? 0) + 1));
+  for (const s of steps) if (!s.decided) idCount.set(s.payrollId, (idCount.get(s.payrollId) ?? 0) + 1);
 
-  return people.map((p, i): PreflightRow => {
-    const decided = first[i];
+  return steps.map(({ p, base, decided, payrollId, stored, newHire }): PreflightRow => {
     if (decided) return decided;
 
-    const payrollId = payrollIds[i]!;
     const holders = eh.filter((e) => externalIdOf(e) === payrollId).map((e) => matchOf(p.payload, e));
-    if ((idCount.get(payrollId) ?? 0) > 1 || holders.length > 1) return rowOf(p, { outcome: "id-used-twice", eh: holders });
+    if ((idCount.get(payrollId) ?? 0) > 1 || holders.length > 1) return { ...base, outcome: "id-used-twice", eh: holders };
 
-    // A `userId` Payroll ID in EH is handled above, so this one was copied in.
     const [holder] = holders;
-    if (holder) return rowOf(p, { outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] });
+    if (holder) {
+      // Only a Payroll ID from the client's field is checked for agreement
+      // (consumer.ts gates on it); any other key the sync just updates.
+      if (!p.payrollIdFromField) return { ...base, outcome: "already-synced", eh: [holder] };
+      return { ...base, outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] };
+    }
 
-    const newHire = pending.get(p.ctUserId) === null;
     const hits = newHire ? [] : eh.map((e) => matchOf(p.payload, e)).filter((m) => m.agree.length > 0);
-    return rowOf(p, { outcome: opts.payrollIdField && !p.payrollIdFromField ? "no-id" : "not-found", hits, newHire });
+    const noId = opts.payrollIdField && !p.payrollIdFromField && stored === null;
+    return { ...base, outcome: noId ? "no-id" : "not-found", hits, newHire };
   });
 }
 

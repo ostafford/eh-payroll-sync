@@ -31,9 +31,9 @@ import {
   renderPreflight,
   type PreflightEhEmployee,
   type PreflightPerson,
-  type PreflightRecords,
 } from "./lib/preflight.js";
-import { DATABASE_ID_KEY, DATABASE_ID_PLACEHOLDER } from "./lib/deploy-config.js";
+import { parseDevVars } from "./lib/deploy-config.js";
+import { readSyncRecords } from "./lib/preflight-records.js";
 import { checkDeployConfig, d1 } from "./lib/remote-d1.js";
 
 // --- env -----------------------------------------------------------------
@@ -51,6 +51,15 @@ function loadDevVars(): void {
     }
   } catch {
     /* no .dev.vars - rely on the shell env */
+  }
+}
+
+/** `.dev.vars` itself (not the shell): whether it names a database decides if D1 is read. */
+function readDevVarsFile(): Record<string, string> {
+  try {
+    return parseDevVars(readFileSync(fileURLToPath(new URL("../.dev.vars", import.meta.url)), "utf8"));
+  } catch {
+    return {};
   }
 }
 
@@ -128,31 +137,6 @@ async function listPackPeople(
   return { people, missing };
 }
 
-// --- D1 ------------------------------------------------------------------
-
-/**
- * The sync's records, or null before the first deploy (no database in
- * `.dev.vars` yet). With one named, a settings check that fails throws: the
- * Link list would otherwise be left out without a word.
- */
-function readRecords(): PreflightRecords | null {
-  if (!process.env[DATABASE_ID_KEY] || process.env[DATABASE_ID_KEY] === DATABASE_ID_PLACEHOLDER) return null;
-  checkDeployConfig();
-  const employeeMap = d1(
-    "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, last_outcome AS lastOutcome, linked_at AS linkedAt, external_id AS externalId FROM employee_map",
-  ) as Array<
-    PreflightRecords["employeeMap"][number]
-  >;
-  const pendingLinks = d1("SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId FROM pending_link") as Array<
-    PreflightRecords["pendingLinks"][number]
-  >;
-  const id = (v: unknown) => (v === null ? null : String(v));
-  return {
-    employeeMap: employeeMap.map((m) => ({ ...m, ehEmployeeId: id(m.ehEmployeeId), externalId: id(m.externalId) })),
-    pendingLinks: pendingLinks.map((l) => ({ ...l, ehEmployeeId: id(l.ehEmployeeId) })),
-  };
-}
-
 // --- main --------------------------------------------------------------
 
 async function main(): Promise<void> {
@@ -162,7 +146,7 @@ async function main(): Promise<void> {
   const { people, missing } = await listPackPeople(ct, Number(need("CT_ONBOARDING_PACK_ID")), fieldMap);
   const eh = await listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY"));
 
-  const records = readRecords();
+  const records = readSyncRecords(readDevVarsFile(), { check: () => checkDeployConfig(["--allow-missing-secrets"]), query: d1 });
 
   const rows = classifyAll(people, eh, { payrollIdField: fieldMap.identity.externalIdFrom !== "userId", records });
   console.log(renderPreflight(rows, eh.length, { missing, recordsRead: records !== null }));

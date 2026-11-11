@@ -10,10 +10,15 @@ import { DEPLOY_CONFIG_PATH } from "./deploy-config.js";
 
 const DATABASE = "eh-payroll-sync";
 
-/** Builds wrangler.deploy.json and checks it against the live Worker; throws if it doesn't check out. */
-export function checkDeployConfig(): void {
+/**
+ * Builds wrangler.deploy.json and checks it against the live Worker; throws if
+ * it doesn't check out. `extra` adds deploy:config flags: the preflight, a
+ * read-only caller, skips the live secrets check, since a read needs the
+ * database, not the live Worker's secrets.
+ */
+export function checkDeployConfig(extra: readonly string[] = []): void {
   try {
-    execFileSync("npm", ["run", "--silent", "deploy:config", "--", "--check-live"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("npm", ["run", "--silent", "deploy:config", "--", "--check-live", ...extra], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string };
     throw new Error(`The deploy settings aren't ready:\n${err.stdout ?? ""}${err.stderr ?? ""}`.trimEnd());
