@@ -16,13 +16,16 @@
  *     copied in since (ADR-0011).
  *   - The Payroll ID is the one copied into the client's Connecteam field when
  *     `identity.externalIdFrom` names one and it's filled, else the Connecteam
- *     `userId`. An EH record it finds that the sync already holds for someone
- *     else is refused (a System alert), so it's flagged with "used twice".
+ *     `userId`.
+ *   - A link (from the Link list, or by a copied Payroll ID that agrees) goes
+ *     through the link step, which refuses some (e.g. an EH record already
+ *     someone else's) with a System alert: "Link will be blocked".
  *   - A copied one that finds one EH employee links them with no EH write, but
  *     only when one of the Pre-create check's keys also agrees (email, TFN,
  *     name + DOB); otherwise they're held.
  *   - Any other Payroll ID that finds one EH employee updates it, with no
- *     agreement check. A stored one means the sync wrote that record (already
+ *     agreement check; if that record is someone else's, the write goes in and
+ *     then the collision alert posts ("used twice"). A stored one means the sync wrote that record (already
  *     synced); without one, approval overwrites a record the sync has no
  *     record of, e.g. a previous deployment's after a reset.
  *   - Found nobody: a "New hire, not this person" row on the Link list is
@@ -85,6 +88,7 @@ export type PreflightOutcome =
   | "no-id"
   | "not-found"
   | "on-link-list"
+  | "link-blocked"
   | "found"
   | "in-eh-not-synced"
   | "already-synced";
@@ -106,6 +110,8 @@ export interface PreflightRow {
   hits: PreflightMatch[];
   /** On the Link list as "New hire, not this person": the Pre-create check is skipped. */
   newHire: boolean;
+  /** For `link-blocked`: which of the link step's refusals it hits. */
+  blockedBy?: LinkBlock;
   /** Their details don't map yet, and the sync checks them before this write: it asks them to finish first. */
   waitsForDetails: boolean;
 }
@@ -139,6 +145,14 @@ function byId(id: string | null, eh: readonly PreflightEhEmployee[]): PreflightM
   return [{ ehEmployeeId: Number(id), terminated: e ? isTerminated(e) : false, agree: [], differs: [] }];
 }
 
+/**
+ * The link step's refusals (consumer.ts `linkOnApproval`), in its order: the
+ * EH record is already someone else's in employee_map; the Payroll ID is on a
+ * different EH record; the EH employee doesn't exist; it carries another
+ * Payroll ID. Each holds the link and posts a System alert.
+ */
+export type LinkBlock = "linked-in-sync" | "payroll-id-elsewhere" | "not-found" | "different-payroll-id";
+
 /** One person on their way through {@link classifyAll}. */
 interface PersonContext {
   p: PreflightPerson;
@@ -162,6 +176,28 @@ export function classifyAll(
   const mapRows = new Map(opts.records?.employeeMap.map((m) => [m.ctUserId, m]));
   const pending = new Map(opts.records?.pendingLinks.map((l) => [l.ctUserId, l.ehEmployeeId]));
 
+  // EH records employee_map already gives to someone (findByEhEmployeeId).
+  // The sync checks this, not the Link list: unlike the link stage's
+  // ownership in scripts/lib/link-list.ts, which counts the Link list too.
+  const ownerOf = new Map<string, number>();
+  for (const m of opts.records?.employeeMap ?? []) if (m.ehEmployeeId !== null) ownerOf.set(m.ehEmployeeId, m.ctUserId);
+  const othersRecord = (ehEmployeeId: string, ctUserId: number): boolean => {
+    const owner = ownerOf.get(ehEmployeeId);
+    return owner !== undefined && owner !== ctUserId;
+  };
+
+  /** What the link step would refuse, linking `ctUserId` to `target` under `payrollId`, or null. */
+  const linkBlock = (ctUserId: number, target: string, payrollId: string): LinkBlock | null => {
+    if (othersRecord(target, ctUserId)) return "linked-in-sync";
+    const holders = eh.filter((e) => externalIdOf(e) === payrollIdKey(payrollId));
+    if (holders.some((e) => String(e.id) !== target)) return "payroll-id-elsewhere";
+    if (holders.length > 0) return null; // the target already carries it
+    const record = eh.find((e) => String(e.id) === target);
+    if (!record) return "not-found";
+    const theirs = typeof record.externalId === "string" ? record.externalId.trim() : "";
+    return theirs && theirs !== payrollId ? "different-payroll-id" : null;
+  };
+
   const contexts = people.map((p): PersonContext => {
     const base: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, waitsForDetails: false };
     // The sync checks their details before an update or a create, but not
@@ -180,18 +216,17 @@ export function classifyAll(
     else if (synced && (synced.linkedAt !== null || hasSyncedBefore(synced))) {
       // A Linked employee gets the changed-units sync instead (ADR-0009).
       decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh), waitsForDetails: detailsIncomplete && synced.linkedAt === null };
-    } else if (linkTo) decided = { ...base, outcome: "on-link-list", eh: byId(linkTo, eh) };
+    } else if (linkTo) {
+      const blockedBy = linkBlock(p.ctUserId, linkTo, (stored ?? p.payrollId).trim());
+      decided = blockedBy
+        ? { ...base, outcome: "link-blocked", eh: byId(linkTo, eh), blockedBy }
+        : { ...base, outcome: "on-link-list", eh: byId(linkTo, eh) };
+    }
     // With no database (before the first deploy) nothing is decided here: an
     // empty database is what the sync would start from too.
     // `pending.get` is undefined off the Link list, and null for a "New hire, not this person" row.
     return { p, base, decided, payrollId, stored, detailsIncomplete, newHire: linkTo === null };
   });
-
-  // EH records employee_map already gives to someone: the sync refuses a link
-  // or update onto one of these for anyone else (findByEhEmployeeId; the Link
-  // list isn't checked there).
-  const ownerOf = new Map<string, number>();
-  for (const m of opts.records?.employeeMap ?? []) if (m.ehEmployeeId !== null) ownerOf.set(m.ehEmployeeId, m.ctUserId);
 
   // Only people who reach the comparison can collide on a Payroll ID.
   const idCount = new Map<string, number>();
@@ -204,18 +239,24 @@ export function classifyAll(
     if ((idCount.get(payrollId) ?? 0) > 1 || holders.length > 1) return { ...base, outcome: "id-used-twice", eh: holders };
 
     const [holder] = holders;
-    const owner = holder ? ownerOf.get(String(holder.ehEmployeeId)) : undefined;
-    if (holder && owner !== undefined && owner !== p.ctUserId) return { ...base, outcome: "id-used-twice", eh: [holder] };
     if (holder) {
+      const taken = othersRecord(String(holder.ehEmployeeId), p.ctUserId);
       // Only a Payroll ID from the client's field is checked for agreement
       // (consumer.ts gates on it); for any other key the sync updates that
       // record. A stored key means the sync wrote it (it's stored only once
       // EH accepts a write or link), so the record is theirs. Without one, the
       // sync has no record of them: e.g. a previous deployment's, after a reset.
       if (!p.payrollIdFromField) {
+        // Someone else's: the update is written, then the collision alert posts.
+        if (taken) return { ...base, outcome: "id-used-twice", eh: [holder] };
         return { ...base, outcome: stored !== null ? "already-synced" : "in-eh-not-synced", eh: [holder], waitsForDetails: detailsIncomplete };
       }
-      return { ...base, outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] };
+      // Nothing agrees: held, with no ownership check. Keys agree: the link
+      // step runs, and refuses someone else's record (the target was found by
+      // this Payroll ID, so that's the only refusal it can hit).
+      if (holder.agree.length === 0) return { ...base, outcome: "found-no-agreement", eh: [holder] };
+      if (taken) return { ...base, outcome: "link-blocked", eh: [holder], blockedBy: "linked-in-sync" };
+      return { ...base, outcome: "found", eh: [holder] };
     }
 
     const hits = newHire ? [] : eh.map((e) => matchOf(p.payload, e)).filter((m) => m.agree.length > 0);
@@ -237,7 +278,13 @@ const GROUPS = {
   "id-used-twice": {
     mark: "⛔",
     title: "Payroll ID used twice",
-    action: "Two Connecteam people share one Payroll ID, EH holds it on more than one record, or the EH record it finds is already someone else's in the sync. Fix the Payroll ID field in Connecteam (or the duplicate in EH).",
+    action: "Two Connecteam people share one Payroll ID, EH holds it on more than one record, or the EH record it finds is already someone else's in the sync (approval would write over that person's record, then alert). Fix the Payroll ID field in Connecteam (or the duplicate in EH).",
+    attention: true,
+  },
+  "link-blocked": {
+    mark: "⛔",
+    title: "Link will be blocked",
+    action: "Approval tries to link them, but the link step refuses (reason in brackets) and posts a System alert. Fix the Link list or the Payroll ID first.",
     attention: true,
   },
   "found-no-agreement": {
@@ -316,6 +363,13 @@ export function needsAttention(row: PreflightRow): boolean {
 
 const KEY_LABEL: Record<MatchKey, string> = { email: "email", tfn: "TFN", nameDob: "name + date of birth" };
 
+const BLOCK_LABEL: Record<LinkBlock, string> = {
+  "linked-in-sync": "that EH record is already someone else's in the sync",
+  "payroll-id-elsewhere": "their Payroll ID is on a different EH record",
+  "not-found": "that EH employee no longer exists",
+  "different-payroll-id": "that EH employee has a different Payroll ID",
+};
+
 const keyList = (keys: readonly MatchKey[]): string => keys.map((k) => KEY_LABEL[k]).join(", ");
 
 /** `EH 40213 terminated (agrees: email; differs: TFN)`; for a Pre-create hit, `EH 40213 (email)`. */
@@ -331,7 +385,11 @@ function ehText(m: PreflightMatch, keys: "compared" | "hit" | "none"): string {
 function rowText(r: PreflightRow): string {
   const compared = r.outcome === "found" || r.outcome === "found-no-agreement";
   const targets = r.hits.length > 0 ? r.hits.map((h) => ehText(h, "hit")) : r.eh.map((m) => ehText(m, compared ? "compared" : "none"));
-  const notes = [...(r.newHire ? ["Link list: new hire"] : []), ...(r.waitsForDetails ? ["details incomplete"] : [])];
+  const notes = [
+    ...(r.blockedBy ? [BLOCK_LABEL[r.blockedBy]] : []),
+    ...(r.newHire ? ["Link list: new hire"] : []),
+    ...(r.waitsForDetails ? ["details incomplete"] : []),
+  ];
   return [
     `Connecteam ${r.ctUserId}`,
     ...(targets.length > 0 ? [`-> ${targets.join(", ")}`] : []),

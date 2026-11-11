@@ -38,8 +38,13 @@ person is one of:
   update (not a Linked employee, who gets only their changes).
 - **Payroll ID used twice.** Two Connecteam people share one, EH holds it on
   two records, or the EH record it finds already belongs to someone else the
-  sync has synced (the sync would refuse it with a System alert). Fix it before
-  either is approved.
+  sync has synced (approval would write over that person's record, then post
+  an alert). Fix it before either is approved.
+- **Link will be blocked.** Approval tries a link (from the Link list, or by a
+  copied Payroll ID that agrees), but the link step would refuse it with a
+  System alert. The reason is shown: the EH record is already someone else's,
+  their Payroll ID is on a different EH record, the EH employee no longer
+  exists, or it has a different Payroll ID.
 - **No Payroll ID:** the client's Payroll ID field is set but blank for them,
   so they get their Connecteam ID. Always listed; it needs a look only when
   they'd also be held.

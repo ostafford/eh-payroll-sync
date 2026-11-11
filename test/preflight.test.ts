@@ -166,13 +166,17 @@ describe("classifyAll", () => {
   describe("an EH record the sync already gives to someone else", () => {
     const takenBy200 = records({ employeeMap: [mapRow({ ctUserId: 200, ehEmployeeId: "60", lastOutcome: "ok", externalId: "E0042" })] });
 
-    it("is refused for a copied Payroll ID that agrees, so it's 'used twice', not 'will be linked'", () => {
+    it("blocks the link for a copied Payroll ID that agrees (the link step refuses it), not 'will be linked'", () => {
       const r = one(person(), [eh({ id: 60, externalId: "E0042", emailAddress: "jack@example.com" })], { records: takenBy200 });
-      expect(r).toMatchObject({ outcome: "id-used-twice", eh: [{ ehEmployeeId: 60 }] });
+      expect(r).toMatchObject({ outcome: "link-blocked", blockedBy: "linked-in-sync", eh: [{ ehEmployeeId: 60 }] });
       expect(needsAttention(r)).toBe(true);
     });
 
-    it("is refused for any other Payroll ID too (the collision alert)", () => {
+    it("still holds a copied Payroll ID that nothing agrees with: the hold has no ownership check", () => {
+      expect(one(person(), [eh({ id: 60, externalId: "E0042" })], { records: takenBy200 }).outcome).toBe("found-no-agreement");
+    });
+
+    it("for any other Payroll ID, is 'used twice': the update is written, then the collision alert posts", () => {
       const r = one(person({ payrollId: "E0042", payrollIdFromField: false }), [eh({ id: 60, externalId: "E0042" })], { payrollIdField: false, records: takenBy200 });
       expect(r.outcome).toBe("id-used-twice");
     });
@@ -229,17 +233,47 @@ describe("classifyAll", () => {
         employeeMap: [mapRow({ ctUserId: 2, ehEmployeeId: "35", lastOutcome: "ok" })],
         pendingLinks: [{ ctUserId: 3, ehEmployeeId: "36" }],
       });
-      const rows = classifyAll([person({ ctUserId: 1 }), person({ ctUserId: 2 }), person({ ctUserId: 3 }), person({ ctUserId: 4, excluded: true })], [], opts({ records: rec }));
+      const rows = classifyAll([person({ ctUserId: 1 }), person({ ctUserId: 2 }), person({ ctUserId: 3 }), person({ ctUserId: 4, excluded: true })], [eh({ id: 36 })], opts({ records: rec }));
       expect(rows.map((r) => r.outcome)).toEqual(["not-found", "already-synced", "on-link-list", "excluded"]);
     });
   });
 
   describe("the Link list", () => {
-    it("a pending link to an EH employee links them, whatever their Payroll ID finds", () => {
+    it("a pending link to an EH employee links them, whatever the keys say", () => {
       const list = records({ pendingLinks: [{ ctUserId: 100, ehEmployeeId: "12" }] });
-      const r = one(person(), [eh({ id: 12, status: "Terminated" }), eh({ id: 13, externalId: "E0042" })], { records: list });
+      const r = one(person(), [eh({ id: 12, status: "Terminated" })], { records: list });
       expect(r).toMatchObject({ outcome: "on-link-list", eh: [{ ehEmployeeId: 12, terminated: true }] });
       expect(needsAttention(r)).toBe(false);
+    });
+
+    it("links when the target already carries their Payroll ID (any case)", () => {
+      const list = records({ pendingLinks: [{ ctUserId: 100, ehEmployeeId: "12" }] });
+      expect(one(person(), [eh({ id: 12, externalId: "e0042" })], { records: list }).outcome).toBe("on-link-list");
+    });
+
+    describe("blocked by the link step, in its order", () => {
+      const list = records({ pendingLinks: [{ ctUserId: 100, ehEmployeeId: "12" }] });
+      const blocked = (records: PreflightRecords, list: PreflightEhEmployee[]) => one(person(), list, { records });
+
+      it("the EH record is already someone else's in employee_map", () => {
+        const taken = records({ ...list, employeeMap: [mapRow({ ctUserId: 200, ehEmployeeId: "12", lastOutcome: "ok" })] });
+        expect(blocked(taken, [eh({ id: 12 })])).toMatchObject({ outcome: "link-blocked", blockedBy: "linked-in-sync" });
+      });
+
+      it("their Payroll ID is on a different EH record", () => {
+        expect(blocked(list, [eh({ id: 12 }), eh({ id: 13, externalId: "E0042" })])).toMatchObject({ outcome: "link-blocked", blockedBy: "payroll-id-elsewhere" });
+      });
+
+      it("the EH employee no longer exists", () => {
+        expect(blocked(list, [])).toMatchObject({ outcome: "link-blocked", blockedBy: "not-found" });
+      });
+
+      it("the EH employee carries a different Payroll ID", () => {
+        const r = blocked(list, [eh({ id: 12, externalId: "OTHER-1" })]);
+        expect(r).toMatchObject({ outcome: "link-blocked", blockedBy: "different-payroll-id" });
+        expect(needsAttention(r)).toBe(true);
+        expect(renderPreflight([r], 1, { recordsRead: true })).toContain("Connecteam 100 -> EH 12 [that EH employee has a different Payroll ID]");
+      });
     });
 
     it("'New hire, not this person' skips the Pre-create check, so they're created, not held", () => {
@@ -309,7 +343,7 @@ describe("renderPreflight", () => {
 
   it("shows the Link list's rows", () => {
     const linked = records({ pendingLinks: [{ ctUserId: 21, ehEmployeeId: "5" }, { ctUserId: 22, ehEmployeeId: null }] });
-    const out = renderPreflight(classifyAll([person({ ctUserId: 21 }), person({ ctUserId: 22, payrollId: "E0100" })], [], opts({ records: linked })), 0, { recordsRead: true });
+    const out = renderPreflight(classifyAll([person({ ctUserId: 21 }), person({ ctUserId: 22, payrollId: "E0100" })], [eh({ id: 5 })], opts({ records: linked })), 1, { recordsRead: true });
     expect(out).toContain("On the Link list: will be linked (1)");
     expect(out).toContain("Connecteam 21 -> EH 5");
     expect(out).toContain("Connecteam 22 [Link list: new hire]");
