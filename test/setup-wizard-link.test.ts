@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const WIZARD = "scripts/setup-wizard.sh";
 
-function wizard(args: string[], env: Record<string, string> = {}) {
+function wizard(args: string[], env: Record<string, string> = {}, input = "") {
   const bin = mkdtempSync(join(tmpdir(), "wizard-npm-"));
   const log = join(bin, "npm.log");
   writeFileSync(
@@ -23,7 +23,7 @@ function wizard(args: string[], env: Record<string, string> = {}) {
   chmodSync(join(bin, "npm"), 0o755);
   const r = spawnSync("bash", [WIZARD, ...args], {
     cwd: root,
-    input: "",
+    input,
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env },
     timeout: 30_000,
@@ -42,16 +42,23 @@ describe("setup wizard, link stage", () => {
     expect(spawnSync("bash", ["-n", WIZARD], { cwd: root, encoding: "utf8" }).status).toBe(0);
   });
 
-  it("--stage link runs only the link stage", () => {
-    const r = wizard(["--stage", "link"]);
+  it("--stage link runs only the link stage, with the check before go-live first (#168)", () => {
+    const r = wizard(["--stage", "link"], {}, "y\n");
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("Stage 1/1 · Link Pre-existing employees");
     expect(r.stdout).not.toContain("Cloudflare account");
-    expect(r.calls).toEqual(["run --silent link"]);
+    expect(r.calls).toEqual(["run --silent preflight", "run --silent link"]);
+  });
+
+  it("doesn't open the Link list until the check is confirmed", () => {
+    const r = wizard(["--stage", "link"]);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain("Stopped here");
+    expect(r.calls).toEqual(["run --silent preflight"]);
   });
 
   it("stops, saying nothing changed, when the stage fails (e.g. the deploy settings don't check out)", () => {
-    const r = wizard(["--stage", "link"], { FAIL_LINK: "1" });
+    const r = wizard(["--stage", "link"], { FAIL_LINK: "1" }, "y\n");
     expect(r.status).not.toBe(0);
     expect(r.stdout).toContain("The link stage stopped: the Link list was not changed.");
   });

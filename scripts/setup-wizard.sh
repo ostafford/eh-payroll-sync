@@ -413,19 +413,6 @@ grep -q '"name": "eh-payroll-sync"' package.json 2>/dev/null \
   || { printf 'run this from the eh-payroll-sync repo root\n' >&2; exit 1; }
 [[ -d node_modules ]] || { printf 'installing dependencies...\n'; npm install; }
 
-# The link stage (#154): after the deploy, since it needs D1 and the field map.
-# `--stage link` runs it alone, e.g. for a client that's already live.
-link_stage() {
-  stage "Link Pre-existing employees"
-  why "Some of the client's people may already be in Employment Hero (entered by hand," \
-      "already paid). They should be linked to that record, not created a second time." \
-      "This lists every Connecteam user not yet synced beside their likely EH match."
-  todo "With the client's admin (a screen-share is fine), go down the list. Enter links a suggestion, / searches all of EH, x means don't link." \
-       "Press c, then y, to save. Nothing reaches Employment Hero yet: each link is made when that person's onboarding pack is approved."
-  # It checks the built config against the live Worker itself, before reading anything.
-  npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }
-}
-
 # The check before go-live (#168): read-only, and it never blocks. It shows
 # what each approval will do, then carries on only once the human says so.
 # Exit 2 means someone needs a look; 1 means the check itself failed.
@@ -448,6 +435,25 @@ preflight_check() {
       || { fail "Stopped here. Fix them in Connecteam, then run the wizard again."; exit 1; }
     printf '\n'
   done
+}
+
+# The link stage (#154): after the deploy, since it needs D1 and the field map.
+# `--stage link` runs it alone, e.g. for a client that's already live.
+link_stage() {
+  stage "Link Pre-existing employees"
+  why "Some of the client's people may already be in Employment Hero (entered by hand," \
+      "already paid). They should be linked to that record, not created a second time." \
+      "This lists every Connecteam user not yet synced beside their likely EH match."
+  todo "With the client's admin (a screen-share is fine), go down the list. Enter links a suggestion, / searches all of EH, x means don't link." \
+       "Press c, then y, to save. Nothing reaches Employment Hero yet: each link is made when that person's onboarding pack is approved."
+  # The check before go-live first (#168): on a live Worker it reads the Link
+  # list too, so it shows what each approval would do before anything changes.
+  step "First, what each approval would do now (read-only: nothing is written)."
+  printf '\n'
+  preflight_check
+  printf '\n'
+  # It checks the built config against the live Worker itself, before reading anything.
+  npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }
 }
 
 if [[ "$STAGE_ONLY" == "link" ]]; then
