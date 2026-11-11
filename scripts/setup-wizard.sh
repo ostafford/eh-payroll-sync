@@ -416,8 +416,10 @@ grep -q '"name": "eh-payroll-sync"' package.json 2>/dev/null \
 # The check before go-live (#168): read-only, and it never blocks. It shows
 # what each approval will do, then carries on only once the human says so.
 # Exit 2 means someone needs a look; 1 means the check itself failed.
+# preflight_check ["question"] ["hint"]: the yes that carries on, and a line
+# shown when someone needs a look (the link stage points at the Link list).
 preflight_check() {
-  local rc
+  local rc question="${1:-Carry on with the setup?}" hint="${2:-}"
   while :; do
     # Inside an `if`, so `set -e` doesn't stop the wizard on exit 2. Progress
     # (stderr) goes straight to the terminal, as it rewrites one line.
@@ -429,8 +431,9 @@ preflight_check() {
     elif [[ $rc -eq 2 ]]; then
       warn "Some people need a look before their onboarding pack is approved (listed above)."
       note "You can carry on and fix them in Connecteam later; run 'npm run preflight' to check again."
+      [[ -z "$hint" ]] || note "$hint"
     fi
-    confirm "Carry on with the setup?" && return 0
+    confirm "$question" && return 0
     confirm "Fix them in Connecteam now, then check again?" \
       || { fail "Stopped here. Fix them in Connecteam, then run the wizard again."; exit 1; }
     printf '\n'
@@ -450,7 +453,8 @@ link_stage() {
   # list too, so it shows what each approval would do before anything changes.
   step "First, what each approval would do now (read-only: nothing is written)."
   printf '\n'
-  preflight_check
+  preflight_check "Open the Link list?" \
+    "Someone held because they're already in EH can be linked to that record in the Link list, next."
   printf '\n'
   # It checks the built config against the live Worker itself, before reading anything.
   npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }

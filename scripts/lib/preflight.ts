@@ -7,8 +7,11 @@
  *
  * It mirrors the sync's first-approval path (src/sync/consumer.ts), in order:
  *
- *   - Someone who has synced before keeps the Payroll ID stored then (ADR-0011).
+ *   - Someone left out by the field map's `rules.exclude` is never synced.
+ *   - A Linked employee, or someone who has synced before, is updated (ADR-0009).
  *   - A pending link from the Link list with an EH id links them.
+ *   - The Payroll ID stored at their first sync or link wins over anything
+ *     copied in since (ADR-0011).
  *   - The Payroll ID is the one copied into the client's Connecteam field when
  *     `identity.externalIdFrom` names one and it's filled, else the Connecteam
  *     `userId`. A copied one that finds one EH employee links them with no EH
@@ -36,6 +39,8 @@ export interface PreflightPerson {
   payrollIdFromField: boolean;
   /** Their details map with no issue, so the sync would write them now. */
   detailsComplete: boolean;
+  /** The field map's `rules.exclude` leaves them out of the sync. */
+  excluded: boolean;
   /** The mapped EH payload, as the sync would send it; read for the Pre-create check's keys. */
   payload: EhEmployeePayload;
 }
@@ -45,7 +50,15 @@ export type PreflightEhEmployee = { id: number; externalId?: unknown; status?: u
 
 /** The sync's own database (D1), when it can be read: a live deployment. */
 export interface PreflightRecords {
-  employeeMap: ReadonlyArray<{ ctUserId: number; ehEmployeeId: string | null; lastOutcome: SyncOutcomeLabel | null }>;
+  employeeMap: ReadonlyArray<{
+    ctUserId: number;
+    ehEmployeeId: string | null;
+    lastOutcome: SyncOutcomeLabel | null;
+    /** Set once they're a Linked employee. */
+    linkedAt: number | null;
+    /** The Payroll ID stored at their first sync or link. */
+    externalId: string | null;
+  }>;
   /** The Link list: an EH id, or null for "New hire, not this person". */
   pendingLinks: ReadonlyArray<{ ctUserId: number; ehEmployeeId: string | null }>;
 }
@@ -53,11 +66,12 @@ export interface PreflightRecords {
 export interface PreflightOptions {
   /** The client's Payroll ID field is set (`identity.externalIdFrom` isn't `"userId"`), so a blank one is flagged. */
   payrollIdField: boolean;
-  /** null when the database couldn't be read (none yet, before the first deploy). */
+  /** null before the first deploy, when there's no database to read. */
   records: PreflightRecords | null;
 }
 
 export type PreflightOutcome =
+  | "excluded"
   | "id-used-twice"
   | "found-no-agreement"
   | "no-id"
@@ -120,36 +134,56 @@ export function classifyAll(
   eh: readonly PreflightEhEmployee[],
   opts: PreflightOptions,
 ): PreflightRow[] {
-  const idCount = new Map<string, number>();
-  for (const p of people) idCount.set(payrollIdKey(p.payrollId), (idCount.get(payrollIdKey(p.payrollId)) ?? 0) + 1);
   const mapRows = new Map(opts.records?.employeeMap.map((m) => [m.ctUserId, m]));
   const pending = new Map(opts.records?.pendingLinks.map((l) => [l.ctUserId, l.ehEmployeeId]));
+  const rowOf = (p: PreflightPerson, over: Partial<PreflightRow>): PreflightRow => ({
+    ctUserId: p.ctUserId,
+    outcome: "not-found",
+    eh: [],
+    hits: [],
+    newHire: false,
+    detailsComplete: p.detailsComplete,
+    ...over,
+  });
 
-  return people.map((p): PreflightRow => {
-    const row: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, detailsComplete: p.detailsComplete };
-
-    // Synced before: the Payroll ID stored then wins over anything copied in
-    // since (ADR-0011). Without the database, their `userId` in EH says the
-    // same, since only the sync writes it there.
+  /** What's decided before their Payroll ID is compared, or null to go on. */
+  const decidedFirst = (p: PreflightPerson): PreflightRow | null => {
+    if (p.excluded) return rowOf(p, { outcome: "excluded" });
+    // Linked, or synced before. Without the database, their `userId` in EH
+    // says the same, since only the sync writes it there.
     const synced = mapRows.get(p.ctUserId);
-    if (synced && hasSyncedBefore(synced)) return { ...row, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh) };
+    if (synced && (synced.linkedAt !== null || hasSyncedBefore(synced))) {
+      return rowOf(p, { outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh) });
+    }
     const holdsUserId = eh.filter((e) => externalIdOf(e) === String(p.ctUserId));
-    if (holdsUserId.length > 0) return { ...row, outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)) };
-
+    if (holdsUserId.length > 0) return rowOf(p, { outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)) });
     const linkTo = pending.get(p.ctUserId);
-    if (linkTo) return { ...row, outcome: "on-link-list", eh: byId(linkTo, eh) };
+    if (linkTo) return rowOf(p, { outcome: "on-link-list", eh: byId(linkTo, eh) });
+    return null;
+  };
 
-    const payrollId = payrollIdKey(p.payrollId);
+  const first = people.map(decidedFirst);
+  // The Payroll ID the sync compares: the one stored at their first sync, else the mapped one.
+  const payrollIds = people.map((p) => payrollIdKey(mapRows.get(p.ctUserId)?.externalId ?? p.payrollId));
+  // Only people who reach the comparison can collide on a Payroll ID.
+  const idCount = new Map<string, number>();
+  payrollIds.forEach((id, i) => first[i] === null && idCount.set(id, (idCount.get(id) ?? 0) + 1));
+
+  return people.map((p, i): PreflightRow => {
+    const decided = first[i];
+    if (decided) return decided;
+
+    const payrollId = payrollIds[i]!;
     const holders = eh.filter((e) => externalIdOf(e) === payrollId).map((e) => matchOf(p.payload, e));
-    if ((idCount.get(payrollId) ?? 0) > 1 || holders.length > 1) return { ...row, outcome: "id-used-twice", eh: holders };
+    if ((idCount.get(payrollId) ?? 0) > 1 || holders.length > 1) return rowOf(p, { outcome: "id-used-twice", eh: holders });
 
     // A `userId` Payroll ID in EH is handled above, so this one was copied in.
     const [holder] = holders;
-    if (holder) return { ...row, outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] };
+    if (holder) return rowOf(p, { outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] });
 
-    const newHire = linkTo === null;
+    const newHire = pending.get(p.ctUserId) === null;
     const hits = newHire ? [] : eh.map((e) => matchOf(p.payload, e)).filter((m) => m.agree.length > 0);
-    return { ...row, outcome: opts.payrollIdField && !p.payrollIdFromField ? "no-id" : "not-found", hits, newHire };
+    return rowOf(p, { outcome: opts.payrollIdField && !p.payrollIdFromField ? "no-id" : "not-found", hits, newHire });
   });
 }
 
@@ -213,8 +247,14 @@ const GROUPS = {
   },
   "already-synced": {
     mark: "✅",
-    title: "Already synced",
+    title: "Already synced or linked",
     action: "The sync already has their EH record. Approval updates it.",
+    attention: false,
+  },
+  excluded: {
+    mark: "ℹ️ ",
+    title: "Left out of the sync",
+    action: "The field map's exclude rule leaves them out (for example, not paid through payroll). Approval writes nothing to EH.",
     attention: false,
   },
 } satisfies Record<string, Group>;
@@ -276,8 +316,7 @@ export function renderPreflight(rows: readonly PreflightRow[], ehCount: number, 
     out.push(`${missing} more in the pack ${missing === 1 ? "has" : "have"} no active Connecteam profile (archived or deleted), so ${missing === 1 ? "isn't" : "aren't"} checked.`);
   }
   if (!opts.recordsRead) {
-    out.push("The sync's database wasn't read, so this assumes nobody has synced or is on the Link list yet. That's expected before");
-    out.push("the first deploy; on a live deployment, run `npm run deploy:config -- --check-live` to see why.");
+    out.push("There's no database yet (before the first deploy), so this assumes nobody has synced or is on the Link list.");
   }
   out.push("");
 

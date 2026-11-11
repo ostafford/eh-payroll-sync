@@ -3,12 +3,15 @@
  *
  * Read-only. Before go-live, lists what approval will do to each Connecteam
  * person in the onboarding pack, given the employees already in EH: linked,
- * created, held, or a Payroll ID used twice. The wizard runs it in the Field
- * map stage. See scripts/lib/preflight.ts for the rules.
+ * created, held, left out, or a Payroll ID used twice. The wizard runs it in
+ * the Field map stage and again at the start of the link stage. See
+ * scripts/lib/preflight.ts for the rules.
  *
  * On a live deployment it also reads the sync's database (who has synced, and
  * the Link list) through the checked config, as the link stage does. Before
- * the first deploy there's no database, and it says so.
+ * the first deploy there's no database, and it says so. Once `.dev.vars`
+ * names a database, failing to read it stops the check (exit 1) rather than
+ * quietly leaving the Link list out.
  *
  * Exit code: 0 = nothing to look at, 2 = someone needs a look, 1 = the check
  * itself failed.
@@ -19,7 +22,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
-import { applyFieldMap, type ConnecteamUser } from "../src/mapping/apply.js";
+import { applyFieldMap, leftOutBy, type ConnecteamUser } from "../src/mapping/apply.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
 import type { FieldMap } from "../src/mapping/schema.js";
 import {
@@ -30,6 +33,7 @@ import {
   type PreflightPerson,
   type PreflightRecords,
 } from "./lib/preflight.js";
+import { DATABASE_ID_KEY, DATABASE_ID_PLACEHOLDER } from "./lib/deploy-config.js";
 import { checkDeployConfig, d1 } from "./lib/remote-d1.js";
 
 // --- env -----------------------------------------------------------------
@@ -109,12 +113,14 @@ async function listPackPeople(
       continue;
     }
     // The same mapping the sync runs, so the key and details are exactly what EH would get.
-    const mapped = applyFieldMap(u.data as unknown as ConnecteamUser, fieldMap, {});
+    const user = u.data as unknown as ConnecteamUser;
+    const mapped = applyFieldMap(user, fieldMap, {});
     people.push({
       ctUserId: userId,
       payrollId: mapped.externalId,
       payrollIdFromField: mapped.externalIdFromField,
       detailsComplete: mapped.issues.length === 0,
+      excluded: leftOutBy(user, fieldMap) !== undefined,
       payload: mapped.payload,
     });
   }
@@ -124,14 +130,17 @@ async function listPackPeople(
 
 // --- D1 ------------------------------------------------------------------
 
-/** The sync's records, or null when there's no live database to read (before the first deploy). */
+/**
+ * The sync's records, or null before the first deploy (no database in
+ * `.dev.vars` yet). With one named, a settings check that fails throws: the
+ * Link list would otherwise be left out without a word.
+ */
 function readRecords(): PreflightRecords | null {
-  try {
-    checkDeployConfig();
-  } catch {
-    return null;
-  }
-  const employeeMap = d1("SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, last_outcome AS lastOutcome FROM employee_map") as Array<
+  if (!process.env[DATABASE_ID_KEY] || process.env[DATABASE_ID_KEY] === DATABASE_ID_PLACEHOLDER) return null;
+  checkDeployConfig();
+  const employeeMap = d1(
+    "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, last_outcome AS lastOutcome, linked_at AS linkedAt, external_id AS externalId FROM employee_map",
+  ) as Array<
     PreflightRecords["employeeMap"][number]
   >;
   const pendingLinks = d1("SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId FROM pending_link") as Array<
@@ -139,7 +148,7 @@ function readRecords(): PreflightRecords | null {
   >;
   const id = (v: unknown) => (v === null ? null : String(v));
   return {
-    employeeMap: employeeMap.map((m) => ({ ...m, ehEmployeeId: id(m.ehEmployeeId) })),
+    employeeMap: employeeMap.map((m) => ({ ...m, ehEmployeeId: id(m.ehEmployeeId), externalId: id(m.externalId) })),
     pendingLinks: pendingLinks.map((l) => ({ ...l, ehEmployeeId: id(l.ehEmployeeId) })),
   };
 }

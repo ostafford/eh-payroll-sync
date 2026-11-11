@@ -14,6 +14,7 @@ const person = (over: Partial<PreflightPerson> = {}): PreflightPerson => ({
   payrollId: "E0042",
   payrollIdFromField: true,
   detailsComplete: true,
+  excluded: false,
   payload: {
     firstName: "Jack",
     surname: "Mitchell",
@@ -37,6 +38,8 @@ const eh = (over: Partial<PreflightEhEmployee> = {}): PreflightEhEmployee => ({
   ...over,
 });
 const records = (over: Partial<PreflightRecords> = {}): PreflightRecords => ({ employeeMap: [], pendingLinks: [], ...over });
+type MapRow = PreflightRecords["employeeMap"][number];
+const mapRow = (over: Partial<MapRow> & Pick<MapRow, "ctUserId">): MapRow => ({ ehEmployeeId: null, lastOutcome: null, linkedAt: null, externalId: null, ...over });
 
 const opts = (over: Partial<PreflightOptions> = {}): PreflightOptions => ({ payrollIdField: true, records: null, ...over });
 const one = (p: PreflightPerson, list: PreflightEhEmployee[], o: Partial<PreflightOptions> = {}) => classifyAll([p], list, opts(o))[0]!;
@@ -130,14 +133,42 @@ describe("classifyAll", () => {
     });
 
     it("from the database, when they synced or were linked under a copied Payroll ID", () => {
-      const synced = records({ employeeMap: [{ ctUserId: 100, ehEmployeeId: "10", lastOutcome: "ok" }] });
+      const synced = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "10", lastOutcome: "ok" })] });
       const r = one(person(), [eh({ id: 10, externalId: "E0042" })], { records: synced });
       expect(r).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 10 }] });
     });
 
     it("not from a database row that never synced (held, or a failed first attempt)", () => {
-      const held = records({ employeeMap: [{ ctUserId: 100, ehEmployeeId: null, lastOutcome: "existing_match" }] });
+      const held = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: null, lastOutcome: "existing_match" })] });
       expect(one(person(), [eh({ id: 11, externalId: "E0042" })], { records: held }).outcome).toBe("found-no-agreement");
+    });
+  });
+
+  describe("decided before the Payroll ID is compared, as the sync does", () => {
+    it("left out by the exclude rule, whatever EH holds", () => {
+      const r = one(person({ excluded: true }), [eh({ id: 30, externalId: "E0042" })]);
+      expect(r.outcome).toBe("excluded");
+      expect(needsAttention(r)).toBe(false);
+    });
+
+    it("a Linked employee stays synced, even when their last outcome wasn't a success", () => {
+      const linked = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "31", lastOutcome: "correction", linkedAt: 1 })] });
+      expect(one(person(), [eh({ id: 32, externalId: "E0042" })], { records: linked })).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 31 }] });
+    });
+
+    it("compares the Payroll ID stored at their first sync, not a newer copied one", () => {
+      const stored = records({ employeeMap: [mapRow({ ctUserId: 100, lastOutcome: "correction", externalId: "E0001" })] });
+      const r = one(person(), [eh({ id: 33, externalId: "E0001", emailAddress: "jack@example.com" }), eh({ id: 34, externalId: "E0042" })], { records: stored });
+      expect(r).toMatchObject({ outcome: "found", eh: [{ ehEmployeeId: 33 }] });
+    });
+
+    it("doesn't count someone excluded, synced or on the Link list towards 'used twice'", () => {
+      const rec = records({
+        employeeMap: [mapRow({ ctUserId: 2, ehEmployeeId: "35", lastOutcome: "ok" })],
+        pendingLinks: [{ ctUserId: 3, ehEmployeeId: "36" }],
+      });
+      const rows = classifyAll([person({ ctUserId: 1 }), person({ ctUserId: 2 }), person({ ctUserId: 3 }), person({ ctUserId: 4, excluded: true })], [], opts({ records: rec }));
+      expect(rows.map((r) => r.outcome)).toEqual(["not-found", "already-synced", "on-link-list", "excluded"]);
     });
   });
 
@@ -163,7 +194,7 @@ describe("classifyAll", () => {
 
     it("someone who already synced isn't re-linked by a pending link", () => {
       const both = records({
-        employeeMap: [{ ctUserId: 100, ehEmployeeId: "16", lastOutcome: "follow_up" }],
+        employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "16", lastOutcome: "follow_up" })],
         pendingLinks: [{ ctUserId: 100, ehEmployeeId: "17" }],
       });
       expect(one(person(), [], { records: both }).outcome).toBe("already-synced");
@@ -209,9 +240,9 @@ describe("renderPreflight", () => {
     }
   });
 
-  it("says when the database wasn't read, and not when it was", () => {
-    expect(text).toContain("The sync's database wasn't read");
-    expect(renderPreflight([], 0, { recordsRead: true })).not.toContain("database wasn't read");
+  it("says when there's no database yet, and not when it was read", () => {
+    expect(text).toContain("There's no database yet");
+    expect(renderPreflight([], 0, { recordsRead: true })).not.toContain("no database yet");
   });
 
   it("shows the Link list's rows", () => {

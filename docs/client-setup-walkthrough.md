@@ -41,11 +41,13 @@ person is one of:
   so they get their Connecteam ID. Flagged when they'd also be held.
 - **On the Link list: will be linked,** to the EH employee confirmed in the
   link stage (a "New hire, not this person" row is created instead).
-- **Already synced:** the sync already has their EH record.
+- **Already synced or linked:** the sync already has their EH record.
+- **Left out of the sync:** the field map's exclude rule leaves them out.
 
 A terminated EH employee is marked `terminated`. On a live deployment the check
-also reads the sync's database (who has synced, and the Link list). At stage 9
-of a first setup there's no database yet, and it says so.
+also reads the sync's database (who has synced or is linked, their stored
+Payroll ID, and the Link list). At stage 9 of a first setup there's no database
+yet, and it says so; once `.dev.vars` names one, a failed read stops the check.
 
 It prints Connecteam and EH ids and the names of the keys that agree, never a
 name or detail. It doesn't block: the wizard asks before carrying on. The link

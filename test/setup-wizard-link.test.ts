@@ -18,7 +18,7 @@ function wizard(args: string[], env: Record<string, string> = {}, input = "") {
   const log = join(bin, "npm.log");
   writeFileSync(
     join(bin, "npm"),
-    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\nif [[ "$*" == *link* && -n "\${FAIL_LINK:-}" ]]; then exit 1; fi\nexit 0\n`,
+    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\nif [[ "$*" == *link* && -n "\${FAIL_LINK:-}" ]]; then exit 1; fi\nif [[ "$*" == *preflight* ]]; then exit "\${PREFLIGHT_RC:-0}"; fi\nexit 0\n`,
   );
   chmodSync(join(bin, "npm"), 0o755);
   const r = spawnSync("bash", [WIZARD, ...args], {
@@ -47,6 +47,14 @@ describe("setup wizard, link stage", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("Stage 1/1 · Link Pre-existing employees");
     expect(r.stdout).not.toContain("Cloudflare account");
+    expect(r.calls).toEqual(["run --silent preflight", "run --silent link"]);
+  });
+
+  it("asks to open the Link list, pointing held people there", () => {
+    const r = wizard(["--stage", "link"], { PREFLIGHT_RC: "2" }, "y\n");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Open the Link list?");
+    expect(r.stdout).toContain("can be linked to that record in the Link list, next.");
     expect(r.calls).toEqual(["run --silent preflight", "run --silent link"]);
   });
 
