@@ -91,8 +91,13 @@ export function norm(s: string | null): string {
   return (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/**
+ * EH's stored Payroll ID, as its `/externalid/{id}` lookup compares it: a
+ * trailing space is ignored, but a leading space or zero counts (tested on the
+ * demo account, 2026-11-11). The sync asks with a trimmed value.
+ */
 function externalIdOf(e: PreflightEhEmployee): string {
-  return typeof e.externalId === "string" ? e.externalId.trim() : "";
+  return typeof e.externalId === "string" ? e.externalId.replace(/\s+$/, "") : "";
 }
 
 function matchOf(payload: EhEmployeePayload, e: PreflightEhEmployee): PreflightMatch {
