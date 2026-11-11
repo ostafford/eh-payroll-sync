@@ -189,7 +189,16 @@ async function maybeRunRecheck(
   if (Date.now() - last < RECHECK_INTERVAL_MS) return;
 
   const eh = new EhPayrollClient({ apiKey: env.EH_API_KEY, businessId: env.EH_BUSINESS_ID });
-  const result = await runRecheck({ eh, ct, store, adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID });
+  const result = await runRecheck({
+    eh,
+    ct,
+    store,
+    adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID,
+    enqueue: async (jobs) => {
+      await env.SYNC_QUEUE.sendBatch(jobs.map((body) => ({ body })));
+      await store.bumpCounter("enqueued_total", jobs.length);
+    },
+  });
   await store.setMarker("last_recheck_at", Date.now());
   logEvent({ evt: "recheck", ...result });
 }
@@ -241,6 +250,8 @@ export default {
       rateLimit: () => ct.lastRateLimit,
       readState: () => store.readOnboardingState(),
       writeState: (assignments, seenAt) => store.writeOnboardingState(assignments, seenAt),
+      listUnsyncedLinks: () => store.listUnsyncedLinks(),
+      markLinksQueued: (ctUserIds) => store.markLinksQueued(ctUserIds),
       enqueue: async (jobs) => {
         await env.SYNC_QUEUE.sendBatch(jobs.map((body) => ({ body })));
         await store.bumpCounter("enqueued_total", jobs.length);

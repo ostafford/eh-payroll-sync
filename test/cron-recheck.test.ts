@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { runRecheck, type RecheckDeps } from "../src/cron/recheck.js";
 import type { EmployeeLink, EmployeeLinkPatch, RecheckGateway, SyncLogEntry } from "../src/sync/gateway.js";
+import type { SyncJob } from "../src/sync/job.js";
 
 // --- fakes -------------------------------------------------------------
 
@@ -16,6 +17,9 @@ function fakeStore(seed: EmployeeLink[] = []): RecheckGateway & {
     rows,
     log,
     meta,
+    async listHeldLinks() {
+      return [...rows.values()].filter((r) => r.lastOutcome === "existing_match").map((r) => r.ctUserId);
+    },
     async listFollowUpLinks() {
       return [...rows.values()].filter((r) => r.lastOutcome === "follow_up" && r.ehEmployeeId !== null);
     },
@@ -95,6 +99,7 @@ function fakeCt(failSends = 0): CtFake {
 }
 
 const ADMIN_CHANNEL = "admin-channel";
+const noEnqueue = async () => {};
 
 describe("runRecheck", () => {
   it("resolves a follow-up row whose EH status is no longer Incomplete", async () => {
@@ -102,9 +107,9 @@ describe("runRecheck", () => {
     const eh = fakeEh({ "100": { status: "Complete" } });
     const ct = fakeCt();
 
-    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
-    expect(result).toEqual({ status: "ok", checked: 1, resolved: 1, stillIncomplete: 0, skipped: 0 });
+    expect(result).toEqual({ status: "ok", checked: 1, resolved: 1, stillIncomplete: 0, skipped: 0, requeued: 0 });
     expect(store.rows.get(100)?.lastOutcome).toBe("resolved");
     expect(store.log).toEqual([
       { ctUserId: 100, at: expect.any(Number), outcome: "resolved", detail: 'resolved: status now "Complete"' },
@@ -119,7 +124,7 @@ describe("runRecheck", () => {
     const store = fakeStore([link({ ctUserId: 100, externalId: "P-100" })]);
     const eh = fakeEh({ "P-100": { status: "Complete" } });
 
-    const result = await runRecheck({ eh, ct: fakeCt(), store, adminChannelId: ADMIN_CHANNEL });
+    const result = await runRecheck({ eh, ct: fakeCt(), store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
     expect(eh.calls).toEqual(["P-100"]);
     expect(result).toMatchObject({ resolved: 1 });
@@ -130,9 +135,9 @@ describe("runRecheck", () => {
     const eh = fakeEh({ "100": { status: "Incomplete" } });
     const ct = fakeCt();
 
-    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
-    expect(result).toEqual({ status: "ok", checked: 1, resolved: 0, stillIncomplete: 1, skipped: 0 });
+    expect(result).toEqual({ status: "ok", checked: 1, resolved: 0, stillIncomplete: 1, skipped: 0, requeued: 0 });
     expect(store.rows.get(100)?.lastOutcome).toBe("follow_up");
     expect(store.log).toEqual([]);
     expect(ct.channels).toEqual([]);
@@ -143,7 +148,7 @@ describe("runRecheck", () => {
     const eh = fakeEh({ "100": { status: "Complete" } });
     const ct = fakeCt();
 
-    await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
     // The `eh` fake only implements getByExternalId - runRecheck compiles and
     // runs against it, so it structurally cannot be calling a write method.
@@ -155,9 +160,9 @@ describe("runRecheck", () => {
     const eh = fakeEh({});
     const ct = fakeCt();
 
-    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
-    expect(result).toEqual({ status: "ok", checked: 0, resolved: 0, stillIncomplete: 0, skipped: 0 });
+    expect(result).toEqual({ status: "ok", checked: 0, resolved: 0, stillIncomplete: 0, skipped: 0, requeued: 0 });
     expect(eh.calls).toEqual([]);
   });
 
@@ -166,11 +171,11 @@ describe("runRecheck", () => {
     const eh = fakeEh({});
     const ct = fakeCt();
 
-    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
     // never listed - listFollowUpLinks filters null ehEmployeeId, matching the
     // real store's WHERE clause, so this row never reaches the loop at all.
-    expect(result).toEqual({ status: "ok", checked: 0, resolved: 0, stillIncomplete: 0, skipped: 0 });
+    expect(result).toEqual({ status: "ok", checked: 0, resolved: 0, stillIncomplete: 0, skipped: 0, requeued: 0 });
     expect(eh.calls).toEqual([]);
   });
 
@@ -179,9 +184,9 @@ describe("runRecheck", () => {
     const eh = fakeEh({ "100": "retryable" });
     const ct = fakeCt();
 
-    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
-    expect(result).toEqual({ status: "ok", checked: 1, resolved: 0, stillIncomplete: 0, skipped: 1 });
+    expect(result).toEqual({ status: "ok", checked: 1, resolved: 0, stillIncomplete: 0, skipped: 1, requeued: 0 });
     expect(store.rows.get(100)?.lastOutcome).toBe("follow_up");
     expect(store.log).toEqual([]);
   });
@@ -195,7 +200,7 @@ describe("runRecheck", () => {
     const eh = fakeEh({ "100": { status: "Complete" }, "101": { status: "Complete" }, "102": { status: "Complete" } });
     const ct = fakeCt();
 
-    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, maxPerRun: 2 });
+    const result = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue, maxPerRun: 2 });
 
     expect(result.checked).toBe(2);
     expect(eh.calls.length).toBe(2);
@@ -215,7 +220,7 @@ describe("runRecheck", () => {
       },
     };
 
-    await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
     expect(sent).toEqual([
       "✅ Connecteam user 100 is now Complete in Employment Hero - no more action needed.",
@@ -235,9 +240,9 @@ describe("runRecheck - a failed resolved notice (issue #94)", () => {
     const eh = fakeEh({ "100": { status: "Complete" } });
     const ct = fakeCt(1);
 
-    const first = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    const first = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
-    expect(first).toEqual({ status: "ok", checked: 1, resolved: 0, stillIncomplete: 0, skipped: 1 });
+    expect(first).toEqual({ status: "ok", checked: 1, resolved: 0, stillIncomplete: 0, skipped: 1, requeued: 0 });
     expect(store.rows.get(100)?.lastOutcome).toBe("follow_up");
     expect(store.log).toEqual([]);
     expect(ct.channels).toEqual([]);
@@ -246,11 +251,64 @@ describe("runRecheck - a failed resolved notice (issue #94)", () => {
     );
 
     // The next daily run: Connecteam is back.
-    const second = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL });
+    const second = await runRecheck({ eh, ct, store, adminChannelId: ADMIN_CHANNEL, enqueue: noEnqueue });
 
-    expect(second).toEqual({ status: "ok", checked: 1, resolved: 1, stillIncomplete: 0, skipped: 0 });
+    expect(second).toEqual({ status: "ok", checked: 1, resolved: 1, stillIncomplete: 0, skipped: 0, requeued: 0 });
     expect(store.rows.get(100)?.lastOutcome).toBe("resolved");
     expect(store.log.map((l) => l.outcome)).toEqual(["resolved"]);
     expect(ct.channels).toHaveLength(1);
+  });
+});
+
+describe("runRecheck - Held employees (#155, #165)", () => {
+  it("queues every Held employee, and nobody else, without asking EH", async () => {
+    const store = fakeStore([
+      link({ ctUserId: 100, ehEmployeeId: null, lastOutcome: "existing_match" }),
+      link({ ctUserId: 101, ehEmployeeId: null, lastOutcome: "existing_match" }),
+      link({ ctUserId: 102, lastOutcome: "ok" }),
+    ]);
+    const eh = fakeEh({});
+    const enqueued: SyncJob[] = [];
+
+    const result = await runRecheck({
+      eh,
+      ct: fakeCt(),
+      store,
+      adminChannelId: ADMIN_CHANNEL,
+      enqueue: async (jobs) => {
+        enqueued.push(...jobs);
+      },
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(enqueued).toEqual([
+      { reason: "approval", ctUserId: 100, eventTimestamp: 1_700_000_000_000 },
+      { reason: "approval", ctUserId: 101, eventTimestamp: 1_700_000_000_000 },
+    ]);
+    expect(result).toMatchObject({ requeued: 2 });
+    expect(eh.calls).toEqual([]);
+  });
+
+  it("queues at most maxHeldPerRun (default 20), oldest first; the rest wait for a later run", async () => {
+    const held = Array.from({ length: 22 }, (_, i) =>
+      link({ ctUserId: 200 + i, ehEmployeeId: null, lastOutcome: "existing_match" }),
+    );
+    const enqueued: SyncJob[] = [];
+    const deps = {
+      eh: fakeEh({}),
+      ct: fakeCt(),
+      store: fakeStore(held),
+      adminChannelId: ADMIN_CHANNEL,
+      enqueue: async (jobs: SyncJob[]) => {
+        enqueued.push(...jobs);
+      },
+    };
+
+    const byDefault = await runRecheck(deps);
+    const capped = await runRecheck({ ...deps, maxHeldPerRun: 2 });
+
+    expect(byDefault.requeued).toBe(20);
+    expect(enqueued.slice(0, 20).map((j) => j.ctUserId)).toEqual(held.slice(0, 20).map((r) => r.ctUserId));
+    expect(capped.requeued).toBe(2);
   });
 });

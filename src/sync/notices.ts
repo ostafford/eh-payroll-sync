@@ -46,6 +46,12 @@ export type NoticeKind =
 
 /** A follow-up can wait on a payroll admin for a while - at most twice a day. */
 export const FOLLOW_UP_NOTICE_DEDUPE_MS = 12 * 60 * 60 * 1000;
+/**
+ * A Held employee runs again every day (the daily recheck, #155) until the
+ * admin resolves them: an unchanged hold is re-posted at most weekly, in step
+ * with the status digest, which is the reminder (#143 item 5).
+ */
+export const HELD_NOTICE_DEDUPE_MS = 7 * 24 * 60 * 60 * 1000;
 /** Repeated dead-letters for one user in an hour are one incident. */
 export const SYSTEM_ALERT_NOTICE_DEDUPE_MS = 60 * 60 * 1000;
 /**

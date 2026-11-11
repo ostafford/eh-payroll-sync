@@ -63,6 +63,7 @@ import {
   releaseNotice,
   type NoticeKind,
   FOLLOW_UP_NOTICE_DEDUPE_MS,
+  HELD_NOTICE_DEDUPE_MS,
   SYSTEM_ALERT_NOTICE_DEDUPE_MS,
   CORRECTION_NOTICE_DEDUPE_MS,
 } from "./notices.js";
@@ -584,12 +585,12 @@ async function holdExisting(
   const detail = existingMatchDetail(matches);
   // Keyed by what the notice says (candidates, keys and any Payroll ID hint),
   // not the payload hash: a later profile edit that changes none of that
-  // doesn't repost it within the window. The digest is the only reminder
-  // (#143 item 5). A hold with no hint keeps the key it had before hints.
+  // doesn't repost it within the window, nor does the daily recheck's re-run
+  // (#155). The digest is the reminder (#143 item 5). A hold with no hint keeps the key it had before hints.
   const shown = [detail, ...(held.notes ?? [])];
   for (const [i, text] of existingMatchMessages(person, matches, held.notes).entries()) {
     const key = await noticeKey("existing_match", ctUserId, i === 0 ? shown : [...shown, `part ${i + 1}`]);
-    if (!(await shouldPostNotice(deps.store, key, FOLLOW_UP_NOTICE_DEDUPE_MS, held.now))) continue;
+    if (!(await shouldPostNotice(deps.store, key, HELD_NOTICE_DEDUPE_MS, held.now))) continue;
     const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
       deps.ct.sendChannelMessage(deps.adminChannelId, text),
     );

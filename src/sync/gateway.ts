@@ -136,6 +136,8 @@ export interface RecheckGateway
   extends Pick<SyncGateway, "appendSyncLog" | "saveEmployeeLink" | "readMeta" | "setMarker"> {
   /** Every `employee_map` row whose last attempt ended in a Manual-follow-up. */
   listFollowUpLinks(): Promise<EmployeeLink[]>;
+  /** The ctUserId of every Held employee (`existing_match`), least recently updated first (#155). */
+  listHeldLinks(): Promise<number[]>;
 }
 
 /**

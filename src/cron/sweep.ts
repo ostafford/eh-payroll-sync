@@ -80,6 +80,14 @@ export interface SweepDeps {
   readState: () => Promise<OnboardingStateRow[]>;
   writeState: (assignments: readonly OnboardingAssignment[], seenAt: number) => Promise<void>;
   enqueue: (jobs: SyncJob[]) => Promise<void>;
+  /**
+   * Approved, never-synced people with a pending link not yet queued for it
+   * (#155): their pack is `completed` but they have no `employee_map` row, e.g.
+   * after an old dead-letter. A D1 read, never an EH call.
+   */
+  listUnsyncedLinks: () => Promise<number[]>;
+  /** Record that these people's pending links are queued, so a later tick doesn't queue them again. */
+  markLinksQueued: (ctUserIds: readonly number[]) => Promise<void>;
   now?: () => number;
   maxEnqueuePerSweep?: number;
 }
@@ -121,13 +129,20 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
   const budget = underRatePressure(deps.rateLimit()) ? 0 : max;
 
   const prior = new Map((await deps.readState()).map((r) => [r.assignmentId, r] as const));
-  const { toEnqueue, toPersist, deferred } = diffAssignments(listed.data, prior, budget);
+  const diff = diffAssignments(listed.data, prior, budget);
+  const { toEnqueue, toPersist } = diff;
+
+  // Fresh approvals take the budget first; any links left over wait for the next tick.
+  const unsynced = await deps.listUnsyncedLinks();
+  const linkIds = unsynced.slice(0, budget - toEnqueue.length);
+  const deferred = diff.deferred + unsynced.length - linkIds.length;
 
   const at = now();
-  if (toEnqueue.length > 0) {
-    await deps.enqueue(
-      toEnqueue.map((a) => ({ reason: "approval", ctUserId: a.userId, eventTimestamp: at })),
-    );
+  const ctUserIds = [...toEnqueue.map((a) => a.userId), ...linkIds];
+  if (ctUserIds.length > 0) {
+    await deps.enqueue(ctUserIds.map((ctUserId) => ({ reason: "approval", ctUserId, eventTimestamp: at })));
+    // Fresh approvals too: next tick they'd match the list while their job is still in flight.
+    await deps.markLinksQueued(ctUserIds);
   }
   if (toPersist.length > 0) {
     await deps.writeState(toPersist, at);
@@ -136,7 +151,7 @@ export async function runSweep(deps: SweepDeps): Promise<SweepResult> {
   return {
     status: budget === 0 && deferred > 0 ? "skipped" : "ok",
     listed: listed.data.length,
-    enqueued: toEnqueue.length,
+    enqueued: ctUserIds.length,
     deferred,
   };
 }
