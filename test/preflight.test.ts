@@ -1,10 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyAll,
-  classifyPerson,
-  duplicateEmailGroups,
-  duplicateTfnGroups,
-  hasBlocking,
+  needsAttention,
   renderPreflight,
   type PreflightEhEmployee,
   type PreflightPerson,
@@ -12,140 +9,138 @@ import {
 
 const person = (over: Partial<PreflightPerson> = {}): PreflightPerson => ({
   ctUserId: 100,
-  name: "Jack Mitchell",
-  email: "jack@example.com",
-  tfn: "123456782",
+  key: "E0042",
+  keyFromField: true,
+  payload: {
+    firstName: "Jack",
+    surname: "Mitchell",
+    emailAddress: "jack@example.com",
+    taxFileNumber: "123456782",
+    dateOfBirth: "1990-04-01",
+    bankAccounts_0_accountNumber: "11223344",
+    externalId: "E0042",
+  },
   ...over,
 });
 const eh = (over: Partial<PreflightEhEmployee> = {}): PreflightEhEmployee => ({
   id: 9000,
-  name: "Someone Else",
-  email: "someone@example.com",
-  tfn: "876543210",
   externalId: null,
+  firstName: "Someone",
+  surname: "Else",
+  emailAddress: "someone@example.com",
+  taxFileNumber: "876543210",
+  dateOfBirth: "1970-01-01T00:00:00",
   ...over,
 });
 
-describe("classifyPerson", () => {
-  it("is linked when an EH record already carries their Connecteam ID, whatever the TFN says", () => {
-    const r = classifyPerson(person(), [eh({ id: 1, externalId: "100", tfn: "999999999" })]);
-    expect(r).toMatchObject({ outcome: "linked", ehIds: [1] });
+const one = (p: PreflightPerson, records: PreflightEhEmployee[], fromField = true) => classifyAll([p], records, fromField)[0]!;
+
+describe("classifyAll", () => {
+  it("is found when the key finds one EH employee, listing the keys that agree and differ", () => {
+    const r = one(person(), [eh({ id: 1, externalId: "E0042", emailAddress: "JACK@example.com " })]);
+    expect(r).toMatchObject({ outcome: "found", ehIds: [1], agree: ["email"], differs: ["tfn", "nameDob"] });
+    expect(needsAttention(r)).toBe(false);
   });
 
-  it("is new when nothing in EH matches by TFN, email or name", () => {
-    expect(classifyPerson(person(), [eh()]).outcome).toBe("new");
+  it("is found, nothing agrees, when the key finds someone with no agreeing detail: they'll be held", () => {
+    const r = one(person(), [eh({ id: 2, externalId: "E0042" })]);
+    expect(r).toMatchObject({ outcome: "found-no-agreement", ehIds: [2], agree: [], differs: ["email", "tfn", "nameDob"] });
+    expect(needsAttention(r)).toBe(true);
   });
 
-  it("will merge into the one hand-made EH record with the same TFN", () => {
-    const r = classifyPerson(person(), [eh({ id: 2, tfn: "123456782" })]);
-    expect(r).toMatchObject({ outcome: "merge", ehIds: [2] });
+  it("is not found, and created, when nobody holds the key and the Pre-create check is clear", () => {
+    const r = one(person(), [eh()]);
+    expect(r).toMatchObject({ outcome: "not-found", ehIds: [], hits: [] });
+    expect(needsAttention(r)).toBe(false);
   });
 
-  it("is ambiguous when two EH records share their TFN (the two-Jacks rehearsal case)", () => {
-    const r = classifyPerson(person({ ctUserId: 17760362 }), [
-      eh({ id: 14506736, tfn: "123456782", externalId: "17760363" }),
-      eh({ id: 14683486, tfn: "123456782" }),
-    ]);
-    expect(r).toMatchObject({ outcome: "ambiguous", ehIds: [14506736, 14683486] });
+  it("is not found but held when the Pre-create check would hit, naming the keys", () => {
+    const r = one(person(), [eh({ id: 3, firstName: "JACK", surname: "mitchell", dateOfBirth: "1990-04-01T00:00:00" })]);
+    expect(r).toMatchObject({ outcome: "not-found", hits: [{ ehEmployeeId: 3, agree: ["nameDob"] }] });
+    expect(needsAttention(r)).toBe(true);
   });
 
-  it("is taken when the one TFN match is already linked to another Connecteam person", () => {
-    const r = classifyPerson(person(), [eh({ id: 3, tfn: "123456782", externalId: "555" })]);
-    expect(r).toMatchObject({ outcome: "taken", ehIds: [3] });
+  it("never counts an ATO placeholder TFN as a Pre-create hit", () => {
+    const p = person({ payload: { ...person().payload, taxFileNumber: "333333333" } });
+    expect(one(p, [eh({ taxFileNumber: "333333333" })]).hits).toEqual([]);
   });
 
-  it("is a likely duplicate when the name or email matches but the TFN does not", () => {
-    expect(classifyPerson(person(), [eh({ id: 4, name: "jack  MITCHELL" })])).toMatchObject({
-      outcome: "likely-duplicate",
-      ehIds: [4],
-    });
-    expect(classifyPerson(person(), [eh({ id: 5, email: " JACK@example.com " })]).outcome).toBe("likely-duplicate");
+  it("is ID used twice when two Connecteam people share a key, for both", () => {
+    const rows = classifyAll([person({ ctUserId: 1 }), person({ ctUserId: 2 }), person({ ctUserId: 3, key: "E0043" })], [], true);
+    expect(rows.map((r) => r.outcome)).toEqual(["id-used-twice", "id-used-twice", "not-found"]);
+    expect(needsAttention(rows[0]!)).toBe(true);
   });
 
-  it("does not match on a blank email", () => {
-    expect(classifyPerson(person({ email: null }), [eh({ email: null })]).outcome).toBe("new");
+  it("is ID used twice when more than one EH record holds the key", () => {
+    const r = one(person(), [eh({ id: 4, externalId: "E0042" }), eh({ id: 5, externalId: "E0042" })]);
+    expect(r).toMatchObject({ outcome: "id-used-twice", ehIds: [4, 5] });
   });
 
-  it("reports no TFN rather than guessing", () => {
-    expect(classifyPerson(person({ tfn: null }), [eh({ name: "Jack Mitchell" })]).outcome).toBe("no-tfn");
+  it("is no ID when the setting is on but their field is blank, flagged only on a Pre-create hit", () => {
+    const blank = person({ key: "100", keyFromField: false });
+    const clear = one(blank, [eh()]);
+    expect(clear).toMatchObject({ outcome: "no-id", hits: [] });
+    expect(needsAttention(clear)).toBe(false);
+
+    const hit = one(blank, [eh({ id: 6, emailAddress: "jack@example.com" })]);
+    expect(hit).toMatchObject({ outcome: "no-id", hits: [{ ehEmployeeId: 6, agree: ["email"] }] });
+    expect(needsAttention(hit)).toBe(true);
   });
 
-  it("never TFN-matches an exemption code: EH keeps those as separate records", () => {
-    const sharing = [eh({ id: 8, tfn: "333333333" }), eh({ id: 9, tfn: "333333333" })];
-    expect(classifyPerson(person({ tfn: "333333333" }), sharing).outcome).toBe("new");
+  it("without the setting, keys on the userId: not found is not 'no ID'", () => {
+    expect(one(person({ key: "100", keyFromField: false }), [eh()], false).outcome).toBe("not-found");
   });
 
-  it("is a likely duplicate when an exemption-code person has a hand-made EH record (the two-Jacks case)", () => {
-    const r = classifyPerson(person({ ctUserId: 17760363, tfn: "333333333" }), [
-      eh({ id: 14683486, name: "Jack Mitchell", email: "jack@example.com", tfn: "333333333" }),
-    ]);
-    expect(r).toMatchObject({ outcome: "likely-duplicate", ehIds: [14683486] });
+  it("is already synced when EH holds their userId, whatever else agrees", () => {
+    const r = one(person({ key: "100", keyFromField: false }), [eh({ id: 7, externalId: "100" })], false);
+    expect(r).toMatchObject({ outcome: "already-synced", ehIds: [7] });
   });
-});
 
-describe("duplicateTfnGroups", () => {
-  it("groups EH records sharing a real TFN and ignores exemption codes and blanks", () => {
-    const groups = duplicateTfnGroups([
-      eh({ id: 1, tfn: "123456782" }),
-      eh({ id: 2, tfn: "123456782" }),
-      eh({ id: 3, tfn: "111111111" }),
-      eh({ id: 4, tfn: "111111111" }),
-      eh({ id: 5, tfn: null }),
-      eh({ id: 6, tfn: null }),
-    ]);
-    expect(groups.map((g) => g.map((e) => e.id))).toEqual([[1, 2]]);
+  it("is already synced, not held, when they synced before their Payroll ID field was filled: the stored key wins", () => {
+    const r = one(person(), [eh({ id: 8, externalId: "100", emailAddress: "jack@example.com" })]);
+    expect(r).toMatchObject({ outcome: "already-synced", ehIds: [8], hits: [] });
   });
 });
 
-describe("duplicateEmailGroups", () => {
-  it("groups EH records sharing an email, ignoring case and blanks", () => {
-    const groups = duplicateEmailGroups([
-      eh({ id: 1, email: "Jack@example.com" }),
-      eh({ id: 2, email: " jack@example.com" }),
-      eh({ id: 3, email: null }),
-      eh({ id: 4, email: null }),
-    ]);
-    expect(groups.map((g) => g.map((e) => e.id))).toEqual([[1, 2]]);
-  });
-});
+describe("renderPreflight", () => {
+  const records = [
+    eh({ id: 1, externalId: "E0042", emailAddress: "jack@example.com" }),
+    eh({ id: 2, externalId: "E0050" }),
+    eh({ id: 3, firstName: "Jack", surname: "Mitchell", dateOfBirth: "1990-04-01T00:00:00" }),
+  ];
+  const people = [
+    person({ ctUserId: 11 }),
+    person({ ctUserId: 12, key: "E0050" }),
+    person({ ctUserId: 13, key: "E0099" }),
+    person({ ctUserId: 14, key: "14", keyFromField: false }),
+    person({ ctUserId: 15, key: "E0060" }),
+    person({ ctUserId: 16, key: "E0060" }),
+  ];
 
-describe("hasBlocking / renderPreflight", () => {
-  it("is safe to deploy when everyone is linked, new or a clean merge", () => {
-    const ehs = [eh({ id: 1, externalId: "100" }), eh({ id: 2, tfn: "222222222", name: "B", email: "b@x" })];
-    const rows = classifyAll(
-      [person(), person({ ctUserId: 101, name: "A", email: null, tfn: "333333334" }), person({ ctUserId: 102, name: "Bb", email: null, tfn: "222222222" })],
-      ehs,
-    );
-    expect(rows.map((r) => r.outcome)).toEqual(["linked", "new", "merge"]);
-    expect(hasBlocking(rows, ehs)).toBe(false);
-    expect(renderPreflight(rows, ehs)).toContain("✓ Nothing to fix. Safe to deploy.");
-  });
-
-  it("blocks on duplicate TFNs already in EH even when every person is fine", () => {
-    const ehs = [
-      eh({ id: 1, externalId: "100" }),
-      eh({ id: 2, tfn: "444455556", email: "a@x" }),
-      eh({ id: 3, tfn: "444455556", email: "b@x" }),
-    ];
-    const rows = classifyAll([person()], ehs);
-    expect(hasBlocking(rows, ehs)).toBe(true);
-    const text = renderPreflight(rows, ehs);
-    expect(text).toContain("EH employees sharing a TFN (1 group)");
-    expect(text).toContain("✗ 1 thing to fix before deploying.");
+  it("lists problems first, with ids and key names", () => {
+    const text = renderPreflight(classifyAll(people, records, true), records.length);
+    const order = ["Payroll ID used twice", "nothing else agrees", "No Payroll ID, and already in EH", "Not found, but already in EH", "Found: will be linked"];
+    const at = order.map((t) => text.indexOf(t));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(text).toContain("Connecteam 11 -> EH 1 (agrees: email; differs: TFN, name + date of birth)");
+    expect(text).toContain("Connecteam 13 -> EH 1 (email), EH 3 (name + date of birth)");
+    expect(text).toContain("⚠ 5 people need a look");
   });
 
-  it("blocks on two EH records sharing an email", () => {
-    const ehs = [eh({ id: 1, externalId: "100", email: "j@x" }), eh({ id: 2, email: "J@x" })];
-    expect(hasBlocking(classifyAll([person()], ehs), ehs)).toBe(true);
-    expect(renderPreflight(classifyAll([person()], ehs), ehs)).toContain("EH employees sharing an email (1 group)");
+  it("never prints a TFN, bank, email, name, date of birth or Payroll ID value", () => {
+    const text = renderPreflight(classifyAll(people, records, true), records.length);
+    for (const value of ["123456782", "876543210", "11223344", "jack@example.com", "someone@example.com", "Jack", "Mitchell", "Someone", "1990-04-01", "E0042", "E0050", "E0060", "E0099"]) {
+      expect(text).not.toContain(value);
+    }
   });
 
-  it("lists problems first and never prints a TFN", () => {
-    const ehs = [eh({ id: 7, name: "Jack Mitchell" })];
-    const rows = classifyAll([person(), person({ ctUserId: 101, name: "New Person", email: null, tfn: "565656565" })], ehs);
-    const text = renderPreflight(rows, ehs);
-    expect(text.indexOf("Likely duplicate")).toBeLessThan(text.indexOf("New to EH"));
-    expect(text).toContain("Jack Mitchell (Connecteam 100) -> EH 7");
-    expect(text).not.toMatch(/123456782|876543210|565656565/);
+  it("counts pack assignees with no Connecteam profile", () => {
+    expect(renderPreflight([], 0, 3)).toContain("3 more in the pack have no active Connecteam profile (archived or deleted), so aren't checked.");
+    expect(renderPreflight([], 0)).not.toContain("no Connecteam profile");
+  });
+
+  it("says nothing needs a look when everyone is clear", () => {
+    expect(renderPreflight(classifyAll([person()], [eh()], true), 1)).toContain("✓ Nothing to look at.");
   });
 });

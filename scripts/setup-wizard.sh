@@ -426,6 +426,30 @@ link_stage() {
   npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }
 }
 
+# The check before go-live (#168): read-only, and it never blocks. It shows
+# what each approval will do, then carries on only once the human says so.
+# Exit 2 means someone needs a look; 1 means the check itself failed.
+preflight_check() {
+  local rc
+  while :; do
+    # Inside an `if`, so `set -e` doesn't stop the wizard on exit 2. Progress
+    # (stderr) goes straight to the terminal, as it rewrites one line.
+    if npm run --silent preflight | sed 's/^./  &/'; then rc=0; else rc=${PIPESTATUS[0]}; fi
+    printf '\n'
+    if [[ $rc -eq 1 ]]; then
+      warn "The check couldn't run (the message above says why). Nothing was changed."
+      note "Run it again later with: npm run preflight"
+    elif [[ $rc -eq 2 ]]; then
+      warn "Some people need a look before their onboarding pack is approved (listed above)."
+      note "You can carry on and fix them in Connecteam later; run 'npm run preflight' to check again."
+    fi
+    confirm "Carry on with the setup?" && return 0
+    confirm "Fix them in Connecteam now, then check again?" \
+      || { fail "Stopped here. Fix them in Connecteam, then run the wizard again."; exit 1; }
+    printf '\n'
+  done
+}
+
 if [[ "$STAGE_ONLY" == "link" ]]; then
   TOTAL_STAGES=1
   link_stage
@@ -628,6 +652,12 @@ if [[ -z "$v" || "$v" == "TODO" ]]; then
   v="$EH_BUSINESS_ID"
 fi
 save EH_BUSINESS_ID "$v" "the Employment Hero business"
+printf '\n'
+step "Checking what each approval will do (read-only: nothing is written)."
+note "It reads everyone in the onboarding pack and the employees already in Employment Hero."
+note "The list shows Connecteam and EH ids only, never names or details."
+printf '\n'
+preflight_check
 next_up "pay-run settings."
 
 # ─────────────────────────────────────────────────────────────────────────

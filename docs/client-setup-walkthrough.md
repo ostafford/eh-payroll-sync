@@ -21,22 +21,31 @@ The client needs, ready to sign in to:
 
 The integrator needs the repo cloned and `npm` working.
 
-**If the client's staff are already in Employment Hero,** run the preflight
-before the deploy stage (it needs only the Connecteam and EH keys, the pack ID
-and the business ID in `.dev.vars`):
+**If the client's staff are already in Employment Hero,** the wizard shows
+what each person's approval will do at the end of the Field map stage (stage 9).
+It's read-only and covers everyone in the onboarding pack, approved or not. Each
+person is one of:
+
+- **Found: will be linked.** Their Payroll ID finds one EH employee and their
+  email, TFN or name + date of birth also agrees. Approval links them with no
+  EH write.
+- **Found, but nothing else agrees: will be held.** Usually a typo in the
+  Payroll ID field. Fix it in Connecteam.
+- **Not found: will be created,** or **will be held** if someone in EH has the
+  same email, TFN or name + date of birth (the Pre-create check).
+- **Payroll ID used twice.** Two Connecteam people share one, or EH holds it on
+  two records. Fix it before either is approved.
+- **No Payroll ID:** the client's Payroll ID field is set but blank for them,
+  so they get their Connecteam ID. Flagged when they'd also be held.
+- **Already synced:** EH already holds their Connecteam ID.
+
+It prints Connecteam and EH ids and the names of the keys that agree, never a
+name or detail. It doesn't block: the wizard asks before carrying on. Re-run it
+any time, before approving the packs, with:
 
 ```sh
 npm run preflight
 ```
-
-It's read-only. The first approval check syncs every approved pack at once, and
-the sync finds an existing EH employee by Connecteam ID only, then EH matches by
-TFN. So a hand-made EH record with a different TFN, an exemption code
-(`111111111` and the like), or a TFN shared with another record gets a
-**duplicate** or lands on the **wrong person**. The preflight lists each approved
-person as already linked, new, merge, or something to fix, plus EH records that
-already share a TFN or an email. Fix everything it flags, re-run until it says
-"Safe to deploy", then deploy.
 
 **Allow about 30 minutes:** ~10 for stages 1–10, a few for deploy and
 webhook, longer for linking a large headcount, and up to 15 for Cloudflare to start the first approval check
@@ -54,7 +63,7 @@ webhook, longer for linking a large headcount, and up to 15 for Cloudflare to st
 | 6 | Employment Hero: API key | Creates a key, pastes it (hidden) | — | 1–2 min |
 | 7 | Award classifications | Says whether they pay under an award; confirms it's installed in EH | The classifications imported into the "EH Pay Rate Template" dropdown (or "Nothing to do" on a re-run) | 1 min |
 | 8 | Connecteam field check | Confirms the matched fields (one "y"), picks any it asks about; reads the table; creates missing fields if offered; **attaches new fields to the onboarding pack** by hand | `28 ok · 0 required missing or wrong · 0 warnings` when everything is in place | 1–5 min |
-| 9 | Field map | Nothing, unless their fields changed since a previous run | A new client: "Built your field map from your Connecteam fields". A re-run: "Nothing to change", or the differences to copy across | 1 min |
+| 9 | Field map | Nothing, unless their fields changed since a previous run; then reads the check before go-live and confirms to carry on | A new client: "Built your field map from your Connecteam fields". A re-run: "Nothing to change", or the differences to copy across. Then each pack person's outcome, problems first | 1–5 min |
 | 10 | Pay-run settings | Picks pay schedule, location and primary pay category from their EH lists, then the pay rate source | "Saved to …", then the tests pass | 1–2 min |
 | 11 | Provision Cloudflare resources | Confirms (the only question in this stage) | ✓ Database created · ✓ Database set up (4 steps) · ✓ Queues ready | 1 min |
 | 12 | Push secrets + deploy | Waits | ✓ Stored … (×3) · ✓ Deployed: the Worker's address · ✓ Health check passed | 1–2 min |

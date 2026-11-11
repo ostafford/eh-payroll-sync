@@ -1,12 +1,12 @@
 /**
  * `npm run preflight`
  *
- * Read-only. Before a first deploy, lists what the first sync will do to each
- * approved Connecteam person given the employees already in EH: already
- * linked, new, merge, or a duplicate / ambiguous match to fix first. See
- * scripts/lib/preflight.ts for why.
+ * Read-only. Before go-live, lists what approval will do to each Connecteam
+ * person in the onboarding pack, given the employees already in EH: linked,
+ * created, held, or a Payroll ID used twice. The wizard runs it in the Field
+ * map stage. See scripts/lib/preflight.ts for the rules.
  *
- * Exit code: 0 = safe to deploy, 2 = something to fix first, 1 = the check
+ * Exit code: 0 = nothing to look at, 2 = someone needs a look, 1 = the check
  * itself failed.
  *
  * Env (from .dev.vars or the shell): CT_API_KEY, CT_ONBOARDING_PACK_ID,
@@ -17,9 +17,10 @@ import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
 import { applyFieldMap, type ConnecteamUser } from "../src/mapping/apply.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
+import type { FieldMap } from "../src/mapping/schema.js";
 import {
   classifyAll,
-  hasBlocking,
+  needsAttention,
   renderPreflight,
   type PreflightEhEmployee,
   type PreflightPerson,
@@ -62,50 +63,50 @@ async function listEhEmployees(businessId: string, apiKey: string): Promise<Pref
     if (!r.ok) throw new Error(`Employment Hero employee list -> ${r.status} ${await r.text()}`);
     const page = (await r.json()) as Array<Record<string, unknown>>;
     for (const e of page) {
+      // Only what the Pre-create check compares, plus the Payroll ID.
       out.push({
         id: Number(e.id),
-        name: [e.firstName, e.surname].filter(Boolean).join(" "),
-        email: typeof e.emailAddress === "string" && e.emailAddress ? e.emailAddress : null,
-        tfn: digits(e.taxFileNumber),
-        externalId: typeof e.externalId === "string" && e.externalId ? e.externalId : null,
+        externalId: e.externalId,
+        firstName: e.firstName,
+        surname: e.surname,
+        emailAddress: e.emailAddress,
+        taxFileNumber: e.taxFileNumber,
+        dateOfBirth: e.dateOfBirth,
       });
     }
     if (page.length < PAGE) return out;
   }
 }
 
-function digits(v: unknown): string | null {
-  const d = String(v ?? "").replace(/\D/g, "");
-  return d === "" ? null : d;
-}
-
 // --- Connecteam ----------------------------------------------------------
 
-async function listApprovedPeople(ct: ConnecteamClient, packId: number): Promise<PreflightPerson[]> {
+async function listPackPeople(
+  ct: ConnecteamClient,
+  packId: number,
+  fieldMap: FieldMap,
+): Promise<{ people: PreflightPerson[]; missing: number }> {
   const assignments = await ct.listAssignments(packId);
   if (assignments.outcome !== "ok") throw new Error(`Connecteam onboarding assignments -> ${assignments.status} ${assignments.detail}`);
-  const approved = [...new Set(assignments.data.filter((a) => a.status === "completed").map((a) => a.userId))];
+  // Every assignee, approved or not: Pre-existing employees aren't approved yet.
+  const userIds = [...new Set(assignments.data.map((a) => a.userId))];
 
-  const fieldMap = loadFieldMap(process.env.FIELD_MAP_CLIENT);
   const people: PreflightPerson[] = [];
-  for (const [i, userId] of approved.entries()) {
-    process.stderr.write(`\rReading approved Connecteam people: ${i + 1}/${approved.length}`);
+  let missing = 0;
+  for (const [i, userId] of userIds.entries()) {
+    process.stderr.write(`\rReading Connecteam people in the onboarding pack: ${i + 1}/${userIds.length}`);
     if ((ct.lastRateLimit?.minuteRemaining ?? Infinity) <= 1) await new Promise((r) => setTimeout(r, 60_000));
     const u = await ct.getUser(userId);
     if (u.outcome !== "ok") throw new Error(`Connecteam user ${userId} -> ${u.status} ${u.detail}`);
-    if (!u.data) continue;
-    // The same mapping the sync runs, so the TFN is exactly what EH would get.
+    if (!u.data) {
+      missing++;
+      continue;
+    }
+    // The same mapping the sync runs, so the key and details are exactly what EH would get.
     const mapped = applyFieldMap(u.data as unknown as ConnecteamUser, fieldMap, {});
-    const p = mapped.payload;
-    people.push({
-      ctUserId: userId,
-      name: [p.firstName ?? u.data.firstName, p.surname ?? u.data.lastName].filter(Boolean).join(" "),
-      email: typeof p.emailAddress === "string" && p.emailAddress ? p.emailAddress : null,
-      tfn: digits(p.taxFileNumber),
-    });
+    people.push({ ctUserId: userId, key: mapped.externalId, keyFromField: mapped.externalIdFromField, payload: mapped.payload });
   }
   process.stderr.write("\n");
-  return people;
+  return { people, missing };
 }
 
 // --- main --------------------------------------------------------------
@@ -113,12 +114,13 @@ async function listApprovedPeople(ct: ConnecteamClient, packId: number): Promise
 async function main(): Promise<void> {
   loadDevVars();
   const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY"), customPublisherId: 0 });
-  const people = await listApprovedPeople(ct, Number(need("CT_ONBOARDING_PACK_ID")));
+  const fieldMap = loadFieldMap(process.env.FIELD_MAP_CLIENT);
+  const { people, missing } = await listPackPeople(ct, Number(need("CT_ONBOARDING_PACK_ID")), fieldMap);
   const eh = await listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY"));
 
-  const rows = classifyAll(people, eh);
-  console.log(renderPreflight(rows, eh));
-  if (hasBlocking(rows, eh)) process.exitCode = 2;
+  const rows = classifyAll(people, eh, fieldMap.identity.externalIdFrom !== "userId");
+  console.log(renderPreflight(rows, eh.length, missing));
+  if (rows.some(needsAttention)) process.exitCode = 2;
 }
 
 main().catch((err) => {
