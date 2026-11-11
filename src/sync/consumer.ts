@@ -1174,14 +1174,18 @@ async function successKind(
 }
 
 /**
- * Whether EH has accepted a sync for this person. A row saved before `lastOutcome` existed counts if it has an EH id.
+ * Whether EH has accepted a sync for this person. A stored Payroll ID counts
+ * whatever came after, since it's stored only once EH accepts a write or link:
+ * a later Correction mustn't send them back through first-approval linking
+ * (#186). A row saved before `lastOutcome` existed counts if it has an EH id.
  * The preflight (scripts/lib/preflight.ts) uses the same rule.
  */
-export function hasSyncedBefore(link: Pick<EmployeeLink, "lastOutcome" | "ehEmployeeId"> | null): boolean {
-  return (
-    link !== null &&
-    (link.lastOutcome != null ? SYNCED_BEFORE.includes(link.lastOutcome) : link.ehEmployeeId !== null)
-  );
+export function hasSyncedBefore(
+  link: Pick<EmployeeLink, "lastOutcome" | "ehEmployeeId" | "externalId"> | null,
+): boolean {
+  if (link === null) return false;
+  if (link.externalId != null) return true;
+  return link.lastOutcome != null ? SYNCED_BEFORE.includes(link.lastOutcome) : link.ehEmployeeId !== null;
 }
 
 function employeeSuccessText(s: SuccessKind, note: string): string {

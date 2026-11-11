@@ -929,6 +929,15 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
     expect(eh.upserts).toHaveLength(1);
     expect(store.rows.get(ME)!.linkedAt).toBeUndefined();
   });
+
+  it("ignores a pending link for someone synced before whose last edit needed a Correction (#186)", async () => {
+    const store = linking({ ctUserId: ME, ehEmployeeId: "987", lastSyncedTs: 500, lastOutcome: "correction", externalId: String(ME) });
+    const eh = fakeEh();
+
+    expect((await runSyncJob(job(), deps({ store, eh }))).status).toBe("synced");
+    expect(eh.upserts).toHaveLength(1);
+    expect(store.rows.get(ME)!.linkedAt).toBeUndefined();
+  });
 });
 
 describe("runSyncJob - changed-units sync for Linked employees (#151, ADR-0009)", () => {
@@ -1763,6 +1772,33 @@ describe("runSyncJob - Payroll ID from a Connecteam field (#167, ADR-0011)", () 
     expect(said).not.toContain(TYPO);
     // Their field isn't blank, so there's nothing to copy in either.
     expect(said).not.toContain("Copy their EH Payroll ID");
+  });
+
+  // Synced in full under the copied ID, then a later edit needed a Correction (#186).
+  // This fake EH doesn't keep what's written, so only the write is checked, not the read-back.
+  const correctedSince = () =>
+    fakeGateway({ ctUserId: ME, ehEmployeeId: "40213", lastSyncedTs: 1, lastOutcome: "correction", externalId: COPIED });
+
+  it("updates someone synced under it before, even after a Correction, instead of linking them", async () => {
+    const store = correctedSince();
+    const eh = payrollEh(handEntered(40213));
+    const ct = fakeCt(withCopiedId());
+
+    expect((await run(eh, ct, store)).reason).not.toBe("linked: Payroll ID only");
+    expect(writes(eh)).toEqual([`UPSERT ${COPIED}`]);
+    expect(store.rows.get(ME)!.linkedAt).toBeUndefined();
+    expect(ct.channels.some((c) => c.text.includes("🔗"))).toBe(false);
+  });
+
+  it("doesn't hold someone synced under it before against the record the sync wrote", async () => {
+    const store = correctedSince();
+    // Their own record, though none of its details agree with theirs now.
+    const eh = payrollEh({ ...someoneElse, id: 40213 });
+    const ct = fakeCt(withCopiedId());
+
+    expect((await run(eh, ct, store)).status).not.toBe("held");
+    expect(writes(eh)).toEqual([`UPSERT ${COPIED}`]);
+    expect(ct.channels.some((c) => c.text.includes("⚠️ Held"))).toBe(false);
   });
 });
 

@@ -199,10 +199,12 @@ describe("classifyAll", () => {
       expect(one(person(), [eh({ id: 32, externalId: "E0042" })], { records: linked })).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 31 }] });
     });
 
-    it("compares the Payroll ID stored at their first sync, not a newer copied one", () => {
-      const stored = records({ employeeMap: [mapRow({ ctUserId: 100, lastOutcome: "correction", externalId: "E0001" })] });
+    it("a stored Payroll ID is already synced even after a correction, not linked again by a newer copied one (#186)", () => {
+      const stored = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "33", lastOutcome: "correction", externalId: "E0001" })] });
       const r = one(person(), [eh({ id: 33, externalId: "E0001", emailAddress: "jack@example.com" }), eh({ id: 34, externalId: "E0042" })], { records: stored });
-      expect(r).toMatchObject({ outcome: "found", eh: [{ ehEmployeeId: 33 }] });
+      expect(r).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 33 }] });
+      // Nor held against their own record when nothing agrees with it now.
+      expect(one(person(), [eh({ id: 33, externalId: "E0001" })], { records: stored }).outcome).toBe("already-synced");
     });
 
     it("with the database read, trusts it over a Connecteam ID found in EH (e.g. after a reset)", () => {
@@ -225,7 +227,7 @@ describe("classifyAll", () => {
       expect(r).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 38 }] });
       expect(needsAttention(r)).toBe(false);
       // And it isn't "no ID": the stored one is used.
-      expect(one(blank, [eh()], { records: stored }).outcome).toBe("not-found");
+      expect(one(blank, [eh()], { records: stored }).outcome).toBe("already-synced");
     });
 
     it("doesn't count someone excluded, synced or on the Link list towards 'used twice'", () => {
