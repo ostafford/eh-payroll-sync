@@ -92,12 +92,16 @@ export function norm(s: string | null): string {
 }
 
 /**
- * EH's stored Payroll ID, as its `/externalid/{id}` lookup compares it: a
- * trailing space is ignored, but a leading space or zero counts (tested on the
- * demo account, 2026-11-11). The sync asks with a trimmed value.
+ * A Payroll ID as EH's `/externalid/{id}` lookup compares it: case and a
+ * trailing space are ignored, but a leading space or zero counts (tested on
+ * the demo account, 2026-11-11). The sync asks with a trimmed value.
  */
+function payrollIdKey(id: string): string {
+  return id.replace(/\s+$/, "").toLowerCase();
+}
+
 function externalIdOf(e: PreflightEhEmployee): string {
-  return typeof e.externalId === "string" ? e.externalId.replace(/\s+$/, "") : "";
+  return typeof e.externalId === "string" ? payrollIdKey(e.externalId) : "";
 }
 
 function matchOf(payload: EhEmployeePayload, e: PreflightEhEmployee): PreflightMatch {
@@ -117,7 +121,7 @@ export function classifyAll(
   opts: PreflightOptions,
 ): PreflightRow[] {
   const idCount = new Map<string, number>();
-  for (const p of people) idCount.set(p.payrollId, (idCount.get(p.payrollId) ?? 0) + 1);
+  for (const p of people) idCount.set(payrollIdKey(p.payrollId), (idCount.get(payrollIdKey(p.payrollId)) ?? 0) + 1);
   const mapRows = new Map(opts.records?.employeeMap.map((m) => [m.ctUserId, m]));
   const pending = new Map(opts.records?.pendingLinks.map((l) => [l.ctUserId, l.ehEmployeeId]));
 
@@ -135,8 +139,9 @@ export function classifyAll(
     const linkTo = pending.get(p.ctUserId);
     if (linkTo) return { ...row, outcome: "on-link-list", eh: byId(linkTo, eh) };
 
-    const holders = eh.filter((e) => externalIdOf(e) === p.payrollId).map((e) => matchOf(p.payload, e));
-    if ((idCount.get(p.payrollId) ?? 0) > 1 || holders.length > 1) return { ...row, outcome: "id-used-twice", eh: holders };
+    const payrollId = payrollIdKey(p.payrollId);
+    const holders = eh.filter((e) => externalIdOf(e) === payrollId).map((e) => matchOf(p.payload, e));
+    if ((idCount.get(payrollId) ?? 0) > 1 || holders.length > 1) return { ...row, outcome: "id-used-twice", eh: holders };
 
     // A `userId` Payroll ID in EH is handled above, so this one was copied in.
     const [holder] = holders;

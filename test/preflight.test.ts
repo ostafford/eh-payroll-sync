@@ -76,7 +76,8 @@ describe("classifyAll", () => {
     expect(one(p, [eh({ taxFileNumber: "333333333" })]).hits).toEqual([]);
   });
 
-  it("matches EH's Payroll ID as EH's lookup does: a trailing space is ignored, a leading space or zero isn't", () => {
+  it("matches EH's Payroll ID as EH's lookup does: case and a trailing space are ignored, a leading space or zero isn't", () => {
+    expect(one(person(), [eh({ id: 21, externalId: "e0042", emailAddress: "jack@example.com" })]).outcome).toBe("found");
     expect(one(person(), [eh({ id: 18, externalId: "E0042 ", emailAddress: "jack@example.com" })]).outcome).toBe("found");
     expect(one(person(), [eh({ id: 19, externalId: " E0042", emailAddress: "jack@example.com" })]).outcome).toBe("not-found");
     expect(one(person(), [eh({ id: 20, externalId: "0E0042", emailAddress: "jack@example.com" })]).outcome).toBe("not-found");
@@ -86,6 +87,11 @@ describe("classifyAll", () => {
     const rows = classifyAll([person({ ctUserId: 1 }), person({ ctUserId: 2 }), person({ ctUserId: 3, payrollId: "E0043" })], [], opts());
     expect(rows.map((r) => r.outcome)).toEqual(["id-used-twice", "id-used-twice", "not-found"]);
     expect(needsAttention(rows[0]!)).toBe(true);
+  });
+
+  it("is ID used twice when two Connecteam Payroll IDs differ only in case, as EH treats them as one", () => {
+    const rows = classifyAll([person({ ctUserId: 1 }), person({ ctUserId: 2, payrollId: "e0042" })], [], opts());
+    expect(rows.map((r) => r.outcome)).toEqual(["id-used-twice", "id-used-twice"]);
   });
 
   it("is ID used twice when more than one EH record holds the Payroll ID", () => {
