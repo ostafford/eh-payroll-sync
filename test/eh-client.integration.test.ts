@@ -54,18 +54,20 @@ live("EH Payroll client (live test business)", () => {
   }
 
   beforeAll(async () => {
-    const r = await stable(() => findLeftovers(client, { delete: process.env.EH_TEST_DELETE_LEFTOVERS === "1" }));
+    const deleteLeftovers = process.env.EH_TEST_DELETE_LEFTOVERS === "1";
+    const r = await stable(() => findLeftovers(client, { delete: deleteLeftovers }));
     if (r.outcome !== "ok") console.warn(`Couldn't check for leftover test employees: ${r.outcome}`);
     else if (r.data.length > 0)
       console.warn(
         `Leftover test employees from earlier runs (EH ids ${r.data.map((e) => e.id).join(", ")})` +
-          (process.env.EH_TEST_DELETE_LEFTOVERS === "1" ? ": deleted." : ". EH_TEST_DELETE_LEFTOVERS=1 deletes them."),
+          (deleteLeftovers ? ": deleted." : ". EH_TEST_DELETE_LEFTOVERS=1 deletes them."),
       );
   });
 
   afterAll(async () => {
     const r = await stable(() => deleteRunEmployees(client, externalId));
-    if (r.outcome !== "ok") throw new Error(`Couldn't delete test employee ${externalId}: ${r.outcome}`);
+    if (r.outcome !== "ok")
+      throw new Error(`Couldn't delete test employee ${externalId}: ${"detail" in r ? r.detail : r.outcome}`);
   });
 
   it("reports no employee for a fresh external id", async () => {
@@ -117,7 +119,7 @@ live("EH Payroll client (live test business)", () => {
           ...minimal,
           bankAccount1_BSB: "12345",
           bankAccount1_AccountNumber: "111111",
-          bankAccount1_AccountName: "Zztest Alpha",
+          bankAccount1_AccountName: `${TEST_NAME.firstName} ${TEST_NAME.surname}`,
           bankAccount1_AllocatedPercentage: 100,
         },
         current,

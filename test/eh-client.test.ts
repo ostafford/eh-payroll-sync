@@ -176,3 +176,15 @@ describe("EhPayrollClient.upsertByExternalId", () => {
     expect((f as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 });
+
+describe("EhPayrollClient.deleteEmployee", () => {
+  it.each([429, 503])("reports a %i as retryable, so test cleanup tries again (#177)", async (status) => {
+    const c = new EhPayrollClient(cfg(fakeFetch({ "DELETE /employee/987": { status } })));
+    expect(await c.deleteEmployee(987)).toMatchObject({ outcome: "retryable", status });
+  });
+
+  it("reports a 404 as a client error", async () => {
+    const c = new EhPayrollClient(cfg(fakeFetch({ "DELETE /employee/987": { status: 404 } })));
+    expect(await c.deleteEmployee(987)).toMatchObject({ outcome: "client_error", status: 404 });
+  });
+});

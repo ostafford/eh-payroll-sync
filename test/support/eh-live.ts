@@ -4,31 +4,39 @@
  */
 import type { EhPayrollClient, EhResult } from "../../src/eh/client.js";
 import type { EhEmployeePayload, EhEmployee } from "../../src/eh/types.js";
+import { odataString } from "../../src/sync/precheck.js";
 
 type WriteResult = Awaited<ReturnType<EhPayrollClient["upsertByExternalId"]>>;
 const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const POSTS = 3;
+const LOOKUPS_PER_POST = 4;
 
 /**
  * Create the employee, never POSTing blind. A `retryable` result may still have
- * created it (the client stopped waiting, EH didn't), so look the Payroll ID
- * up, a few times as EH's reads catch up, and POST again only if none finds it.
+ * created it (a 5xx or dropped connection after EH saved it), so look the
+ * Payroll ID up, a few times as EH's reads catch up, and POST again only if
+ * every lookup answered "not found". A failed lookup gives up with the result.
  */
 export async function createOnce(
   client: Pick<EhPayrollClient, "getByExternalId" | "upsertByExternalId">,
   externalId: string,
   payload: EhEmployeePayload,
-  opts: { sleep?: (ms: number) => Promise<void>; attempts?: number; lookups?: number } = {},
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<WriteResult> {
   const sleep = opts.sleep ?? sleepMs;
   let r!: WriteResult;
-  for (let attempt = 0; attempt < (opts.attempts ?? 3); attempt++) {
+  for (let attempt = 0; attempt < POSTS; attempt++) {
     r = await client.upsertByExternalId(externalId, payload, null);
     if (r.outcome !== "retryable") return r;
-    for (let i = 0; i < (opts.lookups ?? 4); i++) {
+    let answered = true;
+    for (let i = 0; i < LOOKUPS_PER_POST; i++) {
       await sleep(1000 * (i + 1));
       const found = await client.getByExternalId(externalId);
-      if (found.outcome === "ok" && found.data) return landed(found.data);
+      if (found.outcome !== "ok") answered = false;
+      else if (found.data) return landed(found.data);
     }
+    // A failed lookup isn't "not found": POSTing again could duplicate (#177).
+    if (!answered) return r;
   }
   return r;
 }
@@ -53,18 +61,10 @@ export async function deleteRunEmployees(
 ): Promise<EhResult<number[]>> {
   const found = await client.findEmployees(`externalId eq ${odataString(externalId)}`);
   if (found.outcome !== "ok") return found;
-  const ids: number[] = [];
   // Re-checked here so a filter EH ignored can never widen the delete.
-  for (const e of found.data.filter((e) => e.externalId === externalId)) {
-    const del = await client.deleteEmployee(e.id);
-    if (del.outcome !== "ok") return del;
-    ids.push(e.id);
-  }
-  return { outcome: "ok", data: ids };
-}
-
-function odataString(v: string): string {
-  return `'${v.replace(/'/g, "''")}'`;
+  const ids = found.data.filter((e) => e.externalId === externalId).map((e) => e.id);
+  const del = await deleteAll(client, ids);
+  return del.outcome === "ok" ? { outcome: "ok", data: ids } : del;
 }
 
 /** Every live test employee carries this name and a Payroll ID with this prefix. */
@@ -88,10 +88,17 @@ export async function findLeftovers(
     e.externalId?.startsWith(TEST_PREFIX) ? [{ id: e.id, externalId: e.externalId }] : [],
   );
   if (opts.delete) {
-    for (const { id } of leftovers) {
-      const del = await client.deleteEmployee(id);
-      if (del.outcome !== "ok") return del;
-    }
+    const del = await deleteAll(client, leftovers.map((e) => e.id));
+    if (del.outcome !== "ok") return del;
   }
   return { outcome: "ok", data: leftovers };
+}
+
+/** Delete each employee in turn, stopping at the first failure. */
+async function deleteAll(client: Pick<EhPayrollClient, "deleteEmployee">, ids: number[]): Promise<EhResult<null>> {
+  for (const id of ids) {
+    const del = await client.deleteEmployee(id);
+    if (del.outcome !== "ok") return del;
+  }
+  return { outcome: "ok", data: null };
 }
