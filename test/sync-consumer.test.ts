@@ -1010,6 +1010,26 @@ describe("runSyncJob - changed-units sync for Linked employees (#151, ADR-0009)"
     expect(store.log).toEqual([]);
   });
 
+  it("re-baselines a Linked employee whose Baseline can't be read, sending nothing", async () => {
+    const store = fakeGateway({ ctUserId: ME, ehEmployeeId: "40213", lastSyncedTs: 1000, lastOutcome: "ok", linkedAt: LINKED_AT });
+    expect(store.rows.get(ME)!.baseline).toBeNull();
+    const eh = fakeEh({ id: 40213 });
+
+    const out = await runSyncJob(update, deps({ store, eh, ct: fakeCt(edit(25145108, "Team Lead")) }));
+
+    expect(out).toEqual({ status: "skipped", reason: "Baseline unreadable: re-baselined, nothing sent" });
+    expect(eh.upserts).toHaveLength(0);
+    expect(eh.gets).toBe(0);
+
+    // From the new Baseline, only a later change is sent.
+    const later = edit(25145108, "Team Lead");
+    later.customFields.find((f) => f.customFieldId === 42708536)!.value = "Partner";
+    await runSyncJob(job({ reason: "profile_update", eventTimestamp: 3000 }), deps({ store, eh, ct: fakeCt(later) }));
+    expect(eh.upserts).toHaveLength(1);
+    expect(eh.upserts[0]!.payload).not.toHaveProperty("jobTitle");
+    expect(eh.upserts[0]!.payload).toMatchObject({ emergencyContact1_Relationship: "Partner" });
+  });
+
   describe("the Baseline moves only for a unit EH accepted", () => {
     const thenEdit = (user: ConnecteamUser) => {
       user.customFields.find((f) => f.customFieldId === 42708536)!.value = "Partner";
@@ -1192,7 +1212,7 @@ describe("runSyncJob - changed-units sync for Linked employees (#151, ADR-0009)"
       expect(Object.keys(after.upserts[0]!.payload)).not.toContain("rate");
     });
 
-    it("a pay-run config gap sends nothing, as in a full sync", async () => {
+    it("a pay-run config gap doesn't block an unrelated edit: the Connecteam rate didn't change", async () => {
       const store = await linked(cloneUser(), rateMap, hourly(40));
       const { primaryLocation: _gone, ...defaults } = rateMap.employmentHero.defaults!;
       const broken = parseFieldMap({ ...rateMap, employmentHero: { ...rateMap.employmentHero, defaults } });
@@ -1201,9 +1221,8 @@ describe("runSyncJob - changed-units sync for Linked employees (#151, ADR-0009)"
 
       const out = await runSyncJob(update, deps({ store, eh, fieldMap: broken, ct }));
 
-      expect(out.status).toBe("follow_up");
-      expect(eh.upserts).toHaveLength(0);
-      expect(ct.channels).toHaveLength(1);
+      expect(out.status).toBe("synced");
+      expect(eh.upserts.map((u) => u.payload)).toEqual([{ jobTitle: "Team Lead" }]);
     });
 
     it("an unsupported rate with nothing else changed makes no EH write", async () => {
@@ -1217,23 +1236,16 @@ describe("runSyncJob - changed-units sync for Linked employees (#151, ADR-0009)"
       expect(eh.upserts).toHaveLength(0);
     });
 
-    it("a pay-run config gap doesn't post a follow-up from an unchanged unit", async () => {
-      const nonResident = (user: ConnecteamUser) => {
-        for (const [id, value] of [[42923315, "No"], [42923276, "No"]] as const) {
-          user.customFields.find((f) => f.customFieldId === id)!.value = [{ id: 0, value }];
-        }
-        return user;
-      };
-      const store = await linked(nonResident(cloneUser()), rateMap, hourly(40));
-      const { primaryLocation: _gone, ...defaults } = rateMap.employmentHero.defaults!;
-      const broken = parseFieldMap({ ...rateMap, employmentHero: { ...rateMap.employmentHero, defaults } });
-      const ct = withRate(nonResident(cloneUser()), hourly(40));
+    it("an unsupported rate sends no pay-run default, even when EH's rate would complete the set", async () => {
+      const store = await linked(cloneUser(), rateMap, hourly(40));
+      const daily: PayRate = { rateType: "daily", defaultRate: 300, isDefaultRateEnabled: true };
+      const { primaryLocation: _p, ...lacksLocation } = handSet;
+      const eh = fakeEh({ id: 40213, current: lacksLocation });
 
-      await runSyncJob(update, deps({ store, eh: fakeEh({ id: 40213 }), fieldMap: broken, ct }));
+      const out = await runSyncJob(update, deps({ store, eh, fieldMap: rateMap, ct: withRate(cloneUser(), daily) }));
 
-      expect(ct.channels).toHaveLength(1);
-      expect(ct.channels[0]!.text).toContain("primaryLocation");
-      expect(ct.channels[0]!.text).not.toContain("not an Australian resident");
+      expect(out.status).toBe("follow_up");
+      expect(eh.upserts).toHaveLength(0);
     });
 
     it("isn't sent when only a field-map default changed, so a rate set by hand in EH survives", async () => {

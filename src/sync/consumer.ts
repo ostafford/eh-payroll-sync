@@ -759,11 +759,28 @@ async function syncChangedUnits(
 ): Promise<SyncJobOutcome> {
   const { link, mapped } = sync;
   const { ctUserId } = link;
-  const baseline = link.baseline!;
-  // A pay-run set that can't be completed has no keys on the payload. Marked
-  // as unmapped, its unit reads as changed (and back once it's fixed); a
-  // Baseline without one is #152's new unit.
-  const payRunUnmapped = mapped.payRunIssues.length > 0 && baseline.units.payRun ? ["rate"] : [];
+  const { baseline } = link;
+  // No readable Baseline (a bad stored value): re-baseline from the pack as
+  // it is now and send nothing, as for a lost key (ADR-0009). A full sync
+  // would overwrite EH. Edits not yet pushed are absorbed into it.
+  if (!baseline) {
+    const unmapped = mapped.issues.map((i) => i.ehField);
+    await deps.store.saveBaseline(ctUserId, await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped));
+    await deps.store.saveEmployeeLink({
+      ctUserId,
+      ehEmployeeId: link.ehEmployeeId,
+      lastSyncedTs: sync.eventTimestamp,
+      lastPayloadHash: sync.hash,
+    });
+    return { status: "skipped", reason: "Baseline unreadable: re-baselined, nothing sent" };
+  }
+  // A Connecteam rate the sync can't map leaves no pay-run keys on the
+  // payload. Marked as unmapped, its unit reads as changed (and back once the
+  // rate is usable again). A field-map gap (`payRunBlocking`) isn't a change
+  // to the rate, so it isn't marked: once fixed, a rate that differs is sent.
+  // A Baseline with no pay-run unit is left to #152 (units it doesn't hold yet).
+  const rateUnusable = mapped.payRunIssues.length > 0 && !mapped.payRunBlocking;
+  const payRunUnmapped = rateUnusable && baseline.units.payRun ? ["rate"] : [];
   const unmapped = [...mapped.issues.map((i) => i.ehField), ...payRunUnmapped];
   const current = await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped);
   const changed = new Set(changedUnits(baseline, current));
@@ -788,11 +805,14 @@ async function syncChangedUnits(
   if (issues.length > 0) {
     decision = decide({ mappingIssues: issues });
   } else {
-    // A changed pay-run set is re-mapped against EH's current record (#102):
-    // a `defaults` value EH already holds is left off, so one set by hand survives.
+    // A changed, usable pay-run set is re-mapped against EH's current record
+    // (#102): a `defaults` value EH already holds is left off, so one set by
+    // hand survives. An unusable rate sends nothing about pay, whatever EH
+    // holds: the Connecteam rate didn't change to anything EH can take.
+    const payRunIssues = changed.has("payRun") && rateUnusable ? mapped.payRunIssues : [];
     let sending = mapped;
     let ehRecord: EhEmployee | null | undefined;
-    if (changed.has("payRun")) {
+    if (changed.has("payRun") && !rateUnusable) {
       const found = await deps.eh.getByExternalId(sync.matchKey);
       if (found.outcome !== "ok") return ehRetry(found);
       ehRecord = found.data;
@@ -800,14 +820,10 @@ async function syncChangedUnits(
     }
     // As with mapping issues, a follow-up counts only for a unit that changed.
     const followUps = sending.followUps.filter((f) => !(f in FOLLOW_UP_UNIT) || changed.has(FOLLOW_UP_UNIT[f]!));
-    // A pay-run set that can't be completed has no keys on the payload, so it
-    // isn't sent and its fingerprint stays. Its reasons go to the admin.
-    const payRunIssues = changed.has("payRun") ? sending.payRunIssues : [];
     const payload = Object.fromEntries(Object.entries(sending.payload).filter(([key]) => changed.has(unitOf(key))));
 
-    if (payRunIssues.length > 0 && (sending.payRunBlocking || Object.keys(payload).length === 0)) {
-      // A field-map gap that affects everyone sends nothing until it's fixed,
-      // as in a full sync; and with nothing else changed there's nothing to send.
+    if (Object.keys(payload).length === 0) {
+      // Only the unusable rate changed: nothing to write, the reasons go to the admin.
       decision = decide({ payRunUnresolved: payRunIssues, followUps });
     } else {
       const write = await deps.eh.upsertByExternalId(sync.matchKey, payload, ehRecord);
