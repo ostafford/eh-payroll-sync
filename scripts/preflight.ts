@@ -6,6 +6,10 @@
  * created, held, or a Payroll ID used twice. The wizard runs it in the Field
  * map stage. See scripts/lib/preflight.ts for the rules.
  *
+ * On a live deployment it also reads the sync's database (who has synced, and
+ * the Link list) through the checked config, as the link stage does. Before
+ * the first deploy there's no database, and it says so.
+ *
  * Exit code: 0 = nothing to look at, 2 = someone needs a look, 1 = the check
  * itself failed.
  *
@@ -24,7 +28,9 @@ import {
   renderPreflight,
   type PreflightEhEmployee,
   type PreflightPerson,
+  type PreflightRecords,
 } from "./lib/preflight.js";
+import { checkDeployConfig, d1 } from "./lib/remote-d1.js";
 
 // --- env -----------------------------------------------------------------
 
@@ -63,7 +69,7 @@ async function listEhEmployees(businessId: string, apiKey: string): Promise<Pref
     if (!r.ok) throw new Error(`Employment Hero employee list -> ${r.status} ${await r.text()}`);
     const page = (await r.json()) as Array<Record<string, unknown>>;
     for (const e of page) {
-      // Only what the Pre-create check compares, plus the Payroll ID.
+      // Only what the Pre-create check compares, plus the Payroll ID and status (terminated).
       out.push({
         id: Number(e.id),
         externalId: e.externalId,
@@ -72,6 +78,7 @@ async function listEhEmployees(businessId: string, apiKey: string): Promise<Pref
         emailAddress: e.emailAddress,
         taxFileNumber: e.taxFileNumber,
         dateOfBirth: e.dateOfBirth,
+        status: e.status,
       });
     }
     if (page.length < PAGE) return out;
@@ -103,10 +110,38 @@ async function listPackPeople(
     }
     // The same mapping the sync runs, so the key and details are exactly what EH would get.
     const mapped = applyFieldMap(u.data as unknown as ConnecteamUser, fieldMap, {});
-    people.push({ ctUserId: userId, key: mapped.externalId, keyFromField: mapped.externalIdFromField, payload: mapped.payload });
+    people.push({
+      ctUserId: userId,
+      payrollId: mapped.externalId,
+      payrollIdFromField: mapped.externalIdFromField,
+      detailsComplete: mapped.issues.length === 0,
+      payload: mapped.payload,
+    });
   }
   process.stderr.write("\n");
   return { people, missing };
+}
+
+// --- D1 ------------------------------------------------------------------
+
+/** The sync's records, or null when there's no live database to read (before the first deploy). */
+function readRecords(): PreflightRecords | null {
+  try {
+    checkDeployConfig();
+  } catch {
+    return null;
+  }
+  const employeeMap = d1("SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, last_outcome AS lastOutcome FROM employee_map") as Array<
+    PreflightRecords["employeeMap"][number]
+  >;
+  const pendingLinks = d1("SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId FROM pending_link") as Array<
+    PreflightRecords["pendingLinks"][number]
+  >;
+  const id = (v: unknown) => (v === null ? null : String(v));
+  return {
+    employeeMap: employeeMap.map((m) => ({ ...m, ehEmployeeId: id(m.ehEmployeeId) })),
+    pendingLinks: pendingLinks.map((l) => ({ ...l, ehEmployeeId: id(l.ehEmployeeId) })),
+  };
 }
 
 // --- main --------------------------------------------------------------
@@ -118,8 +153,10 @@ async function main(): Promise<void> {
   const { people, missing } = await listPackPeople(ct, Number(need("CT_ONBOARDING_PACK_ID")), fieldMap);
   const eh = await listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY"));
 
-  const rows = classifyAll(people, eh, fieldMap.identity.externalIdFrom !== "userId");
-  console.log(renderPreflight(rows, eh.length, missing));
+  const records = readRecords();
+
+  const rows = classifyAll(people, eh, { payrollIdField: fieldMap.identity.externalIdFrom !== "userId", records });
+  console.log(renderPreflight(rows, eh.length, { missing, recordsRead: records !== null }));
   if (rows.some(needsAttention)) process.exitCode = 2;
 }
 

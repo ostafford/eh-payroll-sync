@@ -22,20 +22,17 @@
  * Env (from .dev.vars or the shell): CT_API_KEY, EH_API_KEY, EH_BUSINESS_ID,
  * CT_ONBOARDING_PACK_ID, FIELD_MAP_CLIENT (optional).
  */
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
-import { DEPLOY_CONFIG_PATH } from "./lib/deploy-config.js";
 import type { LinkStageData, LinkStageMapRow } from "./lib/link-input.js";
 import { linkListInput } from "./lib/link-input.js";
 import { buildLinkList, type LinkPendingRow } from "./lib/link-list.js";
 import { createLinkScreen, linkScreenPeople } from "./lib/link-screen.js";
 import { driveLinkScreen } from "./lib/link-terminal.js";
 import { runLinkStage } from "./lib/link-stage.js";
-
-const DATABASE = "eh-payroll-sync";
+import { checkDeployConfig, d1 } from "./lib/remote-d1.js";
 
 // --- env -----------------------------------------------------------------
 
@@ -62,32 +59,6 @@ function need(name: string): string {
 }
 
 // --- D1, through the built config ------------------------------------------
-
-/** Builds wrangler.deploy.json and checks it against the live Worker; throws if it doesn't check out. */
-function checkDeployConfig(): void {
-  try {
-    execFileSync("npm", ["run", "--silent", "deploy:config", "--", "--check-live"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  } catch (e) {
-    const err = e as { stdout?: string; stderr?: string };
-    throw new Error(`The deploy settings aren't ready:\n${err.stdout ?? ""}${err.stderr ?? ""}`.trimEnd());
-  }
-}
-
-function d1(sql: string): unknown[] {
-  let out: string;
-  try {
-    out = execFileSync(
-      "npx",
-      ["--yes", "wrangler", "d1", "execute", DATABASE, "--remote", "--json", "--command", sql, "--config", DEPLOY_CONFIG_PATH],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 },
-    );
-  } catch (e) {
-    const err = e as { stdout?: string; stderr?: string };
-    throw new Error(`wrangler d1 execute failed:\n${err.stdout ?? ""}\n${err.stderr ?? ""}`);
-  }
-  const results = JSON.parse(out.slice(out.search(/[[{]/))) as Array<{ results?: unknown[] }>;
-  return results.flatMap((r) => r.results ?? []);
-}
 
 const MAP_SQL = "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, last_outcome AS lastOutcome, external_id AS externalId FROM employee_map";
 const PENDING_SQL = "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId FROM pending_link";

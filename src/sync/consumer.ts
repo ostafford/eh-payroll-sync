@@ -1173,8 +1173,11 @@ async function successKind(
   return hasSyncedBefore(link) ? null : { kind: "first" };
 }
 
-/** Whether EH has accepted a sync for this person. A row saved before `lastOutcome` existed counts if it has an EH id. */
-function hasSyncedBefore(link: EmployeeLink | null): boolean {
+/**
+ * Whether EH has accepted a sync for this person. A row saved before `lastOutcome` existed counts if it has an EH id.
+ * The preflight (scripts/lib/preflight.ts) uses the same rule.
+ */
+export function hasSyncedBefore(link: Pick<EmployeeLink, "lastOutcome" | "ehEmployeeId"> | null): boolean {
   return (
     link !== null &&
     (link.lastOutcome != null ? SYNCED_BEFORE.includes(link.lastOutcome) : link.ehEmployeeId !== null)

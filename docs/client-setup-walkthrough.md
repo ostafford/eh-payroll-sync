@@ -32,12 +32,20 @@ person is one of:
 - **Found, but nothing else agrees: will be held.** Usually a typo in the
   Payroll ID field. Fix it in Connecteam.
 - **Not found: will be created,** or **will be held** if someone in EH has the
-  same email, TFN or name + date of birth (the Pre-create check).
+  same email, TFN or name + date of birth (the Pre-create check). Someone whose
+  pack answers don't map yet is marked `details incomplete`: the sync asks them
+  to finish first, then creates or holds them.
 - **Payroll ID used twice.** Two Connecteam people share one, or EH holds it on
   two records. Fix it before either is approved.
 - **No Payroll ID:** the client's Payroll ID field is set but blank for them,
   so they get their Connecteam ID. Flagged when they'd also be held.
-- **Already synced:** EH already holds their Connecteam ID.
+- **On the Link list: will be linked,** to the EH employee confirmed in the
+  link stage (a "New hire, not this person" row is created instead).
+- **Already synced:** the sync already has their EH record.
+
+A terminated EH employee is marked `terminated`. On a live deployment the check
+also reads the sync's database (who has synced, and the Link list). At stage 9
+of a first setup there's no database yet, and it says so.
 
 It prints Connecteam and EH ids and the names of the keys that agree, never a
 name or detail. It doesn't block: the wizard asks before carrying on. Re-run it

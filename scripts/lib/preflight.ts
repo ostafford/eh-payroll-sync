@@ -1,63 +1,89 @@
 /**
  * The read-only check before go-live (#168): predicts what each onboarding-pack
- * assignee's approval will do, given the employees already in EH. Pure - the
- * caller fetches both sides. Covers every assignee, not only approved ones,
- * since Pre-existing employees aren't approved yet.
+ * assignee's approval will do, given the employees already in EH and, when it
+ * can be read, the sync's own database. Pure - the caller fetches all three.
+ * Covers every assignee, not only approved ones, since Pre-existing employees
+ * aren't approved yet.
  *
- * It mirrors the sync's first-approval path (src/sync/consumer.ts):
+ * It mirrors the sync's first-approval path (src/sync/consumer.ts), in order:
  *
- *   - The match key is the Payroll ID copied into the client's Connecteam
- *     field when `identity.externalIdFrom` names one and it's filled, else the
- *     Connecteam `userId` (ADR-0011).
- *   - A copied key that finds one EH employee links them with no EH write, but
- *     only when one of the Pre-create check's keys also agrees (email, TFN,
- *     name + DOB); otherwise they're held.
- *   - A key that finds nobody goes through the Pre-create check (ADR-0010): any
- *     EH employee one of those keys agrees with holds them, else they're created.
+ *   - Someone who has synced before keeps the Payroll ID stored then (ADR-0011).
+ *   - A pending link from the Link list with an EH id links them.
+ *   - The Payroll ID is the one copied into the client's Connecteam field when
+ *     `identity.externalIdFrom` names one and it's filled, else the Connecteam
+ *     `userId`. A copied one that finds one EH employee links them with no EH
+ *     write, but only when one of the Pre-create check's keys also agrees
+ *     (email, TFN, name + DOB); otherwise they're held.
+ *   - Found nobody: a "New hire, not this person" row on the Link list is
+ *     created. Anyone else goes through the Pre-create check (ADR-0010): any EH
+ *     employee one of those keys agrees with holds them, else they're created.
+ *     Both only once their details map cleanly: until then the sync asks them
+ *     to finish their details first.
  *
  * Output is ids, outcomes and key names only, never a value: no name, email,
  * TFN, bank detail or Payroll ID reaches the terminal.
  */
 import type { EhEmployeePayload } from "../../src/eh/types.js";
-import { compareKeys, type MatchKey } from "../../src/sync/precheck.js";
+import { hasSyncedBefore } from "../../src/sync/consumer.js";
+import type { SyncOutcomeLabel } from "../../src/sync/gateway.js";
+import { compareKeys, isTerminated, type MatchKey } from "../../src/sync/precheck.js";
 
 export interface PreflightPerson {
   ctUserId: number;
   /** The Payroll ID their first sync will use: the copied value, else their `userId`. */
-  key: string;
-  /** `key` came from the client's Payroll ID field. */
-  keyFromField: boolean;
+  payrollId: string;
+  /** `payrollId` came from the client's Payroll ID field. */
+  payrollIdFromField: boolean;
+  /** Their details map with no issue, so the sync would write them now. */
+  detailsComplete: boolean;
   /** The mapped EH payload, as the sync would send it; read for the Pre-create check's keys. */
   payload: EhEmployeePayload;
 }
 
 /** An EH employee record as `GET /employee/unstructured` returns it. */
-export type PreflightEhEmployee = { id: number; externalId?: unknown } & Record<string, unknown>;
+export type PreflightEhEmployee = { id: number; externalId?: unknown; status?: unknown } & Record<string, unknown>;
+
+/** The sync's own database (D1), when it can be read: a live deployment. */
+export interface PreflightRecords {
+  employeeMap: ReadonlyArray<{ ctUserId: number; ehEmployeeId: string | null; lastOutcome: SyncOutcomeLabel | null }>;
+  /** The Link list: an EH id, or null for "New hire, not this person". */
+  pendingLinks: ReadonlyArray<{ ctUserId: number; ehEmployeeId: string | null }>;
+}
+
+export interface PreflightOptions {
+  /** The client's Payroll ID field is set (`identity.externalIdFrom` isn't `"userId"`), so a blank one is flagged. */
+  payrollIdField: boolean;
+  /** null when the database couldn't be read (none yet, before the first deploy). */
+  records: PreflightRecords | null;
+}
 
 export type PreflightOutcome =
   | "id-used-twice"
   | "found-no-agreement"
   | "no-id"
   | "not-found"
+  | "on-link-list"
   | "found"
   | "already-synced";
 
-/** An EH employee one of the Pre-create check's keys agrees with. */
-export interface PreflightHit {
+/** An EH employee, with the Pre-create check's keys that agree and differ with it. */
+export interface PreflightMatch {
   ehEmployeeId: number;
+  terminated: boolean;
   agree: MatchKey[];
+  differs: MatchKey[];
 }
 
 export interface PreflightRow {
   ctUserId: number;
   outcome: PreflightOutcome;
-  /** EH employees holding their key. */
-  ehIds: number[];
-  /** For `found` / `found-no-agreement`: the keys that agree and differ with that record. */
-  agree: MatchKey[];
-  differs: MatchKey[];
+  /** EH employees their Payroll ID or the sync's records point at. */
+  eh: PreflightMatch[];
   /** For `not-found` / `no-id`: who the Pre-create check would find, so they'd be held. */
-  hits: PreflightHit[];
+  hits: PreflightMatch[];
+  /** On the Link list as "New hire, not this person": the Pre-create check is skipped. */
+  newHire: boolean;
+  detailsComplete: boolean;
 }
 
 /** Lower-cased and trimmed, with runs of spaces collapsed: for comparing names and emails. */
@@ -69,152 +95,196 @@ function externalIdOf(e: PreflightEhEmployee): string {
   return typeof e.externalId === "string" ? e.externalId.trim() : "";
 }
 
-/** Every EH employee the Pre-create check would find for this payload. */
-function preCreateHits(payload: EhEmployeePayload, eh: readonly PreflightEhEmployee[]): PreflightHit[] {
-  return eh.flatMap((e) => {
-    const { agree } = compareKeys(payload, e);
-    return agree.length > 0 ? [{ ehEmployeeId: e.id, agree }] : [];
-  });
+function matchOf(payload: EhEmployeePayload, e: PreflightEhEmployee): PreflightMatch {
+  return { ehEmployeeId: e.id, terminated: isTerminated(e), ...compareKeys(payload, e) };
 }
 
-/**
- * @param fromField the client's Payroll ID field is set (`identity.externalIdFrom`
- *   isn't `"userId"`), so a person whose field is blank is flagged.
- */
+/** An EH employee known only by id (from the sync's records): no keys compared. */
+function byId(id: string | null, eh: readonly PreflightEhEmployee[]): PreflightMatch[] {
+  if (id === null) return [];
+  const e = eh.find((x) => String(x.id) === id);
+  return [{ ehEmployeeId: Number(id), terminated: e ? isTerminated(e) : false, agree: [], differs: [] }];
+}
+
 export function classifyAll(
   people: readonly PreflightPerson[],
   eh: readonly PreflightEhEmployee[],
-  fromField: boolean,
+  opts: PreflightOptions,
 ): PreflightRow[] {
-  const keyCount = new Map<string, number>();
-  for (const p of people) keyCount.set(p.key, (keyCount.get(p.key) ?? 0) + 1);
+  const idCount = new Map<string, number>();
+  for (const p of people) idCount.set(p.payrollId, (idCount.get(p.payrollId) ?? 0) + 1);
+  const mapRows = new Map(opts.records?.employeeMap.map((m) => [m.ctUserId, m]));
+  const pending = new Map(opts.records?.pendingLinks.map((l) => [l.ctUserId, l.ehEmployeeId]));
 
   return people.map((p): PreflightRow => {
-    const row: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", ehIds: [], agree: [], differs: [], hits: [] };
+    const row: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, detailsComplete: p.detailsComplete };
 
-    // Their `userId` in EH means the sync wrote it: they've synced before, and
-    // the key stored then wins over anything copied in since (ADR-0011).
-    const synced = eh.filter((e) => externalIdOf(e) === String(p.ctUserId));
-    if (synced.length > 0) return { ...row, outcome: "already-synced", ehIds: synced.map((e) => e.id) };
+    // Synced before: the Payroll ID stored then wins over anything copied in
+    // since (ADR-0011). Without the database, their `userId` in EH says the
+    // same, since only the sync writes it there.
+    const synced = mapRows.get(p.ctUserId);
+    if (synced && hasSyncedBefore(synced)) return { ...row, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh) };
+    const holdsUserId = eh.filter((e) => externalIdOf(e) === String(p.ctUserId));
+    if (holdsUserId.length > 0) return { ...row, outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)) };
 
-    const holders = eh.filter((e) => externalIdOf(e) === p.key);
-    row.ehIds = holders.map((e) => e.id);
-    if ((keyCount.get(p.key) ?? 0) > 1 || holders.length > 1) return { ...row, outcome: "id-used-twice" };
+    const linkTo = pending.get(p.ctUserId);
+    if (linkTo) return { ...row, outcome: "on-link-list", eh: byId(linkTo, eh) };
 
+    const holders = eh.filter((e) => externalIdOf(e) === p.payrollId).map((e) => matchOf(p.payload, e));
+    if ((idCount.get(p.payrollId) ?? 0) > 1 || holders.length > 1) return { ...row, outcome: "id-used-twice", eh: holders };
+
+    // A `userId` Payroll ID in EH is handled above, so this one was copied in.
     const [holder] = holders;
-    if (holder) {
-      const keys = compareKeys(p.payload, holder);
-      return { ...row, outcome: keys.agree.length > 0 ? "found" : "found-no-agreement", ...keys };
-    }
+    if (holder) return { ...row, outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] };
 
-    const hits = preCreateHits(p.payload, eh);
-    return { ...row, outcome: fromField && !p.keyFromField ? "no-id" : "not-found", hits };
+    const newHire = linkTo === null;
+    const hits = newHire ? [] : eh.map((e) => matchOf(p.payload, e)).filter((m) => m.agree.length > 0);
+    return { ...row, outcome: opts.payrollIdField && !p.payrollIdFromField ? "no-id" : "not-found", hits, newHire };
   });
 }
 
-/** Whether a row needs looking at before go-live: they'll be held, or their ID is shared. */
+interface Group {
+  mark: string;
+  title: string;
+  action: string;
+  /** Needs a look before their approval. */
+  attention: boolean;
+}
+
+/** One group per outcome, plus a held variant where the Pre-create check would hit; in print order. */
+const GROUPS = {
+  "id-used-twice": {
+    mark: "⛔",
+    title: "Payroll ID used twice",
+    action: "Two Connecteam people share one Payroll ID, or EH holds it on more than one record. Fix the Payroll ID field in Connecteam (or the duplicate in EH).",
+    attention: true,
+  },
+  "found-no-agreement": {
+    mark: "⚠️ ",
+    title: "Found, but nothing else agrees: will be held",
+    action: "Their Payroll ID finds an EH employee whose email, TFN and name + date of birth all differ or are missing. Check the Payroll ID in Connecteam for a typo.",
+    attention: true,
+  },
+  "no-id-held": {
+    mark: "⚠️ ",
+    title: "No Payroll ID, and already in EH: will be held",
+    action: "Their Payroll ID field is blank, and someone in EH has the same details. Fill in the field in Connecteam with their EH Payroll ID.",
+    attention: true,
+  },
+  "not-found-held": {
+    mark: "⚠️ ",
+    title: "Not found, but already in EH: will be held",
+    action: "Their Payroll ID finds nobody in EH, but someone there has the same details. Check the Payroll ID in Connecteam for a typo.",
+    attention: true,
+  },
+  "no-id": {
+    mark: "ℹ️ ",
+    title: "No Payroll ID: will be created",
+    action: "Their Payroll ID field is blank, so they get their Connecteam ID. Fine for a new hire; if they're already in EH, fill in the field.",
+    attention: false,
+  },
+  "not-found": {
+    mark: "✅",
+    title: "Not found: will be created",
+    action: "Nobody in EH matches, or the Link list says they're a new hire. Approval creates them.",
+    attention: false,
+  },
+  "on-link-list": {
+    mark: "✅",
+    title: "On the Link list: will be linked",
+    action: "Approval links them to the EH employee confirmed in the link stage, writing only the Payroll ID.",
+    attention: false,
+  },
+  found: {
+    mark: "✅",
+    title: "Found: will be linked",
+    action: "Their Payroll ID finds one EH employee and another detail agrees. Approval links them, with no EH write.",
+    attention: false,
+  },
+  "already-synced": {
+    mark: "✅",
+    title: "Already synced",
+    action: "The sync already has their EH record. Approval updates it.",
+    attention: false,
+  },
+} satisfies Record<string, Group>;
+
+type GroupId = keyof typeof GROUPS;
+
+function groupOf(row: PreflightRow): GroupId {
+  if (row.hits.length > 0 && (row.outcome === "no-id" || row.outcome === "not-found")) return `${row.outcome}-held`;
+  return row.outcome;
+}
+
+/** Whether a row needs looking at before go-live: they'll be held, or their Payroll ID is shared. */
 export function needsAttention(row: PreflightRow): boolean {
-  return row.outcome === "id-used-twice" || row.outcome === "found-no-agreement" || row.hits.length > 0;
+  return GROUPS[groupOf(row)].attention;
+}
+
+/** Created (or held) only once their details are complete: the sync asks them to finish first. */
+function waitsForDetails(row: PreflightRow): boolean {
+  return !row.detailsComplete && (row.outcome === "not-found" || row.outcome === "no-id");
 }
 
 const KEY_LABEL: Record<MatchKey, string> = { email: "email", tfn: "TFN", nameDob: "name + date of birth" };
 
 const keyList = (keys: readonly MatchKey[]): string => keys.map((k) => KEY_LABEL[k]).join(", ");
 
-interface Group {
-  mark: string;
-  title: string;
-  action: string;
-  rows: PreflightRow[];
+/** `EH 40213 terminated (agrees: email; differs: TFN)`; for a Pre-create hit, `EH 40213 (email)`. */
+function ehText(m: PreflightMatch, keys: "compared" | "hit" | "none"): string {
+  const id = `EH ${m.ehEmployeeId}${m.terminated ? " terminated" : ""}`;
+  if (keys === "none") return id;
+  if (keys === "hit") return `${id} (${keyList(m.agree)})`;
+  const agree = m.agree.length > 0 ? `agrees: ${keyList(m.agree)}` : "nothing agrees";
+  const differs = m.differs.length > 0 ? `; differs: ${keyList(m.differs)}` : "";
+  return `${id} (${agree}${differs})`;
 }
 
-function groups(rows: readonly PreflightRow[]): Group[] {
-  const of = (o: PreflightOutcome, held?: boolean) =>
-    rows.filter((r) => r.outcome === o && (held === undefined || r.hits.length > 0 === held));
+function rowText(r: PreflightRow): string {
+  const compared = r.outcome === "found" || r.outcome === "found-no-agreement";
+  const targets = r.hits.length > 0 ? r.hits.map((h) => ehText(h, "hit")) : r.eh.map((m) => ehText(m, compared ? "compared" : "none"));
+  const notes = [...(r.newHire ? ["Link list: new hire"] : []), ...(waitsForDetails(r) ? ["details incomplete"] : [])];
   return [
-    {
-      mark: "⛔",
-      title: "Payroll ID used twice",
-      action: "Two Connecteam people share one Payroll ID, or EH holds it on more than one record. Fix the Payroll ID field in Connecteam (or the duplicate in EH).",
-      rows: of("id-used-twice"),
-    },
-    {
-      mark: "⚠️ ",
-      title: "Found, but nothing else agrees: will be held",
-      action: "Their Payroll ID finds an EH employee whose email, TFN and name + date of birth all differ or are missing. Check the Payroll ID in Connecteam for a typo.",
-      rows: of("found-no-agreement"),
-    },
-    {
-      mark: "⚠️ ",
-      title: "No Payroll ID, and already in EH: will be held",
-      action: "Their Payroll ID field is blank, and someone in EH has the same details. Fill in the field in Connecteam with their EH Payroll ID.",
-      rows: of("no-id", true),
-    },
-    {
-      mark: "⚠️ ",
-      title: "Not found, but already in EH: will be held",
-      action: "Their Payroll ID finds nobody in EH, but someone there has the same details. Check the Payroll ID in Connecteam for a typo.",
-      rows: of("not-found", true),
-    },
-    {
-      mark: "ℹ️ ",
-      title: "No Payroll ID: will be created",
-      action: "Their Payroll ID field is blank, so they get their Connecteam ID. Fine for a new hire; if they're already in EH, fill in the field.",
-      rows: of("no-id", false),
-    },
-    {
-      mark: "✅",
-      title: "Not found: will be created",
-      action: "Nobody in EH matches. Approval creates them.",
-      rows: of("not-found", false),
-    },
-    {
-      mark: "✅",
-      title: "Found: will be linked",
-      action: "Their Payroll ID finds one EH employee and another detail agrees. Approval links them, with no EH write.",
-      rows: of("found"),
-    },
-    {
-      mark: "✅",
-      title: "Already synced",
-      action: "EH already holds their Connecteam ID. Approval updates that record.",
-      rows: of("already-synced"),
-    },
-  ];
+    `Connecteam ${r.ctUserId}`,
+    ...(targets.length > 0 ? [`-> ${targets.join(", ")}`] : []),
+    ...(notes.length > 0 ? [`[${notes.join("; ")}]`] : []),
+  ].join(" ");
 }
 
-function line(r: PreflightRow): string {
-  const ct = `Connecteam ${r.ctUserId}`;
-  switch (r.outcome) {
-    case "id-used-twice":
-      return r.ehIds.length > 0 ? `${ct} -> EH ${r.ehIds.join(", ")}` : ct;
-    case "found":
-    case "found-no-agreement": {
-      const agree = r.agree.length > 0 ? `agrees: ${keyList(r.agree)}` : "nothing agrees";
-      const differs = r.differs.length > 0 ? `; differs: ${keyList(r.differs)}` : "";
-      return `${ct} -> EH ${r.ehIds.join(", ")} (${agree}${differs})`;
-    }
-    case "already-synced":
-      return `${ct} -> EH ${r.ehIds.join(", ")}`;
-    case "no-id":
-    case "not-found":
-      return r.hits.length === 0 ? ct : `${ct} -> ${r.hits.map((h) => `EH ${h.ehEmployeeId} (${keyList(h.agree)})`).join(", ")}`;
-  }
+export interface RenderOptions {
+  /** Pack assignees the users API doesn't return (archived or deleted), so not checked. */
+  missing?: number;
+  /** The sync's database was read (PreflightOptions.records wasn't null). */
+  recordsRead: boolean;
 }
 
-/** @param missing pack assignees the users API doesn't return (archived or deleted), so not checked. */
-export function renderPreflight(rows: readonly PreflightRow[], ehCount: number, missing = 0): string {
+export function renderPreflight(rows: readonly PreflightRow[], ehCount: number, opts: RenderOptions): string {
+  const missing = opts.missing ?? 0;
   const out: string[] = [];
   out.push(`Checked ${rows.length} Connecteam ${rows.length === 1 ? "person" : "people"} in the onboarding pack against ${ehCount} EH employees.`);
-  if (missing > 0) out.push(`${missing} more in the pack ${missing === 1 ? "has" : "have"} no active Connecteam profile (archived or deleted), so ${missing === 1 ? "isn't" : "aren't"} checked.`);
+  if (missing > 0) {
+    out.push(`${missing} more in the pack ${missing === 1 ? "has" : "have"} no active Connecteam profile (archived or deleted), so ${missing === 1 ? "isn't" : "aren't"} checked.`);
+  }
+  if (!opts.recordsRead) {
+    out.push("The sync's database wasn't read, so this assumes nobody has synced or is on the Link list yet. That's expected before");
+    out.push("the first deploy; on a live deployment, run `npm run deploy:config -- --check-live` to see why.");
+  }
   out.push("");
-  for (const g of groups(rows)) {
-    if (g.rows.length === 0) continue;
-    out.push(`${g.mark} ${g.title} (${g.rows.length})`);
+
+  for (const [id, g] of Object.entries(GROUPS) as Array<[GroupId, Group]>) {
+    const group = rows.filter((r) => groupOf(r) === id);
+    if (group.length === 0) continue;
+    out.push(`${g.mark} ${g.title} (${group.length})`);
     out.push(`   ${g.action}`);
-    for (const r of g.rows) out.push(`   - ${line(r)}`);
+    for (const r of group) out.push(`   - ${rowText(r)}`);
     out.push("");
   }
+
+  if (rows.some(waitsForDetails)) {
+    out.push("[details incomplete]: their pack's answers don't map to EH yet. The sync asks them to finish first, then creates (or holds) them as above.");
+    out.push("");
+  }
+
   const attention = rows.filter(needsAttention).length;
   out.push(
     attention === 0
