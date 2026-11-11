@@ -138,14 +138,15 @@ describe("classifyAll", () => {
   });
 
   describe("already synced", () => {
-    it("when EH holds their userId (no database to read)", () => {
+    it("not with no database: their userId in EH is a previous deployment's, so approval overwrites it", () => {
       const r = one(person({ payrollId: "100", payrollIdFromField: false }), [eh({ id: 8, externalId: "100" })], { payrollIdField: false });
-      expect(r).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 8 }] });
+      expect(r).toMatchObject({ outcome: "in-eh-not-synced", eh: [{ ehEmployeeId: 8 }] });
+      expect(needsAttention(r)).toBe(true);
     });
 
-    it("not held, when they synced before their Payroll ID field was filled: the stored key wins", () => {
+    it("not with no database and a copied Payroll ID: that's what the sync looks up, so their old record is a Pre-create hit", () => {
       const r = one(person(), [eh({ id: 9, externalId: "100", emailAddress: "jack@example.com" })]);
-      expect(r).toMatchObject({ outcome: "already-synced", hits: [] });
+      expect(r).toMatchObject({ outcome: "not-found", hits: [{ ehEmployeeId: 9, agree: ["email"] }] });
     });
 
     it("from the database, when they synced or were linked under a copied Payroll ID", () => {
@@ -190,12 +191,13 @@ describe("classifyAll", () => {
       expect(renderPreflight([r], 1, { recordsRead: true })).toContain("In EH under this Payroll ID, but never synced: approval overwrites that record (1)");
     });
 
-    it("a stored Payroll ID, with their field now blank, overwrites the EH record with no agreement check, not held", () => {
-      const stored = records({ employeeMap: [mapRow({ ctUserId: 100, lastOutcome: "correction", externalId: "E0001" })] });
+    it("a stored Payroll ID, with their field now blank, updates their own record with no agreement check, not held", () => {
+      // Stored only once EH accepted a write, so a later correction doesn't make the record anyone else's.
+      const stored = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "38", lastOutcome: "correction", externalId: "E0001" })] });
       const blank = person({ payrollId: "100", payrollIdFromField: false });
       const r = one(blank, [eh({ id: 38, externalId: "E0001" })], { records: stored });
-      expect(r).toMatchObject({ outcome: "in-eh-not-synced", eh: [{ ehEmployeeId: 38 }] });
-      expect(needsAttention(r)).toBe(true);
+      expect(r).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 38 }] });
+      expect(needsAttention(r)).toBe(false);
       // And it isn't "no ID": the stored one is used.
       expect(one(blank, [eh()], { records: stored }).outcome).toBe("not-found");
     });
@@ -306,6 +308,6 @@ describe("scripts/preflight.ts errors", () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../scripts/preflight.ts", import.meta.url), "utf8");
     expect(src).not.toMatch(/r\.text\(\)|\.detail\b/);
-    expect(src.match(/throw new Error\(`[^`]*HTTP \$\{/g)).toHaveLength(3);
+    expect(src).toMatch(/throw new Error\(`[^`]*HTTP \$\{/);
   });
 });

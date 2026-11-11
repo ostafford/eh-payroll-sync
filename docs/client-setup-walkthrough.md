@@ -35,7 +35,7 @@ person is one of:
   same email, TFN or name + date of birth (the Pre-create check). Someone whose
   pack answers don't map yet is marked `details incomplete`: the sync asks them
   to finish first, then goes ahead. The same mark shows on anyone the sync would
-  update.
+  update (not a Linked employee, who gets only their changes).
 - **Payroll ID used twice.** Two Connecteam people share one, or EH holds it on
   two records. Fix it before either is approved.
 - **No Payroll ID:** the client's Payroll ID field is set but blank for them,

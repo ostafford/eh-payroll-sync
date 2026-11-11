@@ -9,6 +9,8 @@
  *
  *   - Someone left out by the field map's `rules.exclude` is never synced.
  *   - A Linked employee, or someone who has synced before, is updated (ADR-0009).
+ *     Before the first deploy there's no database, and an empty one is what
+ *     the sync would start from too.
  *   - A pending link from the Link list with an EH id links them.
  *   - The Payroll ID stored at their first sync or link wins over anything
  *     copied in since (ADR-0011).
@@ -141,7 +143,7 @@ interface PersonContext {
   payrollId: string;
   /** The Payroll ID stored at their first sync or link. */
   stored: string | null;
-  waits: boolean;
+  detailsIncomplete: boolean;
   newHire: boolean;
 }
 
@@ -157,7 +159,7 @@ export function classifyAll(
     const base: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, waitsForDetails: false };
     // The sync checks their details before an update or a create, but not
     // before a link or a hold by a copied Payroll ID (consumer.ts).
-    const waits = !p.detailsComplete;
+    const detailsIncomplete = !p.detailsComplete;
     const synced = mapRows.get(p.ctUserId);
     const linkTo = pending.get(p.ctUserId);
     // The Payroll ID the sync compares (consumer.ts's matchKey): the one stored
@@ -170,25 +172,19 @@ export function classifyAll(
     if (p.excluded) decided = { ...base, outcome: "excluded" };
     else if (synced && (synced.linkedAt !== null || hasSyncedBefore(synced))) {
       // A Linked employee gets the changed-units sync instead (ADR-0009).
-      decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh), waitsForDetails: waits && synced.linkedAt === null };
+      decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh), waitsForDetails: detailsIncomplete && synced.linkedAt === null };
     } else if (linkTo) decided = { ...base, outcome: "on-link-list", eh: byId(linkTo, eh) };
-    else if (opts.records === null) {
-      // No database to ask: their Connecteam ID as a Payroll ID in EH means
-      // the sync wrote it, so they've synced before.
-      const holdsUserId = eh.filter((e) => externalIdOf(e) === String(p.ctUserId));
-      if (holdsUserId.length > 0) {
-        decided = { ...base, outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)), waitsForDetails: waits };
-      }
-    }
+    // With no database (before the first deploy) nothing is decided here: an
+    // empty database is what the sync would start from too.
     // `pending.get` is undefined off the Link list, and null for a "New hire, not this person" row.
-    return { p, base, decided, payrollId, stored, waits, newHire: linkTo === null };
+    return { p, base, decided, payrollId, stored, detailsIncomplete, newHire: linkTo === null };
   });
 
   // Only people who reach the comparison can collide on a Payroll ID.
   const idCount = new Map<string, number>();
   for (const c of contexts) if (!c.decided) idCount.set(c.payrollId, (idCount.get(c.payrollId) ?? 0) + 1);
 
-  return contexts.map(({ p, base, decided, payrollId, stored, waits, newHire }): PreflightRow => {
+  return contexts.map(({ p, base, decided, payrollId, stored, detailsIncomplete, newHire }): PreflightRow => {
     if (decided) return decided;
 
     const holders = eh.filter((e) => externalIdOf(e) === payrollId).map((e) => matchOf(p.payload, e));
@@ -197,15 +193,19 @@ export function classifyAll(
     const [holder] = holders;
     if (holder) {
       // Only a Payroll ID from the client's field is checked for agreement
-      // (consumer.ts gates on it); for any other key the sync overwrites that
-      // record, though it hasn't synced them (e.g. after a reset).
-      if (!p.payrollIdFromField) return { ...base, outcome: "in-eh-not-synced", eh: [holder], waitsForDetails: waits };
+      // (consumer.ts gates on it); for any other key the sync updates that
+      // record. A stored key means the sync wrote it (it's stored only once
+      // EH accepts a write or link), so the record is theirs. Without one, the
+      // sync has no record of them: e.g. a previous deployment's, after a reset.
+      if (!p.payrollIdFromField) {
+        return { ...base, outcome: stored !== null ? "already-synced" : "in-eh-not-synced", eh: [holder], waitsForDetails: detailsIncomplete };
+      }
       return { ...base, outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] };
     }
 
     const hits = newHire ? [] : eh.map((e) => matchOf(p.payload, e)).filter((m) => m.agree.length > 0);
     const noId = opts.payrollIdField && !p.payrollIdFromField && stored === null;
-    return { ...base, outcome: noId ? "no-id" : "not-found", hits, newHire, waitsForDetails: waits };
+    return { ...base, outcome: noId ? "no-id" : "not-found", hits, newHire, waitsForDetails: detailsIncomplete };
   });
 }
 
