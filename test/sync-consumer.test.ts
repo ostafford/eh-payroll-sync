@@ -475,6 +475,22 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
     expect(ct.channels[0]!.text).toContain("EH 40377 (Terminated in EH): TFN matches");
   });
 
+  it("the daily recheck's re-run of an unchanged hold posts no notice for a week (#155)", async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const store = fakeGateway();
+    const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
+    const ct = fakeCt(cloneUser());
+    const runAt = (t: number) => runSyncJob(job({ eventTimestamp: t }), deps({ store, eh, ct, now: () => t }));
+
+    await runAt(1_000_000);
+    expect(await runAt(1_000_000 + DAY)).toMatchObject({ status: "held" });
+    expect(await runAt(1_000_000 + 6 * DAY)).toMatchObject({ status: "held" });
+    expect(ct.channels).toHaveLength(1);
+
+    await runAt(1_000_000 + 8 * DAY);
+    expect(ct.channels).toHaveLength(2); // a hold left a week gets one reminder
+  });
+
   it("sends no second notice when the same job runs again", async () => {
     const store = fakeGateway();
     const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
