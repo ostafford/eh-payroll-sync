@@ -42,7 +42,9 @@ export type NoticeKind =
   | "existing_match"
   | "link"
   | "link_blocked"
-  | "payroll_id_changed";
+  | "payroll_id_changed"
+  | "cleared_field"
+  | "baseline_key_changed";
 
 /** A follow-up can wait on a payroll admin for a while - at most twice a day. */
 export const FOLLOW_UP_NOTICE_DEDUPE_MS = 12 * 60 * 60 * 1000;
@@ -59,6 +61,9 @@ export const SYSTEM_ALERT_NOTICE_DEDUPE_MS = 60 * 60 * 1000;
  * throttle genuine re-attempts - see the `correction` note above.
  */
 export const CORRECTION_NOTICE_DEDUPE_MS = 60 * 60 * 1000;
+
+/** The `ctUserId` of a notice about no one employee (a changed `BASELINE_KEY`). No Connecteam user has id 0. */
+export const NO_EMPLOYEE = 0;
 
 type MetaStore = Pick<SyncGateway, "readMeta" | "setMarker">;
 

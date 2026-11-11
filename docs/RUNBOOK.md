@@ -770,6 +770,15 @@ rotate the far side. Run `npm run deploy:config` first if `wrangler.deploy.json`
 isn't there. A key kept locally for testing also lives in `.dev.vars`. `CT_WEBHOOK_SECRET`
 must be updated on the Connecteam webhook registration at the same time.
 
+`BASELINE_KEY` has no far side: the sync made it, and it keys the Baselines of
+Linked employees (ADR-0009). Don't rotate it unless it has leaked. Keep it
+backed up with `.dev.vars`. If it changes, whether rotated or lost, nobody in
+EH is overwritten. Each Linked employee is re-baselined against their current
+Connecteam profile on their next sync, with nothing sent, and the admin channel
+gets one line about it. The cost: a Connecteam edit that hadn't synced before
+the change is absorbed into the new Baseline and never sent. Ask anyone who
+edited their profile around then to check EH, and fix it there by hand.
+
 ---
 
 ## Updating the deployment

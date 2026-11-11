@@ -1010,6 +1010,15 @@ describe("runSyncJob - changed-units sync for Linked employees (#151, ADR-0009)"
     expect(store.log).toEqual([]);
   });
 
+  it("keeps the outcome it had when an edit changes no unit", async () => {
+    const store = await linked();
+    store.rows.set(ME, { ...store.rows.get(ME)!, lastOutcome: "follow_up" });
+
+    await runSyncJob(update, deps({ store, eh: fakeEh({ id: 40213 }), ct: fakeCt(cloneUser()) }));
+
+    expect(store.rows.get(ME)!.lastOutcome).toBe("follow_up");
+  });
+
   it("re-baselines a Linked employee whose Baseline can't be read, sending nothing", async () => {
     const store = fakeGateway({ ctUserId: ME, ehEmployeeId: "40213", lastSyncedTs: 1000, lastOutcome: "ok", linkedAt: LINKED_AT });
     expect(store.rows.get(ME)!.baseline).toBeNull();
@@ -1262,6 +1271,152 @@ describe("runSyncJob - changed-units sync for Linked employees (#151, ADR-0009)"
       );
 
       expect(eh.upserts.map((u) => u.payload)).toEqual([{ jobTitle: "Team Lead" }]);
+    });
+  });
+});
+
+describe("runSyncJob - Linked employees: cleared fields, new fields and key changes (#152, ADR-0009)", () => {
+  const ME = 17760356;
+  const JOB_TITLE = 25145108;
+  const RELATIONSHIP = 42708536;
+
+  async function linked(pack: ConnecteamUser = cloneUser(), map = fieldMap, key = "test-baseline-key") {
+    const mapped = applyFieldMap(pack, map);
+    const baseline = await takeBaseline(mapped.payload, map, key, mapped.issues.map((i) => i.ehField));
+    return fakeGateway({
+      ctUserId: ME,
+      ehEmployeeId: "40213",
+      lastSyncedTs: 1000,
+      lastOutcome: "ok",
+      externalId: String(ME),
+      lastPayloadHash: "hash-at-link",
+      linkedAt: 500_000,
+      baseline,
+    });
+  }
+
+  const set = (user: ConnecteamUser, customFieldId: number, value: string) => {
+    user.customFields.find((f) => f.customFieldId === customFieldId)!.value = value;
+    return user;
+  };
+  const edit = (ts: number) => job({ reason: "profile_update", eventTimestamp: ts });
+
+  describe("a cleared field", () => {
+    it("sends nothing to EH, posts one follow-up to clear it by hand, and stays ok", async () => {
+      const store = await linked();
+      const eh = fakeEh({ id: 40213 });
+      const ct = fakeCt(set(cloneUser(), JOB_TITLE, ""));
+
+      await runSyncJob(edit(2000), deps({ store, eh, ct }));
+
+      expect(eh.upserts).toHaveLength(0);
+      expect(ct.dms).toEqual([]);
+      expect(ct.channels).toHaveLength(1);
+      expect(ct.channels[0]!.text).toContain("jobTitle");
+      expect(ct.channels[0]!.text).toMatch(/clear it by hand in Employment Hero/i);
+      expect(store.rows.get(ME)!.lastOutcome).toBe("ok");
+    });
+
+    it("isn't posted again by a later edit, which sends only what it changed", async () => {
+      const store = await linked();
+      await runSyncJob(edit(2000), deps({ store, eh: fakeEh({ id: 40213 }), ct: fakeCt(set(cloneUser(), JOB_TITLE, "")) }));
+
+      const eh = fakeEh({ id: 40213 });
+      const ct = fakeCt(set(set(cloneUser(), JOB_TITLE, ""), RELATIONSHIP, "Partner"));
+      await runSyncJob(edit(3000), deps({ store, eh, ct }));
+
+      expect(ct.channels).toEqual([]);
+      expect(eh.upserts).toHaveLength(1);
+      expect(eh.upserts[0]!.payload).toMatchObject({ emergencyContact1_Relationship: "Partner" });
+      expect(eh.upserts[0]!.payload).not.toHaveProperty("jobTitle");
+    });
+
+    it("leaves a group now partly blank unsent, even with another value in it changed", async () => {
+      const store = await linked();
+      const eh = fakeEh({ id: 40213 });
+      const ct = fakeCt(set(set(cloneUser(), RELATIONSHIP, ""), 42708535, "Alex Rivera"));
+
+      await runSyncJob(edit(2000), deps({ store, eh, ct }));
+
+      expect(eh.upserts).toHaveLength(0);
+      expect(ct.channels).toHaveLength(1);
+      expect(ct.channels[0]!.text).toContain("emergencyContact1_Relationship");
+      // The rest of the group wasn't sent either, so an edit to it is named too.
+      expect(ct.channels[0]!.text).toMatch(/not sent[^]*emergencyContact1_Name/);
+    });
+
+    it("keeps an open follow-up open: the cleared-field notice doesn't resolve it", async () => {
+      const store = await linked();
+      store.rows.set(ME, { ...store.rows.get(ME)!, lastOutcome: "follow_up" });
+
+      await runSyncJob(edit(2000), deps({ store, eh: fakeEh({ id: 40213 }), ct: fakeCt(set(cloneUser(), JOB_TITLE, "")) }));
+
+      expect(store.rows.get(ME)!.lastOutcome).toBe("follow_up");
+    });
+  });
+
+  describe("a field added to the field map after the link", () => {
+    const before = parseFieldMap({ ...fieldMap, fields: fieldMap.fields.filter((f) => f.eh !== "jobTitle") });
+
+    it("is baselined without being sent", async () => {
+      const store = await linked(cloneUser(), before);
+      const eh = fakeEh({ id: 40213 });
+      const ct = fakeCt(cloneUser());
+
+      const out = await runSyncJob(edit(2000), deps({ store, eh, ct }));
+
+      expect(out.status).toBe("skipped");
+      expect(eh.upserts).toHaveLength(0);
+      expect(ct.channels).toEqual([]);
+
+      // Once baselined, a real edit to it is sent.
+      const after = fakeEh({ id: 40213 });
+      await runSyncJob(edit(3000), deps({ store, eh: after, ct: fakeCt(set(cloneUser(), JOB_TITLE, "Team Lead")) }));
+      expect(after.upserts.map((u) => u.payload)).toEqual([{ jobTitle: "Team Lead" }]);
+    });
+
+    it("is told apart from a field that was blank at the link and is now filled in, which is sent", async () => {
+      const store = await linked(set(cloneUser(), JOB_TITLE, ""));
+      const eh = fakeEh({ id: 40213 });
+
+      await runSyncJob(edit(2000), deps({ store, eh, ct: fakeCt(set(cloneUser(), JOB_TITLE, "Team Lead")) }));
+
+      expect(eh.upserts.map((u) => u.payload)).toEqual([{ jobTitle: "Team Lead" }]);
+    });
+  });
+
+  describe("a Baseline made with a different key", () => {
+    it("is re-baselined with nothing pushed, and one admin line goes out for the new key", async () => {
+      const store = await linked(cloneUser(), fieldMap, "lost-key");
+      // A second Linked employee on the same lost key, in the same store.
+      const other = store.rows.get(ME)!;
+      store.rows.set(ME + 1, { ...other, ctUserId: ME + 1, externalId: String(ME + 1) });
+      const eh = fakeEh({ id: 40213 });
+      const ct = fakeCt(set(cloneUser(), JOB_TITLE, "Team Lead"));
+      const otherCt = fakeCt({ ...set(cloneUser(), JOB_TITLE, "Team Lead"), userId: ME + 1 });
+
+      const out = await runSyncJob(edit(2000), deps({ store, eh, ct }));
+      await runSyncJob(job({ ctUserId: ME + 1, reason: "profile_update", eventTimestamp: 2000 }), deps({ store, eh, ct: otherCt }));
+
+      expect(out.status).toBe("skipped");
+      expect(eh.upserts).toHaveLength(0);
+      expect([...ct.dms, ...otherCt.dms]).toEqual([]);
+      expect(otherCt.channels).toEqual([]);
+      expect(ct.channels).toHaveLength(1);
+      expect(ct.channels[0]!.text).toContain("Rotating keys");
+    });
+
+    it("after re-baselining, a real edit pushes only that unit", async () => {
+      const store = await linked(cloneUser(), fieldMap, "lost-key");
+      await runSyncJob(edit(2000), deps({ store, eh: fakeEh({ id: 40213 }), ct: fakeCt(set(cloneUser(), JOB_TITLE, "Team Lead")) }));
+
+      const eh = fakeEh({ id: 40213 });
+      const ct = fakeCt(set(set(cloneUser(), JOB_TITLE, "Team Lead"), RELATIONSHIP, "Partner"));
+      await runSyncJob(edit(3000), deps({ store, eh, ct }));
+
+      expect(eh.upserts).toHaveLength(1);
+      expect(eh.upserts[0]!.payload).toMatchObject({ emergencyContact1_Relationship: "Partner" });
+      expect(eh.upserts[0]!.payload).not.toHaveProperty("jobTitle");
     });
   });
 });

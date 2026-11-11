@@ -476,6 +476,41 @@ export function payrollIdChangedMessage(ref: PersonRef): string {
 }
 
 /**
+ * Manual-follow-up notice -> the admin channel, when a Linked employee blanked
+ * a field in Connecteam (ADR-0009, #152). Nothing clears an EH field safely,
+ * so the sync left EH as it was. `heldBack` names the rest of a group now
+ * partly blank: it goes whole or not at all, so an edit to it wasn't sent
+ * either. Informational: it doesn't change the sync's outcome.
+ */
+export function clearedFieldsMessage(cleared: readonly string[], heldBack: readonly string[], ref: PersonRef): string {
+  return clamp(
+    sections(
+      `${personLabel(ref)} cleared these in Connecteam, and the sync doesn't clear fields in Employment Hero:`,
+      bulletList(cleared),
+      "If they should be blank, clear it by hand in Employment Hero. Otherwise no action is needed.",
+      heldBack.length > 0
+        ? `Also not sent, as they're in the same group: ${heldBack.join(", ")}. If any of these changed, update them by hand in Employment Hero.`
+        : "",
+    ),
+  );
+}
+
+/**
+ * System alert -> the admin channel, once per new `BASELINE_KEY` (ADR-0009,
+ * #152): Linked employees' Baselines were made with another key, so each is
+ * re-baselined on their next sync with nothing sent. Names nobody: it's about
+ * every Linked employee.
+ */
+export function baselineKeyChangedMessage(): string {
+  return clamp(
+    sections(
+      "The Baseline key (BASELINE_KEY) changed, so Linked employees are re-baselined against their current Connecteam profile as they next sync. Nothing is sent to Employment Hero for them until they edit their profile again.",
+      "Any Connecteam edit not yet synced before the change won't be sent. If the key was lost rather than rotated on purpose, see the RUNBOOK's \"Rotating keys\".",
+    ),
+  );
+}
+
+/**
  * The closing "this is automated" line on a message to a person (per client:
  * `messages.automatedNote`; blank for none). Admin-channel messages don't
  * carry it: admins know where those come from.
