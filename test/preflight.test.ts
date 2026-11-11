@@ -117,8 +117,24 @@ describe("classifyAll", () => {
     expect(one(person({ payrollId: "100", payrollIdFromField: false }), [eh()], { payrollIdField: false }).outcome).toBe("not-found");
   });
 
-  it("carries whether their details map cleanly", () => {
-    expect(one(person({ detailsComplete: false }), [eh()])).toMatchObject({ outcome: "not-found", detailsComplete: false });
+  describe("details incomplete: the sync asks them to finish before an update or a create", () => {
+    const incomplete = person({ detailsComplete: false });
+
+    it("before a create", () => {
+      expect(one(incomplete, [eh()])).toMatchObject({ outcome: "not-found", waitsForDetails: true });
+    });
+
+    it("before an update of someone synced before, but not a Linked employee (changed-units sync)", () => {
+      const synced = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "50", lastOutcome: "ok" })] });
+      expect(one(incomplete, [], { records: synced })).toMatchObject({ outcome: "already-synced", waitsForDetails: true });
+      const linked = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "50", lastOutcome: "ok", linkedAt: 1 })] });
+      expect(one(incomplete, [], { records: linked })).toMatchObject({ outcome: "already-synced", waitsForDetails: false });
+    });
+
+    it("not before a link or a hold by a copied Payroll ID", () => {
+      expect(one(incomplete, [eh({ id: 51, externalId: "E0042", emailAddress: "jack@example.com" })])).toMatchObject({ outcome: "found", waitsForDetails: false });
+      expect(one(incomplete, [eh({ id: 52, externalId: "E0042" })])).toMatchObject({ outcome: "found-no-agreement", waitsForDetails: false });
+    });
   });
 
   describe("already synced", () => {
@@ -167,10 +183,19 @@ describe("classifyAll", () => {
       expect(r.outcome).toBe("not-found");
     });
 
-    it("a stored Payroll ID, with their field now blank, is updated with no agreement check, not held", () => {
+    it("keyed by their Connecteam ID, unknown to the database but in EH: approval overwrites that record, so it needs a look", () => {
+      const r = one(person({ payrollId: "100", payrollIdFromField: false }), [eh({ id: 39, externalId: "100" })], { payrollIdField: false, records: records() });
+      expect(r).toMatchObject({ outcome: "in-eh-not-synced", eh: [{ ehEmployeeId: 39 }] });
+      expect(needsAttention(r)).toBe(true);
+      expect(renderPreflight([r], 1, { recordsRead: true })).toContain("In EH under this Payroll ID, but never synced: approval overwrites that record (1)");
+    });
+
+    it("a stored Payroll ID, with their field now blank, overwrites the EH record with no agreement check, not held", () => {
       const stored = records({ employeeMap: [mapRow({ ctUserId: 100, lastOutcome: "correction", externalId: "E0001" })] });
       const blank = person({ payrollId: "100", payrollIdFromField: false });
-      expect(one(blank, [eh({ id: 38, externalId: "E0001" })], { records: stored })).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 38 }] });
+      const r = one(blank, [eh({ id: 38, externalId: "E0001" })], { records: stored });
+      expect(r).toMatchObject({ outcome: "in-eh-not-synced", eh: [{ ehEmployeeId: 38 }] });
+      expect(needsAttention(r)).toBe(true);
       // And it isn't "no ID": the stored one is used.
       expect(one(blank, [eh()], { records: stored }).outcome).toBe("not-found");
     });
@@ -273,5 +298,14 @@ describe("renderPreflight", () => {
 
   it("says nothing needs a look when everyone is clear", () => {
     expect(renderPreflight(classifyAll([person()], [eh()], opts()), 1, { recordsRead: true })).toContain("✓ Nothing to look at.");
+  });
+});
+
+describe("scripts/preflight.ts errors", () => {
+  it("name the HTTP status only, never a response body that could echo an employee's details", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../scripts/preflight.ts", import.meta.url), "utf8");
+    expect(src).not.toMatch(/r\.text\(\)|\.detail\b/);
+    expect(src.match(/throw new Error\(`[^`]*HTTP \$\{/g)).toHaveLength(3);
   });
 });

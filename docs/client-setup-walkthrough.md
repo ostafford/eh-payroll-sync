@@ -34,13 +34,19 @@ person is one of:
 - **Not found: will be created,** or **will be held** if someone in EH has the
   same email, TFN or name + date of birth (the Pre-create check). Someone whose
   pack answers don't map yet is marked `details incomplete`: the sync asks them
-  to finish first, then creates or holds them.
+  to finish first, then goes ahead. The same mark shows on anyone the sync would
+  update.
 - **Payroll ID used twice.** Two Connecteam people share one, or EH holds it on
   two records. Fix it before either is approved.
 - **No Payroll ID:** the client's Payroll ID field is set but blank for them,
-  so they get their Connecteam ID. Flagged when they'd also be held.
+  so they get their Connecteam ID. Always listed; it needs a look only when
+  they'd also be held.
 - **On the Link list: will be linked,** to the EH employee confirmed in the
   link stage (a "New hire, not this person" row is created instead).
+- **In EH under this Payroll ID, but never synced.** EH holds their Payroll ID
+  but the sync has no record of them (for example, after a reset). Approval
+  writes their Connecteam details over that EH record, so check it's the same
+  person.
 - **Already synced or linked:** the sync already has their EH record.
 - **Left out of the sync:** the field map's exclude rule leaves them out.
 

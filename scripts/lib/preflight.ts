@@ -78,6 +78,7 @@ export type PreflightOutcome =
   | "not-found"
   | "on-link-list"
   | "found"
+  | "in-eh-not-synced"
   | "already-synced";
 
 /** An EH employee, with the Pre-create check's keys that agree and differ with it. */
@@ -97,7 +98,8 @@ export interface PreflightRow {
   hits: PreflightMatch[];
   /** On the Link list as "New hire, not this person": the Pre-create check is skipped. */
   newHire: boolean;
-  detailsComplete: boolean;
+  /** Their details don't map yet, and the sync checks them before this write: it asks them to finish first. */
+  waitsForDetails: boolean;
 }
 
 /** Lower-cased and trimmed, with runs of spaces collapsed: for comparing names and emails. */
@@ -129,6 +131,20 @@ function byId(id: string | null, eh: readonly PreflightEhEmployee[]): PreflightM
   return [{ ehEmployeeId: Number(id), terminated: e ? isTerminated(e) : false, agree: [], differs: [] }];
 }
 
+/** One person on their way through {@link classifyAll}. */
+interface PersonContext {
+  p: PreflightPerson;
+  base: PreflightRow;
+  /** Decided before their Payroll ID is compared, or null to compare it. */
+  decided: PreflightRow | null;
+  /** The Payroll ID the sync compares, as EH compares it. */
+  payrollId: string;
+  /** The Payroll ID stored at their first sync or link. */
+  stored: string | null;
+  waits: boolean;
+  newHire: boolean;
+}
+
 export function classifyAll(
   people: readonly PreflightPerson[],
   eh: readonly PreflightEhEmployee[],
@@ -137,8 +153,11 @@ export function classifyAll(
   const mapRows = new Map(opts.records?.employeeMap.map((m) => [m.ctUserId, m]));
   const pending = new Map(opts.records?.pendingLinks.map((l) => [l.ctUserId, l.ehEmployeeId]));
 
-  const steps = people.map((p) => {
-    const base: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, detailsComplete: p.detailsComplete };
+  const contexts = people.map((p): PersonContext => {
+    const base: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, waitsForDetails: false };
+    // The sync checks their details before an update or a create, but not
+    // before a link or a hold by a copied Payroll ID (consumer.ts).
+    const waits = !p.detailsComplete;
     const synced = mapRows.get(p.ctUserId);
     const linkTo = pending.get(p.ctUserId);
     // The Payroll ID the sync compares (consumer.ts's matchKey): the one stored
@@ -150,22 +169,26 @@ export function classifyAll(
     let decided: PreflightRow | null = null;
     if (p.excluded) decided = { ...base, outcome: "excluded" };
     else if (synced && (synced.linkedAt !== null || hasSyncedBefore(synced))) {
-      decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh) };
+      // A Linked employee gets the changed-units sync instead (ADR-0009).
+      decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh), waitsForDetails: waits && synced.linkedAt === null };
     } else if (linkTo) decided = { ...base, outcome: "on-link-list", eh: byId(linkTo, eh) };
     else if (opts.records === null) {
       // No database to ask: their Connecteam ID as a Payroll ID in EH means
       // the sync wrote it, so they've synced before.
       const holdsUserId = eh.filter((e) => externalIdOf(e) === String(p.ctUserId));
-      if (holdsUserId.length > 0) decided = { ...base, outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)) };
+      if (holdsUserId.length > 0) {
+        decided = { ...base, outcome: "already-synced", eh: holdsUserId.map((e) => matchOf(p.payload, e)), waitsForDetails: waits };
+      }
     }
-    return { p, base, decided, payrollId, stored, newHire: linkTo === null };
+    // `pending.get` is undefined off the Link list, and null for a "New hire, not this person" row.
+    return { p, base, decided, payrollId, stored, waits, newHire: linkTo === null };
   });
 
   // Only people who reach the comparison can collide on a Payroll ID.
   const idCount = new Map<string, number>();
-  for (const s of steps) if (!s.decided) idCount.set(s.payrollId, (idCount.get(s.payrollId) ?? 0) + 1);
+  for (const c of contexts) if (!c.decided) idCount.set(c.payrollId, (idCount.get(c.payrollId) ?? 0) + 1);
 
-  return steps.map(({ p, base, decided, payrollId, stored, newHire }): PreflightRow => {
+  return contexts.map(({ p, base, decided, payrollId, stored, waits, newHire }): PreflightRow => {
     if (decided) return decided;
 
     const holders = eh.filter((e) => externalIdOf(e) === payrollId).map((e) => matchOf(p.payload, e));
@@ -174,14 +197,15 @@ export function classifyAll(
     const [holder] = holders;
     if (holder) {
       // Only a Payroll ID from the client's field is checked for agreement
-      // (consumer.ts gates on it); any other key the sync just updates.
-      if (!p.payrollIdFromField) return { ...base, outcome: "already-synced", eh: [holder] };
+      // (consumer.ts gates on it); for any other key the sync overwrites that
+      // record, though it hasn't synced them (e.g. after a reset).
+      if (!p.payrollIdFromField) return { ...base, outcome: "in-eh-not-synced", eh: [holder], waitsForDetails: waits };
       return { ...base, outcome: holder.agree.length > 0 ? "found" : "found-no-agreement", eh: [holder] };
     }
 
     const hits = newHire ? [] : eh.map((e) => matchOf(p.payload, e)).filter((m) => m.agree.length > 0);
     const noId = opts.payrollIdField && !p.payrollIdFromField && stored === null;
-    return { ...base, outcome: noId ? "no-id" : "not-found", hits, newHire };
+    return { ...base, outcome: noId ? "no-id" : "not-found", hits, newHire, waitsForDetails: waits };
   });
 }
 
@@ -217,6 +241,12 @@ const GROUPS = {
     mark: "⚠️ ",
     title: "Not found, but already in EH: will be held",
     action: "Their Payroll ID finds nobody in EH, but someone there has the same details. Check the Payroll ID in Connecteam for a typo.",
+    attention: true,
+  },
+  "in-eh-not-synced": {
+    mark: "⚠️ ",
+    title: "In EH under this Payroll ID, but never synced: approval overwrites that record",
+    action: "EH already holds their Payroll ID, but the sync has no record of them (for example, after a reset). Approval writes their Connecteam details over that EH record. Check it's the same person.",
     attention: true,
   },
   "no-id": {
@@ -269,11 +299,6 @@ export function needsAttention(row: PreflightRow): boolean {
   return GROUPS[groupOf(row)].attention;
 }
 
-/** Created (or held) only once their details are complete: the sync asks them to finish first. */
-function waitsForDetails(row: PreflightRow): boolean {
-  return !row.detailsComplete && (row.outcome === "not-found" || row.outcome === "no-id");
-}
-
 const KEY_LABEL: Record<MatchKey, string> = { email: "email", tfn: "TFN", nameDob: "name + date of birth" };
 
 const keyList = (keys: readonly MatchKey[]): string => keys.map((k) => KEY_LABEL[k]).join(", ");
@@ -291,7 +316,7 @@ function ehText(m: PreflightMatch, keys: "compared" | "hit" | "none"): string {
 function rowText(r: PreflightRow): string {
   const compared = r.outcome === "found" || r.outcome === "found-no-agreement";
   const targets = r.hits.length > 0 ? r.hits.map((h) => ehText(h, "hit")) : r.eh.map((m) => ehText(m, compared ? "compared" : "none"));
-  const notes = [...(r.newHire ? ["Link list: new hire"] : []), ...(waitsForDetails(r) ? ["details incomplete"] : [])];
+  const notes = [...(r.newHire ? ["Link list: new hire"] : []), ...(r.waitsForDetails ? ["details incomplete"] : [])];
   return [
     `Connecteam ${r.ctUserId}`,
     ...(targets.length > 0 ? [`-> ${targets.join(", ")}`] : []),
@@ -327,8 +352,8 @@ export function renderPreflight(rows: readonly PreflightRow[], ehCount: number, 
     out.push("");
   }
 
-  if (rows.some(waitsForDetails)) {
-    out.push("[details incomplete]: their pack's answers don't map to EH yet. The sync asks them to finish first, then creates (or holds) them as above.");
+  if (rows.some((r) => r.waitsForDetails)) {
+    out.push("[details incomplete]: their pack's answers don't map to EH yet. The sync asks them to finish first, then goes ahead as above.");
     out.push("");
   }
 

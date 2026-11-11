@@ -79,7 +79,8 @@ async function listEhEmployees(businessId: string, apiKey: string): Promise<Pref
   for (let skip = 0; ; skip += PAGE) {
     const url = `https://api.yourpayroll.com.au/api/v2/business/${businessId}/employee/unstructured?$top=${PAGE}&$skip=${skip}`;
     const r = await fetch(url, { headers: { authorization: auth, accept: "application/json" } });
-    if (!r.ok) throw new Error(`Employment Hero employee list -> ${r.status} ${await r.text()}`);
+    // Status only: a response body can echo an employee's details back.
+    if (!r.ok) throw new Error(`Employment Hero employee list -> HTTP ${r.status}`);
     const page = (await r.json()) as Array<Record<string, unknown>>;
     for (const e of page) {
       // Only what the Pre-create check compares, plus the Payroll ID and status (terminated).
@@ -106,7 +107,7 @@ async function listPackPeople(
   fieldMap: FieldMap,
 ): Promise<{ people: PreflightPerson[]; missing: number }> {
   const assignments = await ct.listAssignments(packId);
-  if (assignments.outcome !== "ok") throw new Error(`Connecteam onboarding assignments -> ${assignments.status} ${assignments.detail}`);
+  if (assignments.outcome !== "ok") throw new Error(`Connecteam onboarding assignments -> HTTP ${assignments.status}`);
   // Every assignee, approved or not: Pre-existing employees aren't approved yet.
   const userIds = [...new Set(assignments.data.map((a) => a.userId))];
 
@@ -116,7 +117,7 @@ async function listPackPeople(
     process.stderr.write(`\rReading Connecteam people in the onboarding pack: ${i + 1}/${userIds.length}`);
     if ((ct.lastRateLimit?.minuteRemaining ?? Infinity) <= 1) await new Promise((r) => setTimeout(r, 60_000));
     const u = await ct.getUser(userId);
-    if (u.outcome !== "ok") throw new Error(`Connecteam user ${userId} -> ${u.status} ${u.detail}`);
+    if (u.outcome !== "ok") throw new Error(`Connecteam user ${userId} -> HTTP ${u.status}`);
     if (!u.data) {
       missing++;
       continue;
