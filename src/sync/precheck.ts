@@ -79,7 +79,7 @@ function keysOf(record: Record<string, unknown>): Keys {
 }
 
 /** An OData string literal: single quotes doubled. */
-function odataString(v: string): string {
+export function odataString(v: string): string {
   return `'${v.replace(/'/g, "''")}'`;
 }
 

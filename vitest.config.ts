@@ -43,6 +43,10 @@ export default defineConfig(async () => {
             name: "integration",
             include: ["test/**/*.integration.test.ts"],
             environment: "node",
+            // Live APIs can take longer than the 5 s default; a test cut off
+            // mid-create loses the result it needs to clean up (#177).
+            testTimeout: 60_000,
+            hookTimeout: 60_000,
             setupFiles: ["./test/setup.env.ts"],
           },
         },

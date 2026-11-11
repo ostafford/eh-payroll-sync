@@ -140,9 +140,11 @@ export class EhPayrollClient {
       method: "DELETE",
       headers: { authorization: this.#auth },
     });
-    return del.ok
-      ? { outcome: "ok", data: null }
-      : { outcome: "client_error", status: del.status, detail: `delete failed (${del.status})` };
+    if (del.ok) return { outcome: "ok", data: null };
+    const detail = `delete failed (${del.status})`;
+    return del.status === 429 || del.status >= 500
+      ? { outcome: "retryable", status: del.status, detail }
+      : { outcome: "client_error", status: del.status, detail };
   }
 }
 
