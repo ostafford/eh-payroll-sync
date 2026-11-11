@@ -59,6 +59,14 @@ export function unitOf(ehField: string): string {
   return ehField;
 }
 
+/** What a Baseline needs of the field map. Only the constants are needed to split a payload. */
+type BaselineMap = Pick<FieldMap, "rules"> & Partial<Pick<FieldMap, "fields" | "employmentHero">>;
+
+/** The EH fields the field map sets as constants: never part of a unit. */
+function constantsOf(map: Pick<FieldMap, "rules">): ReadonlySet<string> {
+  return new Set(Object.keys(map.rules?.constants ?? {}));
+}
+
 /** Stands in for a field the pack holds but couldn't map. No real value is an object, so it never equals one. */
 const UNMAPPED = { unmapped: true } as const;
 
@@ -73,7 +81,7 @@ export function unitsOf(
   map: Pick<FieldMap, "rules">,
   unmapped: readonly string[] = [],
 ): Record<string, Record<string, unknown>> {
-  const constants = new Set(Object.keys(map.rules?.constants ?? {}));
+  const constants = constantsOf(map);
   const units: Record<string, Record<string, unknown>> = {};
   const entries: Array<[string, unknown]> = [...Object.entries(payload), ...unmapped.map((f) => [f, UNMAPPED] as [string, unknown])];
   for (const [key, value] of entries) {
@@ -81,6 +89,19 @@ export function unitsOf(
     (units[unitOf(key)] ??= {})[key] = value;
   }
   return units;
+}
+
+/**
+ * Every unit the field map can fill, blank or not: its `fields` rules, and the
+ * pay-run set when the map builds one. A unit missing from a Baseline's
+ * `filled` that's in here now was added to the map after it (#152).
+ */
+function unitsInMap(map: BaselineMap): string[] {
+  const constants = constantsOf(map);
+  const units = new Set((map.fields ?? []).filter((f) => !constants.has(f.eh)).map((f) => unitOf(f.eh)));
+  const eh = map.employmentHero;
+  if (eh?.defaults || eh?.perEmployeeRate) units.add("payRun");
+  return [...units];
 }
 
 function hmacKey(secret: string) {
@@ -108,18 +129,49 @@ export async function baselineKeyId(secret: string): Promise<string> {
  */
 export async function takeBaseline(
   payload: Record<string, unknown>,
-  map: Pick<FieldMap, "rules">,
+  map: BaselineMap,
   secret: string,
   unmapped: readonly string[] = [],
 ): Promise<Baseline> {
   if (!secret) throw new Error("BASELINE_KEY is not set");
   const key = await hmacKey(secret);
   const units: Record<string, string> = {};
+  const filled: Record<string, string[]> = {};
   for (const [unit, values] of Object.entries(unitsOf(payload, map, unmapped))) {
     const signed = unit === "payRun" ? Object.fromEntries(Object.entries(values).filter(([k]) => PAY_RATE_KEYS.has(k))) : values;
     units[unit] = await hmacHex(key, canonicalJson({ unit, values: signed }));
+    filled[unit] = Object.keys(values).sort();
   }
-  return { keyId: await baselineKeyId(secret), units };
+  // A blank unit has no fingerprint, but is known: once filled in, it's a change to send.
+  for (const unit of unitsInMap(map)) filled[unit] ??= [];
+  return { keyId: await baselineKeyId(secret), units, filled };
+}
+
+/**
+ * The units in `now` that `before` didn't know of: added to the field map
+ * after it was taken (#152). A Baseline with no `filled` record knows only
+ * the units it has a fingerprint for.
+ */
+export function newUnits(before: Baseline, now: Baseline): string[] {
+  const known = new Set(Object.keys(before.filled ?? before.units));
+  return Object.keys(now.filled ?? now.units).filter((unit) => !known.has(unit));
+}
+
+/**
+ * The EH fields that held a value in `before` and are blank in `now`, by
+ * unit: a cleared field, or a group now partly blank (#152). Empty for a
+ * Baseline with no `filled` record. The pay-run set isn't the employee's to
+ * clear: its keys come and go with the rate and the field map's defaults.
+ */
+export function clearedFields(before: Baseline, now: Baseline): Record<string, string[]> {
+  const cleared: Record<string, string[]> = {};
+  for (const [unit, fields] of Object.entries(before.filled ?? {})) {
+    if (unit === "payRun") continue;
+    const still = new Set(now.filled?.[unit] ?? []);
+    const gone = fields.filter((f) => !still.has(f));
+    if (gone.length > 0) cleared[unit] = gone;
+  }
+  return cleared;
 }
 
 /** The units whose fingerprint differs between two Baselines: what changed since `before` was taken. */

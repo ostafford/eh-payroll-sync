@@ -49,6 +49,12 @@ export interface Baseline {
   keyId: string;
   /** Unit name -> HMAC-SHA-256 fingerprint of that unit's mapped value. */
   units: Record<string, string>;
+  /**
+   * Unit name -> the EH field names in it that held a value: names only,
+   * never values (ADR-0001). Tells a cleared field from an unchanged one
+   * (#152). Absent on a Baseline taken before it existed.
+   */
+  filled?: Record<string, string[]>;
 }
 
 /** One `pending_link` row: a link the admin confirmed, waiting for the person's first approval. */

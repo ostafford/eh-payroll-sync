@@ -29,7 +29,7 @@ One of the outbound message types. Sent to the **employee** who entered bad data
 _Avoid_: notification, alert
 
 **Manual-follow-up notice**:
-Second message type. Posted to the admin **channel**. For data that synced fine but needs a payroll admin to finish something in EH by hand: non-resident / working-holiday-maker tax scale, SMSF super, `INTERNATIONAL` address. The sync still completes with a safe default.
+Second message type. Posted to the admin **channel**. For data that synced fine but needs a payroll admin to finish something in EH by hand: non-resident / working-holiday-maker tax scale, SMSF super, `INTERNATIONAL` address. The sync still completes with a safe default. One kind is informational only: a Linked employee cleared a field in Connecteam, which the sync never clears in EH. It doesn't make the sync a Manual follow-up, and leaves the outcome as it was (ADR-0009).
 
 **System alert**:
 Third message type. Posted to the admin **channel**. For failures the employee cannot fix — EH outage, auth failure, bugs — raised when a queue message dead-letters.

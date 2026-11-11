@@ -358,7 +358,14 @@ export function parseBaseline(text: string | null): Baseline | null {
     const b = JSON.parse(text) as Partial<Baseline>;
     if (typeof b.keyId !== "string" || !b.units || typeof b.units !== "object" || Array.isArray(b.units)) return null;
     if (!Object.values(b.units).every((v) => typeof v === "string")) return null;
-    return { keyId: b.keyId, units: b.units };
+    // `filled` (#152) is kept only when it's the shape we write; without it the
+    // Baseline still works, as one taken before it existed.
+    const filled =
+      b.filled && typeof b.filled === "object" && !Array.isArray(b.filled) &&
+      Object.values(b.filled).every((v) => Array.isArray(v) && v.every((f) => typeof f === "string"))
+        ? b.filled
+        : undefined;
+    return { keyId: b.keyId, units: b.units, ...(filled ? { filled } : {}) };
   } catch {
     return null;
   }

@@ -50,13 +50,15 @@ import {
   linkNoticeMessage,
   linkBlockedMessage,
   payrollIdChangedMessage,
+  clearedFieldsMessage,
+  baselineKeyChangedMessage,
   type LinkBlock,
   type PersonRef,
 } from "./messages.js";
 import { runPreCreateCheck, existingMatchDetail, compareKeys, isTerminated, type ExistingMatch, type MatchKey } from "./precheck.js";
 import { advanceCycle, directManagerUserId, MANAGER_ESCALATION_CYCLE } from "./cycles.js";
 import { payloadHash } from "./canonical.js";
-import { changedUnits, takeBaseline, unitOf } from "./baseline.js";
+import { baselineKeyId, changedUnits, clearedFields, newUnits, takeBaseline, unitOf } from "./baseline.js";
 import { logEvent } from "../log.js";
 import {
   noticeKey,
@@ -67,8 +69,9 @@ import {
   HELD_NOTICE_DEDUPE_MS,
   SYSTEM_ALERT_NOTICE_DEDUPE_MS,
   CORRECTION_NOTICE_DEDUPE_MS,
+  NO_EMPLOYEE,
 } from "./notices.js";
-import type { EmployeeLink, LinkGateway, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
+import type { Baseline, EmployeeLink, LinkGateway, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
 
 export interface SyncDeps {
   ct: Pick<
@@ -760,40 +763,85 @@ async function syncChangedUnits(
   const { link, mapped } = sync;
   const { ctUserId } = link;
   const { baseline } = link;
-  // No readable Baseline (a bad stored value): re-baseline from the pack as
-  // it is now and send nothing, as for a lost key (ADR-0009). A full sync
-  // would overwrite EH. Edits not yet pushed are absorbed into it.
-  if (!baseline) {
-    const unmapped = mapped.issues.map((i) => i.ehField);
-    await deps.store.saveBaseline(ctUserId, await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped));
+  // Nothing sent to EH: store the hash so the next identical delivery stops
+  // at the hash check. The outcome is saved as it was (the store would clear
+  // one it isn't given), so an open follow-up stays open for the recheck.
+  const skip = async (reason: string): Promise<SyncJobOutcome> => {
     await deps.store.saveEmployeeLink({
       ctUserId,
       ehEmployeeId: link.ehEmployeeId,
       lastSyncedTs: sync.eventTimestamp,
       lastPayloadHash: sync.hash,
+      lastOutcome: link.lastOutcome ?? null,
     });
-    return { status: "skipped", reason: "Baseline unreadable: re-baselined, nothing sent" };
+    return { status: "skipped", reason };
+  };
+  // No readable Baseline (a bad stored value): re-baseline from the pack as
+  // it is now and send nothing, as for a lost key (ADR-0009). A full sync
+  // would overwrite EH. Edits not yet pushed are absorbed into it.
+  const rebaseline = async (reason: string): Promise<SyncJobOutcome> => {
+    const unmapped = mapped.issues.map((i) => i.ehField);
+    await deps.store.saveBaseline(ctUserId, await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped));
+    return skip(reason);
+  };
+  if (!baseline) return rebaseline("Baseline unreadable: re-baselined, nothing sent");
+  // A Baseline made with a different key (a rotated or lost BASELINE_KEY)
+  // can't be compared, so it's re-baselined the same way. The admin hears
+  // once per new key id, not once per Linked employee (#143 item 10).
+  const keyId = await baselineKeyId(deps.baselineKey);
+  if (baseline.keyId !== keyId) {
+    const key = await noticeKey("baseline_key_changed", NO_EMPLOYEE, [keyId]);
+    if (await shouldPostNotice(deps.store, key, "forever", sync.now())) {
+      const sent = await sendClaimed(deps.store, key, ctUserId, "baseline_key_changed", () =>
+        deps.ct.sendChannelMessage(deps.adminChannelId, baselineKeyChangedMessage()),
+      );
+      if (!sent) return sendFailed("baseline_key_changed");
+    }
+    return rebaseline(KEY_CHANGED_DETAIL);
   }
   // A Connecteam rate the sync can't map leaves no pay-run keys on the
   // payload. Marked as unmapped, its unit reads as changed (and back once the
   // rate is usable again). A field-map gap (`payRunBlocking`) isn't a change
   // to the rate, so it isn't marked: once fixed, a rate that differs is sent.
-  // A Baseline with no pay-run unit is left to #152 (units it doesn't hold yet).
+  // A Baseline with no pay-run fingerprint has nothing to differ from.
   const rateUnusable = mapped.payRunIssues.length > 0 && !mapped.payRunBlocking;
   const payRunUnmapped = rateUnusable && baseline.units.payRun ? ["rate"] : [];
   const unmapped = [...mapped.issues.map((i) => i.ehField), ...payRunUnmapped];
   const current = await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped);
   const changed = new Set(changedUnits(baseline, current));
-  // A new hash with nothing new in it (e.g. only a constant moved): store the
-  // hash so the next identical delivery stops at the hash check, write nothing.
+  // A field blanked in Connecteam (or a group now partly blank) isn't sent:
+  // nothing clears an EH field safely (#135), and a group goes whole or not
+  // at all. The admin is told once, naming the rest of a partly blank group,
+  // and those units' Baseline moves so a later edit doesn't tell them again.
+  // It's informational: it doesn't change the outcome (#143 item 9).
+  const cleared = clearedFields(baseline, current);
+  const clearedUnits = Object.keys(cleared);
+  if (clearedUnits.length > 0) {
+    const fields = Object.values(cleared).flat();
+    const heldBack = clearedUnits.flatMap((unit) => current.filled?.[unit] ?? []);
+    const key = await noticeKey("cleared_field", ctUserId, [sync.hash, ...fields]);
+    if (await shouldPostNotice(deps.store, key, FOLLOW_UP_NOTICE_DEDUPE_MS, sync.now())) {
+      const sent = await sendClaimed(deps.store, key, ctUserId, "cleared_field", () =>
+        deps.ct.sendChannelMessage(deps.adminChannelId, clearedFieldsMessage(fields, heldBack, sync.person)),
+      );
+      if (!sent) return sendFailed("cleared_field");
+    }
+  }
+  // A unit added to the field map since the Baseline was taken is baselined
+  // without being sent: its value may be older than what EH holds (ADR-0009).
+  const fresh = newUnits(baseline, current);
+  const absorbed = [...clearedUnits, ...fresh];
+  // The Baseline the rest of this sync moves forward from.
+  let movedBaseline = baseline;
+  if (absorbed.length > 0) {
+    movedBaseline = moveUnits(baseline, current, absorbed);
+    await deps.store.saveBaseline(ctUserId, movedBaseline);
+    for (const unit of absorbed) changed.delete(unit);
+  }
   if (changed.size === 0) {
-    await deps.store.saveEmployeeLink({
-      ctUserId,
-      ehEmployeeId: link.ehEmployeeId,
-      lastSyncedTs: sync.eventTimestamp,
-      lastPayloadHash: sync.hash,
-    });
-    return { status: "skipped", reason: "no change since the link" };
+    if (clearedUnits.length > 0) return skip(CLEARED_DETAIL);
+    // e.g. only a constant moved
+    return skip(fresh.length > 0 ? NEW_UNITS_DETAIL : "no change since the link");
   }
   // A mapping issue counts only inside a unit that changed: that unit can't
   // be sent, so it's a Correction, as in a full sync.
@@ -863,10 +911,30 @@ async function syncChangedUnits(
   // messages are out (a retry after a failed send must still see the change).
   // On a Correction they stay, so the next edit sends them again.
   if (outcome.status !== "retry" && decision.kind !== "correction" && sent.size > 0) {
-    const moved = Object.fromEntries([...sent].map((unit) => [unit, current.units[unit]!]));
-    await deps.store.saveBaseline(ctUserId, { keyId: baseline.keyId, units: { ...baseline.units, ...moved } });
+    await deps.store.saveBaseline(ctUserId, moveUnits(movedBaseline, current, [...sent]));
   }
   return outcome;
+}
+
+/** The `skipped` reason when a Linked employee's edit only cleared fields (and maybe added new ones) (#152). */
+export const CLEARED_DETAIL = "cleared in Connecteam: follow-up posted, nothing sent";
+
+/** The `skipped` reason when a Linked employee's Baseline was made with another key (#152). */
+export const KEY_CHANGED_DETAIL = "Baseline key changed: re-baselined, nothing sent";
+
+/** The `skipped` reason when a Linked employee's only change was units new to the field map (#152). */
+export const NEW_UNITS_DETAIL = "new in the field map: baselined, nothing sent";
+
+/** `before` with `units` taken from `now`, fingerprint and filled fields both. A unit now blank keeps an empty `filled` entry. */
+function moveUnits(before: Baseline, now: Baseline, units: readonly string[]): Baseline {
+  const fingerprints = { ...before.units };
+  const filled = { ...before.filled };
+  for (const unit of units) {
+    if (now.units[unit] !== undefined) fingerprints[unit] = now.units[unit];
+    else delete fingerprints[unit];
+    filled[unit] = now.filled?.[unit] ?? [];
+  }
+  return { keyId: before.keyId, units: fingerprints, filled };
 }
 
 /** The `sync_log` detail of a link (#143 item 2). */
