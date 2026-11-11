@@ -21,22 +21,56 @@ The client needs, ready to sign in to:
 
 The integrator needs the repo cloned and `npm` working.
 
-**If the client's staff are already in Employment Hero,** run the preflight
-before the deploy stage (it needs only the Connecteam and EH keys, the pack ID
-and the business ID in `.dev.vars`):
+**If the client's staff are already in Employment Hero,** the wizard shows
+what each person's approval will do at the end of the Field map stage (stage 9).
+It's read-only and covers everyone in the onboarding pack, approved or not. Each
+person is one of:
+
+- **Found: will be linked.** Their Payroll ID finds one EH employee and their
+  email, TFN or name + date of birth also agrees. Approval links them with no
+  EH write.
+- **Found, but nothing else agrees: will be held.** Usually a typo in the
+  Payroll ID field. Fix it in Connecteam.
+- **Not found: will be created,** or **will be held** if someone in EH has the
+  same email, TFN or name + date of birth (the Pre-create check). Someone whose
+  pack answers don't map yet is marked `details incomplete`: the sync asks them
+  to finish first, then goes ahead. The same mark shows on anyone the sync would
+  update (not a Linked employee, who gets only their changes).
+- **Payroll ID used twice.** Two Connecteam people share one, EH holds it on
+  two records, or the EH record it finds already belongs to someone else the
+  sync has synced (approval would write over that person's record, then post
+  an alert). Fix it before either is approved.
+- **Link will be blocked.** Approval tries a link (from the Link list, or by a
+  copied Payroll ID that agrees), but the link step would refuse it with a
+  System alert. The reason is shown: the EH record is already someone else's,
+  their Payroll ID is on a different EH record, the EH employee no longer
+  exists, or it has a different Payroll ID.
+- **No Payroll ID:** the client's Payroll ID field is set but blank for them,
+  so they get their Connecteam ID. Always listed; it needs a look only when
+  they'd also be held.
+- **On the Link list: will be linked,** to the EH employee confirmed in the
+  link stage (a "New hire, not this person" row is created instead).
+- **In EH under this Payroll ID, but never synced.** EH holds their Payroll ID
+  but the sync has no record of them (for example, after a reset). Approval
+  writes their Connecteam details over that EH record, so check it's the same
+  person.
+- **Already synced or linked:** the sync already has their EH record.
+- **Left out of the sync:** the field map's exclude rule leaves them out.
+
+A terminated EH employee is marked `terminated`. On a live deployment the check
+also reads the sync's database (who has synced or is linked, their stored
+Payroll ID, and the Link list). At stage 9 of a first setup there's no database
+yet, and it says so; once `.dev.vars` names one, a failed read stops the check.
+
+It prints Connecteam and EH ids and the names of the keys that agree, never a
+name or detail. It doesn't block: the wizard asks before carrying on. The link
+stage (stage 13, or `--stage link` on its own) runs it again first, when the
+database and the Link list exist. Re-run it
+any time, before approving the packs, with:
 
 ```sh
 npm run preflight
 ```
-
-It's read-only. The first approval check syncs every approved pack at once, and
-the sync finds an existing EH employee by Connecteam ID only, then EH matches by
-TFN. So a hand-made EH record with a different TFN, an exemption code
-(`111111111` and the like), or a TFN shared with another record gets a
-**duplicate** or lands on the **wrong person**. The preflight lists each approved
-person as already linked, new, merge, or something to fix, plus EH records that
-already share a TFN or an email. Fix everything it flags, re-run until it says
-"Safe to deploy", then deploy.
 
 **Allow about 30 minutes:** ~10 for stages 1–10, a few for deploy and
 webhook, longer for linking a large headcount, and up to 15 for Cloudflare to start the first approval check
@@ -54,11 +88,11 @@ webhook, longer for linking a large headcount, and up to 15 for Cloudflare to st
 | 6 | Employment Hero: API key | Creates a key, pastes it (hidden) | — | 1–2 min |
 | 7 | Award classifications | Says whether they pay under an award; confirms it's installed in EH | The classifications imported into the "EH Pay Rate Template" dropdown (or "Nothing to do" on a re-run) | 1 min |
 | 8 | Connecteam field check | Confirms the matched fields (one "y"), picks any it asks about; reads the table; creates missing fields if offered; **attaches new fields to the onboarding pack** by hand | `28 ok · 0 required missing or wrong · 0 warnings` when everything is in place | 1–5 min |
-| 9 | Field map | Nothing, unless their fields changed since a previous run | A new client: "Built your field map from your Connecteam fields". A re-run: "Nothing to change", or the differences to copy across | 1 min |
+| 9 | Field map | Nothing, unless their fields changed since a previous run; then reads the check before go-live and confirms to carry on | A new client: "Built your field map from your Connecteam fields". A re-run: "Nothing to change", or the differences to copy across. Then each pack person's outcome, problems first | 1–5 min |
 | 10 | Pay-run settings | Picks pay schedule, location and primary pay category from their EH lists, then the pay rate source | "Saved to …", then the tests pass | 1–2 min |
 | 11 | Provision Cloudflare resources | Confirms (the only question in this stage) | ✓ Database created · ✓ Database set up (4 steps) · ✓ Queues ready | 1 min |
 | 12 | Push secrets + deploy | Waits | ✓ Stored … (×3) · ✓ Deployed: the Worker's address · ✓ Health check passed | 1–2 min |
-| 13 | Link Pre-existing employees | Works down the list with you (Enter links, `/` searches EH, `x` don't link), then `c`, `y` to save. Re-run it alone later with `./scripts/setup-wizard.sh --stage link` | "Saved: N links added or changed", then when held people sync | 2–15 min, by headcount |
+| 13 | Link Pre-existing employees | Reads the check before go-live again and confirms; then works down the list with you (Enter links, `/` searches EH, `x` don't link), then `c`, `y` to save. Re-run it alone later with `./scripts/setup-wizard.sh --stage link` | Each pack person's outcome, now with the Link list; then "Saved: N links added or changed", then when held people sync | 2–15 min, by headcount |
 | 14 | Register the webhook | Edits a test profile when asked | The webhook listed as `enabled`, then "the Worker accepted a profile update" | 2 min |
 | — | First approval check | Optionally waits | "✓ the first approval check ran" (up to 15 min on a first deploy) | 0–15 min |
 
