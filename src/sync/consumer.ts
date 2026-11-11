@@ -1176,7 +1176,7 @@ async function successKind(
 /**
  * Whether EH has accepted a sync for this person. A stored Payroll ID counts
  * whatever came after, since it's stored only once EH accepts a write or link:
- * a later Correction mustn't send them back through first-approval linking
+ * a later Correction cycle mustn't send them back through first-approval linking
  * (#186). A row saved before `lastOutcome` existed counts if it has an EH id.
  * The preflight (scripts/lib/preflight.ts) uses the same rule.
  */

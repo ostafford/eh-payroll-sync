@@ -10,7 +10,7 @@
  *   - Someone left out by the field map's `rules.exclude` is never synced.
  *   - A Linked employee, or someone who has synced before, is updated (ADR-0009).
  *     A Payroll ID stored at their first sync or link counts as synced, even
- *     after a later Correction (#186), and wins over anything copied in since
+ *     after a later Correction cycle (#186), and wins over anything copied in since
  *     (ADR-0011). Before the first deploy there's no database, and an empty
  *     one is what the sync would start from too.
  *   - A pending link from the Link list with an EH id links them.
@@ -215,6 +215,8 @@ export function classifyAll(
       // A Linked employee gets the changed-units sync instead (ADR-0009).
       decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh), waitsForDetails: detailsIncomplete && synced.linkedAt === null };
     } else if (linkTo) {
+      // As written, not `payrollId`: the link step compares it, case and all,
+      // with the Payroll ID already on the target record.
       const blockedBy = linkBlock(p.ctUserId, linkTo, p.payrollId.trim());
       decided = blockedBy
         ? { ...base, outcome: "link-blocked", eh: byId(linkTo, eh), blockedBy }

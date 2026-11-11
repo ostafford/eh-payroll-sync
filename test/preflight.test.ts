@@ -219,14 +219,14 @@ describe("classifyAll", () => {
       expect(renderPreflight([r], 1, { recordsRead: true })).toContain("In EH under this Payroll ID, but never synced: approval overwrites that record (1)");
     });
 
-    it("a stored Payroll ID, with their field now blank, updates their own record with no agreement check, not held", () => {
+    it("a stored Payroll ID, with their field now blank, is already synced: their own record is updated, not held", () => {
       // Stored only once EH accepted a write, so a later correction doesn't make the record anyone else's.
       const stored = records({ employeeMap: [mapRow({ ctUserId: 100, ehEmployeeId: "38", lastOutcome: "correction", externalId: "E0001" })] });
       const blank = person({ payrollId: "100", payrollIdFromField: false });
       const r = one(blank, [eh({ id: 38, externalId: "E0001" })], { records: stored });
       expect(r).toMatchObject({ outcome: "already-synced", eh: [{ ehEmployeeId: 38 }] });
       expect(needsAttention(r)).toBe(false);
-      // And it isn't "no ID": the stored one is used.
+      // And it isn't "no ID": a stored one means already synced.
       expect(one(blank, [eh()], { records: stored }).outcome).toBe("already-synced");
     });
 
