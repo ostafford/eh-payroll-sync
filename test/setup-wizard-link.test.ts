@@ -12,6 +12,10 @@ import { describe, it, expect } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const WIZARD = "scripts/setup-wizard.sh";
+// Run from inside the wizard (its test stage), the suite inherits the wizard's
+// session-log vars: a WIZARD_LOG makes the copy under test skip the log
+// wrapper and run the real stage against the live accounts.
+const { WIZARD_LOG: _log, WIZARD_DETAILS: _details, ...cleanEnv } = process.env;
 
 function wizard(args: string[], env: Record<string, string> = {}, input = "") {
   const bin = mkdtempSync(join(tmpdir(), "wizard-npm-"));
@@ -25,7 +29,7 @@ function wizard(args: string[], env: Record<string, string> = {}, input = "") {
     cwd: root,
     input,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env },
+    env: { ...cleanEnv, PATH: `${bin}:${process.env.PATH}`, ...env },
     timeout: 30_000,
   });
   let calls: string[] = [];
@@ -95,7 +99,7 @@ describe("setup wizard, link stage", () => {
     const inner = `PATH="${bin}:$PATH" bash ${WIZARD} --stage link`;
     const outer = process.platform === "darwin" ? ["-q", "/dev/null", "bash", "-c", inner] : ["-qec", inner, "/dev/null"];
     // stdin from /dev/null: `script` refuses a pipe or socket.
-    const r = spawnSync("/usr/bin/script", outer, { cwd: root, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 30_000 });
+    const r = spawnSync("/usr/bin/script", outer, { cwd: root, env: cleanEnv, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 30_000 });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(readFileSync(log, "utf8")).toMatch(/setup-wizard-\S+\.log bash scripts\/setup-wizard\.sh --stage link$/m);
   });
