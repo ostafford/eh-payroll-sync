@@ -253,7 +253,8 @@ save() {
 # run_tests: the test suite as one line; its full output only if it fails.
 run_tests() {
   local out n
-  if out=$(env -u FORCE_COLOR NO_COLOR=1 npm test 2>&1); then
+  # Without the session-log vars: a test that runs the wizard would inherit them.
+  if out=$(env -u FORCE_COLOR -u WIZARD_LOG -u WIZARD_DETAILS NO_COLOR=1 npm test 2>&1); then
     n=$(printf '%s\n' "$out" | sed -n 's/.*Tests  *\([0-9][0-9]*\) passed.*/\1/p' | tail -1)
     ok "All ${n:-the} checks passed - the settings fit together."
   else
