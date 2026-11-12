@@ -9,11 +9,11 @@
  *
  *   - Someone left out by the field map's `rules.exclude` is never synced.
  *   - A Linked employee, or someone who has synced before, is updated (ADR-0009).
- *     Before the first deploy there's no database, and an empty one is what
- *     the sync would start from too.
+ *     A Payroll ID stored at their first sync or link counts as synced, even
+ *     after a later Correction cycle (#186), and wins over anything copied in since
+ *     (ADR-0011). Before the first deploy there's no database, and an empty
+ *     one is what the sync would start from too.
  *   - A pending link from the Link list with an EH id links them.
- *   - The Payroll ID stored at their first sync or link wins over anything
- *     copied in since (ADR-0011).
  *   - The Payroll ID is the one copied into the client's Connecteam field when
  *     `identity.externalIdFrom` names one and it's filled, else the Connecteam
  *     `userId`.
@@ -25,9 +25,9 @@
  *     name + DOB); otherwise they're held.
  *   - Any other Payroll ID that finds one EH employee updates it, with no
  *     agreement check; if that record is someone else's, the write goes in and
- *     then the collision alert posts ("used twice"). A stored one means the sync wrote that record (already
- *     synced); without one, approval overwrites a record the sync has no
- *     record of, e.g. a previous deployment's after a reset.
+ *     then the collision alert posts ("used twice"). Anyone reaching this has
+ *     no stored one, so approval overwrites a record the sync has no record
+ *     of, e.g. a previous deployment's after a reset.
  *   - Found nobody: a "New hire, not this person" row on the Link list is
  *     created. Anyone else goes through the Pre-create check (ADR-0010): any EH
  *     employee one of those keys agrees with holds them, else they're created.
@@ -161,8 +161,6 @@ interface PersonContext {
   decided: PreflightRow | null;
   /** The Payroll ID the sync compares, as EH compares it. */
   payrollId: string;
-  /** The Payroll ID stored at their first sync or link. */
-  stored: string | null;
   /** Their details don't map yet. A row's `waitsForDetails` is this where the sync checks details before writing. */
   detailsIncomplete: boolean;
   newHire: boolean;
@@ -205,10 +203,10 @@ export function classifyAll(
     const detailsIncomplete = !p.detailsComplete;
     const synced = mapRows.get(p.ctUserId);
     const linkTo = pending.get(p.ctUserId);
-    // The Payroll ID the sync compares (consumer.ts's matchKey): the one stored
-    // at their first sync or link, else the mapped one.
-    const stored = synced?.externalId ?? null;
-    const payrollId = payrollIdKey(stored ?? p.payrollId);
+    // The Payroll ID the sync compares (consumer.ts's matchKey). One stored at
+    // their first sync or link would win, but it also makes them synced
+    // (hasSyncedBefore), so anyone compared below has none: the mapped one.
+    const payrollId = payrollIdKey(p.payrollId);
 
     // Decided before the Payroll ID is compared, in the sync's order.
     let decided: PreflightRow | null = null;
@@ -217,7 +215,9 @@ export function classifyAll(
       // A Linked employee gets the changed-units sync instead (ADR-0009).
       decided = { ...base, outcome: "already-synced", eh: byId(synced.ehEmployeeId, eh), waitsForDetails: detailsIncomplete && synced.linkedAt === null };
     } else if (linkTo) {
-      const blockedBy = linkBlock(p.ctUserId, linkTo, (stored ?? p.payrollId).trim());
+      // As written, not `payrollId`: the link step compares it, case and all,
+      // with the Payroll ID already on the target record.
+      const blockedBy = linkBlock(p.ctUserId, linkTo, p.payrollId.trim());
       decided = blockedBy
         ? { ...base, outcome: "link-blocked", eh: byId(linkTo, eh), blockedBy }
         : { ...base, outcome: "on-link-list", eh: byId(linkTo, eh) };
@@ -225,14 +225,14 @@ export function classifyAll(
     // With no database (before the first deploy) nothing is decided here: an
     // empty database is what the sync would start from too.
     // `pending.get` is undefined off the Link list, and null for a "New hire, not this person" row.
-    return { p, base, decided, payrollId, stored, detailsIncomplete, newHire: linkTo === null };
+    return { p, base, decided, payrollId, detailsIncomplete, newHire: linkTo === null };
   });
 
   // Only people who reach the comparison can collide on a Payroll ID.
   const idCount = new Map<string, number>();
   for (const c of contexts) if (!c.decided) idCount.set(c.payrollId, (idCount.get(c.payrollId) ?? 0) + 1);
 
-  return contexts.map(({ p, base, decided, payrollId, stored, detailsIncomplete, newHire }): PreflightRow => {
+  return contexts.map(({ p, base, decided, payrollId, detailsIncomplete, newHire }): PreflightRow => {
     if (decided) return decided;
 
     const holders = eh.filter((e) => externalIdOf(e) === payrollId).map((e) => matchOf(p.payload, e));
@@ -243,13 +243,12 @@ export function classifyAll(
       const taken = othersRecord(String(holder.ehEmployeeId), p.ctUserId);
       // Only a Payroll ID from the client's field is checked for agreement
       // (consumer.ts gates on it); for any other key the sync updates that
-      // record. A stored key means the sync wrote it (it's stored only once
-      // EH accepts a write or link), so the record is theirs. Without one, the
-      // sync has no record of them: e.g. a previous deployment's, after a reset.
+      // record. They have no stored key (that's already synced, above), so
+      // the sync has no record of them: e.g. a previous deployment's, after a reset.
       if (!p.payrollIdFromField) {
         // Someone else's: the update is written, then the collision alert posts.
         if (taken) return { ...base, outcome: "id-used-twice", eh: [holder] };
-        return { ...base, outcome: stored !== null ? "already-synced" : "in-eh-not-synced", eh: [holder], waitsForDetails: detailsIncomplete };
+        return { ...base, outcome: "in-eh-not-synced", eh: [holder], waitsForDetails: detailsIncomplete };
       }
       // Nothing agrees: held, with no ownership check. Keys agree: the link
       // step runs, and refuses someone else's record (the target was found by
@@ -260,7 +259,7 @@ export function classifyAll(
     }
 
     const hits = newHire ? [] : eh.map((e) => matchOf(p.payload, e)).filter((m) => m.agree.length > 0);
-    const noId = opts.payrollIdField && !p.payrollIdFromField && stored === null;
+    const noId = opts.payrollIdField && !p.payrollIdFromField;
     return { ...base, outcome: noId ? "no-id" : "not-found", hits, newHire, waitsForDetails: detailsIncomplete };
   });
 }
