@@ -527,6 +527,32 @@ without a screen-share every time.
 Without this, the only support routes are a screen-share or the client running
 `scripts/update.sh` under instruction.
 
+### What the integrator does with it (no `.dev.vars` needed)
+
+The client keeps `.dev.vars` and their field map; the integrator never holds
+either. Everything below works with the Cloudflare membership alone:
+
+| What | How |
+|---|---|
+| Health | `curl https://<worker>.workers.dev/health`: public, no login |
+| Emergency stop / resume | `npx wrangler queues pause-delivery eh-payroll-sync-queue` (`resume-delivery` to undo); see [Emergency stop](#emergency-stop) |
+| Live logs | `npx wrangler tail eh-payroll-sync`, or the dashboard: Workers & Pages → eh-payroll-sync → Logs |
+| Database | Dashboard → D1 → `eh-payroll-sync` → Console, read-only queries only |
+| Queues / dead letters | Dashboard → Queues: the backlog, and anything in `eh-payroll-sync-dlq` |
+
+Log wrangler in with the email the client invited, and check
+`npx wrangler whoami` shows the client's account before a pause: with access to
+several accounts, wrangler asks which one.
+
+`GET /status` (the per-person roster) needs the client's status token, so the
+client runs it and sends the output; `/health` gives the counts without it.
+
+**Updates stay with the client.** A deploy builds its config from `.dev.vars`
+and the client's field map, which only the client has. The integrator changes
+the repo and merges to `main`; the client runs `./scripts/update.sh`, with the
+integrator on a call. Deploying from the integrator's machine would need copies
+of both files, and a stale field-map copy would silently overwrite the client's.
+
 ---
 
 ## 9. Optional: integrator telemetry
