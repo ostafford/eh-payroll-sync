@@ -189,6 +189,8 @@ export interface RolledUpNotice {
   ctUserId: number;
   /** When their notice was rolled up (epoch ms). */
   at: number;
+  /** The summary they were picked for, by the time it was picked; null until then. */
+  summaryAt: number | null;
 }
 
 /**
@@ -203,6 +205,14 @@ export interface RollupGateway {
   recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean): Promise<void>;
   /** Everyone waiting for a Bulk summary of this kind, oldest first. */
   listRolledUp(kind: RollupKind): Promise<RolledUpNotice[]>;
-  /** Stop these people waiting, once their Bulk summary went out. */
-  clearRolledUp(kind: RollupKind, ctUserIds: readonly number[]): Promise<void>;
+  /**
+   * Pick everyone waiting and not yet in a summary for the one stamped
+   * `summaryAt`, in one statement, and say how many. Anyone rolled up after
+   * waits for the next summary.
+   */
+  assignSummary(kind: RollupKind, summaryAt: number): Promise<number>;
+  /** Stop that summary's people waiting, once it went out. */
+  clearSummary(kind: RollupKind, summaryAt: number): Promise<void>;
+  /** Put that summary's people back to waiting, as it never went out. */
+  releaseSummary(kind: RollupKind, summaryAt: number): Promise<void>;
 }

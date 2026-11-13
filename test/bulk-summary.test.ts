@@ -126,15 +126,58 @@ describe("runBulkSummaries (#193)", () => {
   it("doesn't post a summary twice when the tick that sent it crashed before clearing (ADR-0007)", async () => {
     const store = waiting("existing_match", NOW - 10 * MINUTE, NOW - 10 * MINUTE);
     const ct = fakeCt(null);
-    await summarise(store, ct);
-    // As if the clear after the send never ran.
-    for (const r of store.rollups.values()) r.rolledUp = true;
+    store.failRollup.clear = 1;
+    await expect(summarise(store, ct)).rejects.toThrow("evicted");
+    expect(ct.channels).toHaveLength(1);
 
     const { result } = await summarise(store, ct, NOW + MINUTE);
 
-    expect(result.existing_match).toBe("sent");
+    expect(result.existing_match).toBe("none");
     expect(ct.channels).toHaveLength(1);
     expect(stillWaiting(store)).toEqual([]);
+  });
+
+  it("doesn't count a crashed tick's people again when more roll up before the next tick", async () => {
+    const store = waiting("existing_match", NOW - 10 * MINUTE, NOW - 10 * MINUTE);
+    const ct = fakeCt(null);
+    store.failRollup.clear = 1;
+    await expect(summarise(store, ct)).rejects.toThrow("evicted");
+    await store.recordNotice("existing_match", 103, NOW + 30_000, true);
+
+    await summarise(store, ct, NOW + 30_000 + BULK_SUMMARY_QUIET_MS);
+
+    expect(ct.channels.map((c) => c.text)).toEqual([
+      bulkSummaryMessage("existing_match", 2),
+      bulkSummaryMessage("existing_match", 1),
+    ]);
+    expect(stillWaiting(store)).toEqual([]);
+  });
+
+  it("counts a crashed tick's people next time when its summary never went out", async () => {
+    const store = waiting("link", NOW - 10 * MINUTE, NOW - 10 * MINUTE);
+    // A tick that crashed after picking these two for its summary, before claiming or sending it.
+    for (const r of store.rollups.values()) r.summaryAt = NOW - 5 * MINUTE;
+
+    const { result, ct } = await summarise(store);
+
+    expect(result.link).toBe("sent");
+    expect(ct.channels).toEqual([{ id: "chan-1", text: bulkSummaryMessage("link", 2) }]);
+    expect(stillWaiting(store)).toEqual([]);
+  });
+
+  it("leaves anyone who rolls up while the summary is sending for the next one", async () => {
+    const store = waiting("link", NOW - 10 * MINUTE);
+    const ct = fakeCt(null);
+    const send = ct.sendChannelMessage.bind(ct);
+    ct.sendChannelMessage = (async (id: string, text: string) => {
+      await store.recordNotice("link", 202, NOW, true);
+      return send(id, text);
+    }) as typeof ct.sendChannelMessage;
+
+    await summarise(store, ct);
+
+    expect(ct.channels.map((c) => c.text)).toEqual([bulkSummaryMessage("link", 1)]);
+    expect(stillWaiting(store)).toEqual([202]);
   });
 
   it("posts a new summary for the same people a week later, when their holds are re-posted", async () => {

@@ -33,37 +33,63 @@ describe("notice_rollup", () => {
     expect(await store.listRolledUp("existing_match")).toEqual([]);
   });
 
-  it("lists who is waiting for a summary, oldest first, and clears only those named", async () => {
+  it("lists who is waiting for a summary, oldest first", async () => {
     await store.recordNotice("link", 3, 300, true);
     await store.recordNotice("link", 1, 100, true);
     await store.recordNotice("link", 2, 200, false);
     await store.recordNotice("existing_match", 9, 50, true);
 
     expect(await store.listRolledUp("link")).toEqual([
-      { ctUserId: 1, at: 100 },
-      { ctUserId: 3, at: 300 },
+      { ctUserId: 1, at: 100, summaryAt: null },
+      { ctUserId: 3, at: 300, summaryAt: null },
     ]);
+  });
 
-    await store.clearRolledUp("link", [1]);
-    expect(await store.listRolledUp("link")).toEqual([{ ctUserId: 3, at: 300 }]);
-    expect(await store.listRolledUp("existing_match")).toEqual([{ ctUserId: 9, at: 50 }]);
+  it("picks everyone waiting for one summary, then clears only them", async () => {
+    await store.recordNotice("link", 1, 100, true);
+    await store.recordNotice("link", 2, 200, true);
+    await store.recordNotice("existing_match", 9, 50, true);
+
+    expect(await store.assignSummary("link", 1000)).toBe(2);
+    // Rolled up after the pick: waits for the next summary.
+    await store.recordNotice("link", 3, 1001, true);
+
+    await store.clearSummary("link", 1000);
+
+    expect(await store.listRolledUp("link")).toEqual([{ ctUserId: 3, at: 1001, summaryAt: null }]);
+    expect(await store.listRolledUp("existing_match")).toEqual([{ ctUserId: 9, at: 50, summaryAt: null }]);
     // A cleared notice still counts toward a burst.
     expect(await store.countRecentNotices("link", 0)).toBe(3);
   });
 
-  it("clears nobody for an empty list", async () => {
+  it("puts a summary that never went out back to waiting", async () => {
     await store.recordNotice("link", 1, 100, true);
-    await store.clearRolledUp("link", []);
-    expect(await store.listRolledUp("link")).toHaveLength(1);
+    await store.assignSummary("link", 1000);
+    expect(await store.listRolledUp("link")).toEqual([{ ctUserId: 1, at: 100, summaryAt: 1000 }]);
+
+    await store.releaseSummary("link", 1000);
+
+    expect(await store.listRolledUp("link")).toEqual([{ ctUserId: 1, at: 100, summaryAt: null }]);
   });
 
-  it("clears a go-live-sized summary, past D1's 100 bound parameters", async () => {
+  it("takes someone rolled up again out of the summary they were picked for: theirs is a new notice", async () => {
+    await store.recordNotice("existing_match", 1, 100, true);
+    await store.assignSummary("existing_match", 1000);
+    await store.recordNotice("existing_match", 1, 2000, true);
+
+    await store.clearSummary("existing_match", 1000);
+
+    expect(await store.listRolledUp("existing_match")).toEqual([{ ctUserId: 1, at: 2000, summaryAt: null }]);
+  });
+
+  it("picks and clears a go-live-sized summary in one statement each", async () => {
     const ids = Array.from({ length: 150 }, (_, i) => i + 1);
     await env.DB.batch(
       ids.map((id) => env.DB.prepare("INSERT INTO notice_rollup (kind, ct_user_id, at, rolled_up) VALUES ('existing_match', ?, 100, 1)").bind(id)),
     );
 
-    await store.clearRolledUp("existing_match", ids);
+    expect(await store.assignSummary("existing_match", 1000)).toBe(150);
+    await store.clearSummary("existing_match", 1000);
 
     expect(await store.listRolledUp("existing_match")).toEqual([]);
   });

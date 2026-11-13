@@ -15,7 +15,7 @@
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { RollupGateway, RollupKind, SyncGateway } from "./gateway.js";
 import { bulkSummaryMessage } from "./messages.js";
-import { noticeKey, sendClaimed, shouldPostNotice, NO_EMPLOYEE } from "./notices.js";
+import { noticeKey, sendClaimed, NO_EMPLOYEE } from "./notices.js";
 
 /** Notices of one kind in this window, sent or rolled up, make a burst. */
 export const BURST_WINDOW_MS = 10 * 60 * 1000;
@@ -35,18 +35,13 @@ export async function inBurst(
 export const BULK_SUMMARY_QUIET_MS = 3 * 60 * 1000;
 /** Post anyway once the first person has waited this long, so a long drain isn't silent. */
 export const BULK_SUMMARY_MAX_WAIT_MS = 30 * 60 * 1000;
-/**
- * Holds a summary's claim until the tick after a crash has cleared its people,
- * with room to spare. Short of a week, so the same people's weekly Held
- * reminders roll up into a new summary.
- */
-const BULK_SUMMARY_CLAIM_MS = 24 * 60 * 60 * 1000;
 
 const KINDS: readonly RollupKind[] = ["existing_match", "link"];
 
 export interface BulkSummaryDeps {
   ct: Pick<ConnecteamClient, "sendChannelMessage">;
-  store: Pick<RollupGateway, "listRolledUp" | "clearRolledUp"> & Pick<SyncGateway, "readMeta" | "setMarker">;
+  store: Pick<RollupGateway, "listRolledUp" | "assignSummary" | "clearSummary" | "releaseSummary"> &
+    Pick<SyncGateway, "readMeta" | "setMarker">;
   /** Connecteam conversation id for the "EH Sync Alerts" channel. */
   adminChannelId: string;
   now?: () => number;
@@ -55,16 +50,24 @@ export interface BulkSummaryDeps {
 /** Per kind: nobody waiting, a burst still going, or the summary sent or failed to send. */
 export type BulkSummaryResult = "none" | "waiting" | "sent" | "failed";
 
+/** The claim for one summary, named by when its people were picked. */
+function summaryKey(kind: RollupKind, summaryAt: number): Promise<string> {
+  return noticeKey("bulk_summary", NO_EMPLOYEE, [kind, String(summaryAt)]);
+}
+
 /**
  * Run from the cron each tick: post one Bulk summary per kind whose burst is
- * over. Claimed by who it counts before it's sent (ADR-0007), so a tick that
- * crashed after the send only clears them. A failed send releases the claim
- * and leaves them waiting for the next tick.
+ * over. Safe to re-run (ADR-0007): its people are picked first, in one D1
+ * statement, then the summary is claimed, sent and they are cleared. A tick
+ * that crashed partway leaves them picked: the next tick clears them if the
+ * claim shows the summary went out, or puts them back to waiting if it
+ * didn't, so nobody is counted twice. A failed send releases both.
  */
 export async function runBulkSummaries(deps: BulkSummaryDeps): Promise<Record<RollupKind, BulkSummaryResult>> {
   const now = (deps.now ?? Date.now)();
   const result = {} as Record<RollupKind, BulkSummaryResult>;
   for (const kind of KINDS) {
+    await recoverCrashedSummaries(deps.store, kind);
     const people = await deps.store.listRolledUp(kind);
     if (people.length === 0) {
       result[kind] = "none";
@@ -77,20 +80,31 @@ export async function runBulkSummaries(deps: BulkSummaryDeps): Promise<Record<Ro
       continue;
     }
 
-    const ids = people.map((p) => p.ctUserId);
-    const key = await noticeKey("bulk_summary", NO_EMPLOYEE, [kind, ...ids.map(String)]);
-    if (await shouldPostNotice(deps.store, key, BULK_SUMMARY_CLAIM_MS, now)) {
-      const sent = await sendClaimed(deps.store, key, NO_EMPLOYEE, "bulk_summary", () =>
-        deps.ct.sendChannelMessage(deps.adminChannelId, bulkSummaryMessage(kind, ids.length)),
-      );
-      if (!sent) {
-        result[kind] = "failed";
-        continue;
-      }
+    const count = await deps.store.assignSummary(kind, now);
+    const key = await summaryKey(kind, now);
+    await deps.store.setMarker(key, now);
+    const sent = await sendClaimed(deps.store, key, NO_EMPLOYEE, "bulk_summary", () =>
+      deps.ct.sendChannelMessage(deps.adminChannelId, bulkSummaryMessage(kind, count)),
+    );
+    if (!sent) {
+      await deps.store.releaseSummary(kind, now);
+      result[kind] = "failed";
+      continue;
     }
-    // Only those listed: anyone rolled up since waits for the next summary.
-    await deps.store.clearRolledUp(kind, ids);
+    await deps.store.clearSummary(kind, now);
     result[kind] = "sent";
   }
   return result;
+}
+
+/** Settle the summaries a crashed tick left picked: cleared if it went out, back to waiting if not. */
+async function recoverCrashedSummaries(store: BulkSummaryDeps["store"], kind: RollupKind): Promise<void> {
+  const picked = new Set(
+    (await store.listRolledUp(kind)).flatMap((p) => (p.summaryAt === null ? [] : [p.summaryAt])),
+  );
+  for (const summaryAt of picked) {
+    const key = await summaryKey(kind, summaryAt);
+    if (((await store.readMeta([key]))[key] ?? 0) > 0) await store.clearSummary(kind, summaryAt);
+    else await store.releaseSummary(kind, summaryAt);
+  }
 }

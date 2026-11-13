@@ -965,7 +965,7 @@ member number — is ever written to D1 or to a log:
 | `onboarding_state` | assignment id, userId, status, `isWaitingApproval`, seen-at |
 | `sync_log` | userId, time, outcome, and a `detail` string of field **NAMES** + status only |
 | `sync_meta` | counters and a "last sweep ok" timestamp |
-| `notice_rollup` | userId, notice kind, time, and whether a Bulk summary is still to count them |
+| `notice_rollup` | userId, notice kind, time, whether a Bulk summary is still to count them, and which summary picked them |
 | `console` logs | routed through `src/redact.ts`, which drops anything under a sensitive key |
 | integrator telemetry | ids, outcomes, counts only (see §9); redacted regardless |
 

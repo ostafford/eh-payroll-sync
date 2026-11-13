@@ -40,9 +40,9 @@ export function fakeGateway(
   meta: Map<string, number>;
   pending: Map<number, PendingLink>;
   /** `notice_rollup`, keyed `${kind}:${ctUserId}` (#193). */
-  rollups: Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean }>;
-  /** How many more `notice_rollup` reads / writes throw, as a transient D1 error would. */
-  failRollup: { count: number; record: number };
+  rollups: Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean; summaryAt?: number }>;
+  /** How many more `notice_rollup` counts / records throw, as a transient D1 error would, or clears, as an eviction would. */
+  failRollup: { count: number; record: number; clear: number };
 } {
   const rows = new Map<number, EmployeeLink>();
   if (seed.ctUserId !== undefined) {
@@ -66,8 +66,8 @@ export function fakeGateway(
   const counters = new Map<string, number>();
   const meta = new Map<string, number>();
   const pending = new Map<number, PendingLink>();
-  const rollups = new Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean }>();
-  const failRollup = { count: 0, record: 0 };
+  const rollups = new Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean; summaryAt?: number }>();
+  const failRollup = { count: 0, record: 0, clear: 0 };
   return {
     rows,
     log,
@@ -88,13 +88,24 @@ export function fakeGateway(
       return [...rollups.values()]
         .filter((r) => r.kind === kind && r.rolledUp)
         .sort((a, b) => a.at - b.at)
-        .map(({ ctUserId, at }) => ({ ctUserId, at }));
+        .map(({ ctUserId, at, summaryAt }) => ({ ctUserId, at, summaryAt: summaryAt ?? null }));
     },
-    async clearRolledUp(kind: RollupKind, ctUserIds: readonly number[]) {
-      for (const id of ctUserIds) {
-        const r = rollups.get(`${kind}:${id}`);
-        if (r) r.rolledUp = false;
+    async assignSummary(kind: RollupKind, summaryAt: number) {
+      const picked = [...rollups.values()].filter((r) => r.kind === kind && r.rolledUp && r.summaryAt === undefined);
+      for (const r of picked) r.summaryAt = summaryAt;
+      return picked.length;
+    },
+    async clearSummary(kind: RollupKind, summaryAt: number) {
+      if (failRollup.clear > 0 && failRollup.clear--) throw new Error("evicted");
+      for (const r of rollups.values()) {
+        if (r.kind === kind && r.summaryAt === summaryAt) {
+          r.rolledUp = false;
+          delete r.summaryAt;
+        }
       }
+    },
+    async releaseSummary(kind: RollupKind, summaryAt: number) {
+      for (const r of rollups.values()) if (r.kind === kind && r.summaryAt === summaryAt) delete r.summaryAt;
     },
     async getPendingLink(id: number) {
       return pending.get(id) ?? null;

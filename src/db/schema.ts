@@ -87,6 +87,8 @@ export const noticeRollup = sqliteTable(
     /** When their latest notice of this kind was sent or rolled up (epoch ms). */
     at: integer("at").notNull(),
     rolledUp: integer("rolled_up", { mode: "boolean" }).notNull().default(false),
+    /** The Bulk summary they were picked for, by when it was picked; NULL until then. */
+    summaryAt: integer("summary_at"),
   },
   (t) => [primaryKey({ columns: [t.kind, t.ctUserId] }), index("idx_notice_rollup_kind_at").on(t.kind, t.at)],
 );

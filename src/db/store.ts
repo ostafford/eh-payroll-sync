@@ -22,9 +22,6 @@ import type { OnboardingStateRow } from "../cron/sweep.js";
 import type { OnboardingAssignment } from "../connecteam/types.js";
 import { ROSTER_QUERY_SQL, parseRosterRows, type RosterRow } from "../status/roster.js";
 
-/** People cleared per query: under D1's 100 bound parameters, with room for the kind. */
-const CLEAR_CHUNK = 90;
-
 export class SyncStore implements SyncGateway, LinkGateway, RollupGateway {
   readonly #db: DrizzleD1Database;
   readonly #raw: D1Database;
@@ -328,33 +325,50 @@ export class SyncStore implements SyncGateway, LinkGateway, RollupGateway {
     return row?.n ?? 0;
   }
 
-  /** One row per person and kind: a later notice replaces the earlier one. */
+  /**
+   * One row per person and kind: a later notice replaces the earlier one, and
+   * takes them out of any summary they were picked for, as it's a new notice.
+   */
   async recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean): Promise<void> {
     await this.#db
       .insert(noticeRollup)
       .values({ kind, ctUserId, at, rolledUp })
-      .onConflictDoUpdate({ target: [noticeRollup.kind, noticeRollup.ctUserId], set: { at, rolledUp } });
+      .onConflictDoUpdate({ target: [noticeRollup.kind, noticeRollup.ctUserId], set: { at, rolledUp, summaryAt: null } });
   }
 
   async listRolledUp(kind: RollupKind): Promise<RolledUpNotice[]> {
     return this.#db
-      .select({ ctUserId: noticeRollup.ctUserId, at: noticeRollup.at })
+      .select({ ctUserId: noticeRollup.ctUserId, at: noticeRollup.at, summaryAt: noticeRollup.summaryAt })
       .from(noticeRollup)
       .where(and(eq(noticeRollup.kind, kind), eq(noticeRollup.rolledUp, true)))
       .orderBy(asc(noticeRollup.at), asc(noticeRollup.ctUserId));
   }
 
-  /**
-   * The rows stay, so a cleared notice still counts toward a burst. In chunks:
-   * D1 allows 100 bound parameters a query, and a go-live summary counts more.
-   */
-  async clearRolledUp(kind: RollupKind, ctUserIds: readonly number[]): Promise<void> {
-    for (let i = 0; i < ctUserIds.length; i += CLEAR_CHUNK) {
-      await this.#db
-        .update(noticeRollup)
-        .set({ rolledUp: false })
-        .where(and(eq(noticeRollup.kind, kind), inArray(noticeRollup.ctUserId, ctUserIds.slice(i, i + CLEAR_CHUNK))));
-    }
+  async assignSummary(kind: RollupKind, summaryAt: number): Promise<number> {
+    await this.#db
+      .update(noticeRollup)
+      .set({ summaryAt })
+      .where(and(eq(noticeRollup.kind, kind), eq(noticeRollup.rolledUp, true), isNull(noticeRollup.summaryAt)));
+    const [row] = await this.#db
+      .select({ n: count() })
+      .from(noticeRollup)
+      .where(and(eq(noticeRollup.kind, kind), eq(noticeRollup.summaryAt, summaryAt)));
+    return row?.n ?? 0;
+  }
+
+  /** The rows stay, so a cleared notice still counts toward a burst. */
+  async clearSummary(kind: RollupKind, summaryAt: number): Promise<void> {
+    await this.#db
+      .update(noticeRollup)
+      .set({ rolledUp: false, summaryAt: null })
+      .where(and(eq(noticeRollup.kind, kind), eq(noticeRollup.summaryAt, summaryAt)));
+  }
+
+  async releaseSummary(kind: RollupKind, summaryAt: number): Promise<void> {
+    await this.#db
+      .update(noticeRollup)
+      .set({ summaryAt: null })
+      .where(and(eq(noticeRollup.kind, kind), eq(noticeRollup.summaryAt, summaryAt)));
   }
 
   // --- sync-status roster (issue #44) ---
