@@ -1,4 +1,4 @@
-# A burst of Existing-match or Link notices posts one Bulk summary
+# A burst of Existing-match, Link or Admin success notices posts one Bulk summary
 
 ## Status
 
@@ -18,13 +18,14 @@ We considered three options:
 
 ## Decision
 
-Every Existing-match or Link notice is recorded in `notice_rollup` (one row per person per kind). A job that finds 3 notices of its kind in the last 10 minutes still takes its claim (ADR-0007), but records the person as rolled up instead of sending. Each tick, once the sweep has run, the cron posts one **Bulk summary** per kind whose burst has been quiet for 3 minutes, or whose first person has waited 30 minutes, so a long drain isn't silent.
+Every Existing-match or Link notice, and every first-sync Admin success notice (#199), is recorded in `notice_rollup` (one row per person per kind). A job that finds 3 notices of its kind in the last 10 minutes still takes its claim (ADR-0007), but records the person as rolled up instead of sending. Each tick, once the sweep has run, the cron posts one **Bulk summary** per kind whose burst has been quiet for 3 minutes, or whose first person has waited 30 minutes, so a long drain isn't silent.
 
-The summary is a count and where to act (the link stage, which lists each Held person), never names: about 15 names fit in one 500-character message, so a list would be the flood again.
+The summary is a count and where to look (the link stage, which lists each Held person; `GET /status`, which lists each employee who synced), never names: about 15 names fit in one 500-character message, so a list would be the flood again.
 
 Not rolled up:
 
 - a Link notice naming details that differ in EH, which asks the admin to check them;
+- an Admin success notice for a fixed Correction, which names what the employee fixed and comes one at a time, not in a go-live burst. It is not counted toward a burst either;
 - the "can't link" System alert, and every other message type.
 
 The numbers are constants in `src/sync/rollup.ts`, not per-client config.
@@ -36,4 +37,4 @@ The numbers are constants in `src/sync/rollup.ts`, not per-client config.
 - **The summary arrives about 3 minutes after the burst ends,** or 30 minutes into a long one.
 - **The threshold is soft.** Two parallel invocations can both read a count of 2 and both send, so a burst may post a few more than 3 one by one.
 - **Retry-safe (ADR-0007, rows 6h and 11).** The burst is counted before any claim, so a failed count leaves nothing claimed. The roll-up record is written after the claim, so a re-run skips it, and a failed record write releases the claim, so the retry rolls the person up. A split Existing-match notice whose first part already went out is finished one by one, never half rolled up. The summary's people are picked first, in one D1 statement that stamps them with that summary, so anyone rolled up during the send waits for the next one. Then it's claimed, sent, and only its people cleared; a failed send releases the claim and puts them back to waiting. A tick that crashed partway leaves them stamped: the next tick clears them if the claim shows the summary went out, or puts them back if it didn't, so nobody is counted twice. Only an eviction between the claim and the record loses that person from the summary: the same at-most-once window ADR-0007 already accepts for a send.
-- **The Admin success notice has the same go-live flood** and still relies on `adminSuccess: false` for the first run. The same mechanism can take it as a third kind.
+- **The Admin success notice is the third kind (#199).** It has the same go-live flood: every pack already approved syncs at once. Only the first-sync wording rolls up, so a client no longer needs `adminSuccess: false` for the first run. The employee's own Success message is a DM, not the channel, so it is always sent.
