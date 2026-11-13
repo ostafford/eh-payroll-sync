@@ -516,7 +516,8 @@ async function settle(
       // fixed Correction names what was fixed and comes one at a time, so it's
       // always sent and never counted. Counted before the claim, as for a Link notice.
       const at = now();
-      const rollUp = success.kind === "first" && (await inBurst(deps.store, "admin_success", at));
+      const firstSync = success.kind === "first";
+      const rollUp = firstSync && (await inBurst(deps.store, "admin_success", at));
       const key = await noticeKey("admin_success", ctUserId, [hash]);
       if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, at)) {
         if (!rollUp) {
@@ -525,7 +526,7 @@ async function settle(
           );
           if (!sent) return sendFailed("admin_success");
         }
-        if (success.kind === "first") await recordRollup(deps.store, "admin_success", ctUserId, at, rollUp, [key]);
+        if (firstSync) await recordRollup(deps.store, "admin_success", ctUserId, at, rollUp, [key]);
       }
     }
     await advanceCycle(deps.store, ctUserId, decision);
