@@ -15,8 +15,7 @@
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { RollupGateway, RollupKind, SyncGateway } from "./gateway.js";
 import { bulkSummaryMessage } from "./messages.js";
-import { noticeKey, releaseNotice, shouldPostNotice, NO_EMPLOYEE } from "./notices.js";
-import { logEvent } from "../log.js";
+import { noticeKey, sendClaimed, shouldPostNotice, NO_EMPLOYEE } from "./notices.js";
 
 /** Notices of one kind in this window, sent or rolled up, make a burst. */
 export const BURST_WINDOW_MS = 10 * 60 * 1000;
@@ -81,18 +80,10 @@ export async function runBulkSummaries(deps: BulkSummaryDeps): Promise<Record<Ro
     const ids = people.map((p) => p.ctUserId);
     const key = await noticeKey("bulk_summary", NO_EMPLOYEE, [kind, ...ids.map(String)]);
     if (await shouldPostNotice(deps.store, key, BULK_SUMMARY_CLAIM_MS, now)) {
-      const sent = await deps.ct
-        .sendChannelMessage(deps.adminChannelId, bulkSummaryMessage(kind, ids.length))
-        .catch(() => ({ outcome: "threw" as const }));
-      if (sent.outcome !== "ok") {
-        await releaseNotice(deps.store, key);
-        logEvent({
-          evt: "message_send_failed",
-          ctUserId: NO_EMPLOYEE,
-          notice: "bulk_summary",
-          outcome: sent.outcome,
-          ...("status" in sent ? { status: sent.status } : {}),
-        });
+      const sent = await sendClaimed(deps.store, key, NO_EMPLOYEE, "bulk_summary", () =>
+        deps.ct.sendChannelMessage(deps.adminChannelId, bulkSummaryMessage(kind, ids.length)),
+      );
+      if (!sent) {
         result[kind] = "failed";
         continue;
       }

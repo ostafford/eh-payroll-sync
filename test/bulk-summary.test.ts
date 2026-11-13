@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { runBulkSummaries, BULK_SUMMARY_QUIET_MS, BULK_SUMMARY_MAX_WAIT_MS } from "../src/sync/rollup.js";
 import { bulkSummaryMessage } from "../src/sync/messages.js";
 import type { RollupKind } from "../src/sync/gateway.js";
@@ -102,6 +102,25 @@ describe("runBulkSummaries (#193)", () => {
 
     expect((await summarise(store, ct, NOW + MINUTE)).result.existing_match).toBe("sent");
     expect(ct.channels).toHaveLength(1);
+  });
+
+  it("keeps them waiting when the send throws, and logs the failure", async () => {
+    const store = waiting("link", NOW - 10 * MINUTE);
+    const ct = fakeCt(null);
+    const send = ct.sendChannelMessage.bind(ct);
+    let throws = 1;
+    ct.sendChannelMessage = (async (id: string, text: string) => {
+      if (throws-- > 0) throw new Error("network");
+      return send(id, text);
+    }) as typeof ct.sendChannelMessage;
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    expect((await summarise(store, ct)).result.link).toBe("failed");
+    expect(stillWaiting(store)).toEqual([101]);
+    expect(log.mock.calls.flat().join("\n")).toContain('"notice":"bulk_summary"');
+    log.mockRestore();
+
+    expect((await summarise(store, ct, NOW + MINUTE)).result.link).toBe("sent");
   });
 
   it("doesn't post a summary twice when the tick that sent it crashed before clearing (ADR-0007)", async () => {

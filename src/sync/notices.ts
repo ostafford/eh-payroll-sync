@@ -30,6 +30,8 @@
  */
 import { sha256Hex } from "./canonical.js";
 import type { SyncGateway } from "./gateway.js";
+import type { CtResult } from "../connecteam/types.js";
+import { logEvent } from "../log.js";
 
 export type NoticeKind =
   | "correction"
@@ -113,4 +115,34 @@ export async function shouldPostNotice(
  */
 export async function releaseNotice(store: Pick<MetaStore, "setMarker">, key: string): Promise<void> {
   await store.setMarker(key, 0);
+}
+
+/**
+ * Send one claimed message and report whether it went out (issue #89). On a
+ * failed result - or a throw - release the claim so a retry sends it,
+ * and log `message_send_failed`. Never throws for a failed send.
+ */
+export async function sendClaimed(
+  store: Pick<MetaStore, "setMarker">,
+  key: string,
+  ctUserId: number,
+  notice: NoticeKind,
+  send: () => Promise<CtResult<null>>,
+): Promise<boolean> {
+  let res: CtResult<null> | { outcome: "threw" };
+  try {
+    res = await send();
+  } catch {
+    res = { outcome: "threw" };
+  }
+  if (res.outcome === "ok") return true;
+  await releaseNotice(store, key);
+  logEvent({
+    evt: "message_send_failed",
+    ctUserId,
+    notice,
+    outcome: res.outcome,
+    ...("status" in res ? { status: res.status } : {}),
+  });
+  return false;
 }

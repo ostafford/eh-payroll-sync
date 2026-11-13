@@ -41,6 +41,8 @@ export function fakeGateway(
   pending: Map<number, PendingLink>;
   /** `notice_rollup`, keyed `${kind}:${ctUserId}` (#193). */
   rollups: Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean }>;
+  /** How many more `notice_rollup` reads / writes throw, as a transient D1 error would. */
+  failRollup: { count: number; record: number };
 } {
   const rows = new Map<number, EmployeeLink>();
   if (seed.ctUserId !== undefined) {
@@ -65,6 +67,7 @@ export function fakeGateway(
   const meta = new Map<string, number>();
   const pending = new Map<number, PendingLink>();
   const rollups = new Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean }>();
+  const failRollup = { count: 0, record: 0 };
   return {
     rows,
     log,
@@ -72,10 +75,13 @@ export function fakeGateway(
     meta,
     pending,
     rollups,
+    failRollup,
     async countRecentNotices(kind: RollupKind, since: number) {
+      if (failRollup.count > 0 && failRollup.count--) throw new Error("D1 unavailable");
       return [...rollups.values()].filter((r) => r.kind === kind && r.at >= since).length;
     },
     async recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean) {
+      if (failRollup.record > 0 && failRollup.record--) throw new Error("D1 unavailable");
       rollups.set(`${kind}:${ctUserId}`, { kind, ctUserId, at, rolledUp });
     },
     async listRolledUp(kind: RollupKind) {

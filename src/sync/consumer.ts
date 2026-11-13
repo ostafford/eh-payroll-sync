@@ -64,6 +64,7 @@ import {
   noticeKey,
   shouldPostNotice,
   releaseNotice,
+  sendClaimed,
   type NoticeKind,
   FOLLOW_UP_NOTICE_DEDUPE_MS,
   HELD_NOTICE_DEDUPE_MS,
@@ -71,7 +72,7 @@ import {
   CORRECTION_NOTICE_DEDUPE_MS,
   NO_EMPLOYEE,
 } from "./notices.js";
-import type { Baseline, EmployeeLink, LinkGateway, RollupGateway, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
+import type { Baseline, EmployeeLink, LinkGateway, RollupGateway, RollupKind, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
 import { inBurst } from "./rollup.js";
 
 export interface SyncDeps {
@@ -622,20 +623,22 @@ async function holdExisting(
   // doesn't repost it within the window, nor does the daily recheck's re-run
   // (#155). The digest is the reminder (#143 item 5). A hold with no hint keeps the key it had before hints.
   // In a burst (#193) each part is still claimed, so a re-run skips it, but
-  // not sent: the person is recorded for the Bulk summary instead.
+  // not sent: the person is recorded for the Bulk summary instead. Counted
+  // before any claim, so a failed count leaves nothing claimed.
   const shown = [detail, ...(held.notes ?? [])];
-  let rollUp: boolean | undefined;
+  const rollUp = await inBurst(deps.store, "existing_match", held.now);
+  const claimed: string[] = [];
   for (const [i, text] of existingMatchMessages(person, matches, held.notes).entries()) {
     const key = await noticeKey("existing_match", ctUserId, i === 0 ? shown : [...shown, `part ${i + 1}`]);
     if (!(await shouldPostNotice(deps.store, key, HELD_NOTICE_DEDUPE_MS, held.now))) continue;
-    rollUp ??= await inBurst(deps.store, "existing_match", held.now);
+    claimed.push(key);
     if (rollUp) continue;
     const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
       deps.ct.sendChannelMessage(deps.adminChannelId, text),
     );
     if (!sent) return sendFailed("existing_match");
   }
-  if (rollUp !== undefined) await deps.store.recordNotice("existing_match", ctUserId, held.now, rollUp);
+  if (claimed.length > 0) await recordRollup(deps.store, "existing_match", ctUserId, held.now, rollUp, claimed);
   await deps.store.saveEmployeeLink({
     ctUserId,
     ehEmployeeId: held.storedEhEmployeeId,
@@ -721,18 +724,19 @@ async function linkOnApproval(
   }
   const weSetIt = ((await deps.store.readMeta([wroteKey]))[wroteKey] ?? 0) > 0;
 
+  // In a burst a plain notice rolls up into the Bulk summary (#193). One
+  // naming details that differ asks the admin to check them, so it's sent.
+  // Counted before the claim, so a failed count leaves nothing claimed.
+  const rollUp = !linking.differs?.length && (await inBurst(deps.store, "link", linking.now));
   const key = await noticeKey("link", ctUserId, [ehEmployeeId]);
   if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, linking.now)) {
-    // In a burst a plain notice rolls up into the Bulk summary (#193). One
-    // naming details that differ asks the admin to check them, so it's sent.
-    const rollUp = !linking.differs?.length && (await inBurst(deps.store, "link", linking.now));
     if (!rollUp) {
       const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
         deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt, linking.differs)),
       );
       if (!sent) return sendFailed("link");
     }
-    await deps.store.recordNotice("link", ctUserId, linking.now, rollUp);
+    await recordRollup(deps.store, "link", ctUserId, linking.now, rollUp, [key]);
   }
 
   await deps.store.completeLink(
@@ -1139,33 +1143,25 @@ export async function handleDeadLetter(
 }
 
 /**
- * Send one claimed message and report whether it went out (issue #89). On a
- * failed result - or a throw - release the claim so the job's retry sends it,
- * and log `message_send_failed`. Never throws for a failed send.
+ * Record a Held or Link notice in `notice_rollup` (#193). A rolled-up notice's
+ * record stands in for its send, so a failed write releases its claims and the
+ * job's retry rolls it up. A sent notice keeps its claim, so the retry doesn't
+ * post it again; it just goes uncounted toward a burst.
  */
-async function sendClaimed(
-  store: Pick<SyncGateway, "setMarker">,
-  key: string,
+async function recordRollup(
+  store: Pick<SyncDeps["store"], "recordNotice" | "setMarker">,
+  kind: RollupKind,
   ctUserId: number,
-  notice: NoticeKind,
-  send: () => Promise<CtResult<null>>,
-): Promise<boolean> {
-  let res: CtResult<null> | { outcome: "threw" };
+  now: number,
+  rollUp: boolean,
+  claims: readonly string[],
+): Promise<void> {
   try {
-    res = await send();
-  } catch {
-    res = { outcome: "threw" };
+    await store.recordNotice(kind, ctUserId, now, rollUp);
+  } catch (err) {
+    if (rollUp) for (const key of claims) await releaseNotice(store, key);
+    throw err;
   }
-  if (res.outcome === "ok") return true;
-  await releaseNotice(store, key);
-  logEvent({
-    evt: "message_send_failed",
-    ctUserId,
-    notice,
-    outcome: res.outcome,
-    ...("status" in res ? { status: res.status } : {}),
-  });
-  return false;
 }
 
 /** Outcomes that mean the person has synced successfully before. */

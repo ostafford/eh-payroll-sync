@@ -390,6 +390,30 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
       expect(store.rollups.get("existing_match:17760356")).toMatchObject({ rolledUp: true });
     });
 
+    it("still posts the notice after a D1 error while counting the burst: nothing was claimed yet", async () => {
+      const store = heldEarlier();
+      store.failRollup.count = 1;
+      const ct = fakeCt(cloneUser());
+
+      await expect(holdIn(store, ct)).rejects.toThrow("D1 unavailable");
+      // The queue's retry.
+      expect((await holdIn(store, ct)).out).toMatchObject({ status: "held" });
+      expect(ct.channels).toHaveLength(1);
+    });
+
+    it("rolls the notice up on the retry after a D1 error recording it: the claim was released", async () => {
+      const store = heldEarlier(NOW - MINUTE, NOW - MINUTE, NOW - MINUTE);
+      store.failRollup.record = 1;
+      const ct = fakeCt(cloneUser());
+
+      await expect(holdIn(store, ct)).rejects.toThrow("D1 unavailable");
+      expect(store.rows.size).toBe(0);
+      expect((await holdIn(store, ct)).out).toMatchObject({ status: "held" });
+
+      expect(ct.channels).toEqual([]);
+      expect(store.rollups.get("existing_match:17760356")).toMatchObject({ rolledUp: true });
+    });
+
     it("records a sent notice only once it went out", async () => {
       const store = heldEarlier();
       const ct = fakeCt(cloneUser());
@@ -523,6 +547,32 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
     ct.failSends.set("chan-1", 1);
     expect(await run(store, linkEh(), ct)).toMatchObject({ status: "retry" });
     expect(store.rollups.has(`link:${ME}`)).toBe(false);
+  });
+
+  it("still posts the Link notice after a D1 error while counting the burst (#193)", async () => {
+    const store = linking();
+    store.failRollup.count = 1;
+    const eh = linkEh();
+    const ct = fakeCt(cloneUser());
+
+    await expect(run(store, eh, ct)).rejects.toThrow("D1 unavailable");
+    expect(await run(store, eh, ct)).toMatchObject({ status: "synced" });
+    expect(ct.channels).toHaveLength(1);
+  });
+
+  it("rolls the Link notice up on the retry after a D1 error recording it (#193)", async () => {
+    const store = linking();
+    recentNotices(store, "link", 1_000_000 - 60_000, 1_000_000 - 60_000, 1_000_000 - 60_000);
+    store.failRollup.record = 1;
+    const eh = linkEh();
+    const ct = fakeCt(cloneUser());
+
+    await expect(run(store, eh, ct)).rejects.toThrow("D1 unavailable");
+    expect(store.rows.get(ME)?.linkedAt).toBeUndefined();
+    expect(await run(store, eh, ct)).toMatchObject({ status: "synced" });
+
+    expect(ct.channels).toEqual([]);
+    expect(store.rollups.get(`link:${ME}`)).toMatchObject({ rolledUp: true });
   });
 
   it("stores a Baseline of fingerprints and the key id, never a value", async () => {
