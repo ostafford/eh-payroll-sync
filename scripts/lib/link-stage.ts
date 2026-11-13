@@ -5,9 +5,9 @@
  * the terminal and `wrangler d1 execute`. No file is written; names and
  * emails stay on screen.
  */
-import { linkChanges, pendingLinkSql } from "./link-changes.js";
+import { linkChanges, pendingLinkSql, type LinkChanges } from "./link-changes.js";
 import { linkListInput, type LinkStageData } from "./link-input.js";
-import { buildLinkList } from "./link-list.js";
+import { buildLinkList, type LinkPendingRow } from "./link-list.js";
 import { createLinkScreen, linkScreenPeople, type LinkScreen } from "./link-screen.js";
 
 export interface LinkStageDeps {
@@ -20,9 +20,25 @@ export interface LinkStageDeps {
   now(): number;
   /** Rehearsing against saved data: show the SQL, run nothing. */
   rehearsal?: boolean;
+  /**
+   * Run before the first deploy (ADR-0012): an empty Link list goes live only
+   * once the admin confirms nobody is already in EH.
+   */
+  beforeDeploy?: { confirm(question: string): Promise<boolean> };
 }
 
-export type LinkStageOutcome = "saved" | "unchanged" | "rehearsed" | "cancelled";
+export type LinkStageOutcome = "saved" | "unchanged" | "rehearsed" | "cancelled" | "unconfirmed";
+
+const EMPTY_LIST_QUESTION =
+  "The Link list is empty: everyone whose onboarding pack is approved will be created as a new employee in Employment Hero. Is nobody already in EH?";
+
+/** How many people the Link list holds once `changes` are saved. */
+function listSizeAfter(existing: readonly LinkPendingRow[], changes: LinkChanges): number {
+  const removed = new Set(changes.remove);
+  const ids = new Set(existing.map((p) => p.ctUserId).filter((id) => !removed.has(id)));
+  for (const r of changes.upsert) ids.add(r.ctUserId);
+  return ids.size;
+}
 
 /** The last screen: when the people on the Link list sync. */
 function whenTheySync(print: (line: string) => void): void {
@@ -39,6 +55,11 @@ export async function runLinkStage(deps: LinkStageDeps): Promise<LinkStageOutcom
     return "cancelled";
   }
   const changes = linkChanges(input.pendingLinks, screen.decisions());
+  // Asked before anything is written, so a no leaves the list as it was.
+  if (deps.beforeDeploy && listSizeAfter(input.pendingLinks, changes) === 0 && !(await deps.beforeDeploy.confirm(EMPTY_LIST_QUESTION))) {
+    deps.print("Nothing saved, and nothing is live yet. Run the link stage again to add anyone already in EH.");
+    return "unconfirmed";
+  }
   const sql = pendingLinkSql(changes, deps.now());
   if (!sql) {
     deps.print("No changes to the Link list.");

@@ -111,6 +111,48 @@ describe("runLinkStage", () => {
     expect(out).toContain("Held people sync at the next daily recheck, or straight away if their Connecteam profile is edited.");
   });
 
+  describe("before the first deploy (ADR-0012)", () => {
+    const nobodyInEh = async () => data({ ehEmployees: [] });
+
+    it("asks before going live with an empty Link list, and stops on a no", async () => {
+      const confirm = vi.fn(async () => false);
+      const s = stage([], { load: nobodyInEh, beforeDeploy: { confirm } });
+      await expect(s.run()).resolves.toBe("unconfirmed");
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("created as a new employee in Employment Hero"));
+      expect(s.out.join("\n")).toContain("nothing is live yet");
+    });
+
+    it("carries on with an empty Link list once the admin confirms nobody is already in EH", async () => {
+      const s = stage([], { load: nobodyInEh, beforeDeploy: { confirm: async () => true } });
+      await expect(s.run()).resolves.toBe("unchanged");
+    });
+
+    it("doesn't ask once someone is on the Link list", async () => {
+      const confirm = vi.fn(async () => false);
+      const s = stage(["<return>"], { beforeDeploy: { confirm } });
+      await expect(s.run()).resolves.toBe("saved");
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it("counts what the save leaves on the list: taking the only row off asks", async () => {
+      // Jack's saved "new hire" is row 1 in Everyone.
+      const confirm = vi.fn(async () => false);
+      const s = stage(["<tab>", "x"], {
+        load: async () => data({ ehEmployees: [], pendingLinks: [{ ctUserId: 100, ehEmployeeId: null }] }),
+        beforeDeploy: { confirm },
+      });
+      await expect(s.run()).resolves.toBe("unconfirmed");
+      expect(confirm).toHaveBeenCalled();
+    });
+
+    it("never asks on a cancel: nothing was decided", async () => {
+      const confirm = vi.fn(async () => true);
+      const s = stage([], { drive: async () => "cancel", beforeDeploy: { confirm } });
+      await expect(s.run()).resolves.toBe("cancelled");
+      expect(confirm).not.toHaveBeenCalled();
+    });
+  });
+
   it("in a rehearsal, shows what it would save and runs nothing", async () => {
     const s = stage(["<return>"], { rehearsal: true });
     await expect(s.run()).resolves.toBe("rehearsed");

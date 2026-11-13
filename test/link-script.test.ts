@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 describe("link stage, not in a terminal", () => {
-  it("prints everyone in plain text, says it needs a terminal, and writes nothing", () => {
+  it("prints everyone in plain text, says it needs a terminal, writes nothing, and exits 3 (nothing saved)", () => {
     const r = spawnSync(join(root, "node_modules/.bin/tsx"), ["scripts/link.ts", "--data-file", "test/fixtures/link-stage-data.json"], {
       cwd: root,
       input: "",
@@ -21,7 +21,7 @@ describe("link stage, not in a terminal", () => {
       env: { ...process.env, NO_COLOR: "1", CT_API_KEY: "", EH_API_KEY: "" },
       timeout: 30_000,
     });
-    expect(r.status).toBe(0);
+    expect(r.status).toBe(3);
     expect(r.stdout).not.toContain("\u001b");
     expect(r.stdout).toMatch(/1 \[ok\]\s+Jack Mitchell .*matched by email/);
     expect(r.stdout).toMatch(/2 \[!\]\s+Mia Chen .*name differs/);
@@ -30,7 +30,7 @@ describe("link stage, not in a terminal", () => {
     expect(r.stdout).not.toContain("Saved");
   });
 
-  it("checks the built config against the live Worker before reading anything, and stops if it doesn't check out", () => {
+  it("checks the built config before reading anything (the database, not the live secrets: it can run before the first deploy), and stops if it doesn't check out", () => {
     const bin = mkdtempSync(join(tmpdir(), "link-npm-"));
     const log = join(bin, "npm.log");
     writeFileSync(join(bin, "npm"), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\necho "D1 database not found"\nexit 1\n`);
@@ -45,6 +45,6 @@ describe("link stage, not in a terminal", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("The deploy settings aren't ready");
     expect(r.stderr).toContain("D1 database not found");
-    expect(readFileSync(log, "utf8").trim()).toBe("run --silent deploy:config -- --check-live");
+    expect(readFileSync(log, "utf8").trim()).toBe("run --silent deploy:config -- --check-live --allow-missing-secrets");
   });
 });

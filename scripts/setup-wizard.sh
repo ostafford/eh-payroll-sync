@@ -441,15 +441,28 @@ preflight_check() {
   done
 }
 
-# The link stage (#154): after the deploy, since it needs D1 and the field map.
-# `--stage link` runs it alone, e.g. for a client that's already live.
+# The link stage (#154). On a first setup it runs before the deploy (ADR-0012):
+# the first sweep syncs every pack already approved, so the Link list must be
+# settled before anything goes live. It needs D1 and the field map, both ready
+# by then. `link_stage before-deploy` is that run; `--stage link` runs it alone
+# on a live deployment.
 link_stage() {
+  local mode="${1:-}"
   stage "Link Pre-existing employees"
   why "Some of the client's people may already be in Employment Hero (entered by hand," \
       "already paid). They should be linked to that record, not created a second time." \
       "This lists every Connecteam user not yet synced beside their likely EH match."
   todo "With the client's admin (a screen-share is fine), go down the list. Enter links a suggestion, / searches all of EH, x means don't link." \
        "Press c, then y, to save. Nothing reaches Employment Hero yet: each link is made when that person's onboarding pack is approved."
+  if [[ "$mode" == "before-deploy" ]]; then
+    note "Nothing is live yet. The sync goes live in the next stage, once this list is saved."
+    note "If nobody is already in EH, save the empty list and confirm it."
+    printf '\n'
+    # The check before go-live ran at the field map stage; no need to wait for it twice.
+    npm run --silent link -- --before-deploy \
+      || { fail "Stopped here: nothing is live yet. Run the wizard again to finish the Link list."; exit 1; }
+    return 0
+  fi
   # The check before go-live first (#168): on a live Worker it reads the Link
   # list too, so it shows what each approval would do before anything changes.
   step "First, what each approval would do now (read-only: nothing is written)."
@@ -751,6 +764,9 @@ if wr_quiet queues list && [[ "$WR_OUT" =~ [[:space:]]eh-payroll-sync-queue[[:sp
 else
   fail "Couldn't confirm both queues exist:"; show_wr_tail; exit 1
 fi
+next_up "link anyone already in Employment Hero, before the sync goes live."
+
+link_stage before-deploy
 next_up "put the sync live."
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -794,9 +810,6 @@ else
   warn "Couldn't read the sync's address from the deploy - find it in the Cloudflare dashboard (Workers)."
   note "Full output: ${WIZARD_DETAILS#"$PWD"/}"
 fi
-next_up "link anyone already in Employment Hero."
-
-link_stage
 next_up "connect Connecteam's profile updates to the sync."
 
 # ─────────────────────────────────────────────────────────────────────────
