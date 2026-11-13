@@ -24,7 +24,7 @@ describe("bulkSummaryMessage (#193)", () => {
   it("counts the Held people and says where to resolve them", () => {
     expect(bulkSummaryMessage("existing_match", 109)).toBe(
       "⚠️ Held: 109 more people may already be in Employment Hero, so nothing was written for them.\n\n" +
-        "➡️ To fix: re-run the setup wizard's link stage, which lists each of them, and either link them to the right employee or mark them **New hire, not this person**.\n\n" +
+        "➡️ To fix: re-run the setup wizard's link stage, which lists each of them, and either link them to the right employee or mark them **New hire, not this person**. `GET /status` also lists them, as waiting on admin.\n\n" +
         "They'll sync at the next daily recheck, or straight away when their profile is edited.",
     );
   });
@@ -40,6 +40,10 @@ describe("bulkSummaryMessage (#193)", () => {
     expect(bulkSummaryMessage("existing_match", 1)).toContain("⚠️ Held: 1 more person may already be in Employment Hero");
     expect(bulkSummaryMessage("existing_match", 1)).toContain("which lists them,");
     expect(bulkSummaryMessage("link", 1)).toContain("🔗 1 more Pre-existing employee is now linked");
+  });
+
+  it("fits one Connecteam message, so the clamp never cuts the fix off", () => {
+    for (const kind of ["existing_match", "link"] as const) expect(bulkSummaryMessage(kind, 99_999).length).toBeLessThanOrEqual(500);
   });
 
   it("never names anyone: a count only", () => {

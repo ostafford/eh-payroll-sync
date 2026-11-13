@@ -445,7 +445,7 @@ export function bulkSummaryMessage(kind: "existing_match" | "link", count: numbe
   }
   return sections(
     `⚠️ Held: ${count} more ${one ? "person" : "people"} may already be in Employment Hero, so nothing was written for them.`,
-    `➡️ To fix: re-run the setup wizard's link stage, which lists ${one ? "them" : "each of them"}, and either link them to the right employee or mark them **New hire, not this person**.`,
+    `➡️ To fix: re-run the setup wizard's link stage, which lists ${one ? "them" : "each of them"}, and either link them to the right employee or mark them **New hire, not this person**. \`GET /status\` also lists them, as waiting on admin.`,
     EXISTING_MATCH_FOOT[1]!,
   );
 }
