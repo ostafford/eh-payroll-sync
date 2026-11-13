@@ -1,6 +1,6 @@
 /**
- * Bulk summary (#193, ADR-0013): when many people get the same Existing-match or Link
- * notice in a burst, post one summary instead of one message each.
+ * Bulk summary (#193, ADR-0013): when many people get the same Existing-match, Link or
+ * Admin success notice (#199) in a burst, post one summary instead of one message each.
  *
  * Each notice is sent from its own queue job, and a go-live drains the backlog
  * 20 approvals a tick, so no one invocation ever sees "many". The count lives

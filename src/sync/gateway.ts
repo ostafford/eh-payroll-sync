@@ -186,7 +186,7 @@ export interface StatusGateway extends Pick<SyncGateway, "readMeta" | "setMarker
  * one list the type, the `notice_rollup.kind` column and the cron's summaries
  * all come from.
  */
-export const ROLLUP_KINDS = ["existing_match", "link"] as const;
+export const ROLLUP_KINDS = ["existing_match", "link", "admin_success"] as const;
 export type RollupKind = (typeof ROLLUP_KINDS)[number];
 
 /** One person a Bulk summary is waiting to count. */
@@ -199,7 +199,7 @@ export interface RolledUpNotice {
 }
 
 /**
- * The `notice_rollup` table (#193): who got an Existing-match or Link notice recently,
+ * The `notice_rollup` table (#193): who got an Existing-match, Link or Admin success notice recently,
  * and who is waiting for a Bulk summary instead. A separate interface for the
  * same reason as {@link RecheckGateway}.
  */
