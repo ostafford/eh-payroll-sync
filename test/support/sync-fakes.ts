@@ -9,7 +9,15 @@ import { parseFieldMap } from "../../src/mapping/schema.js";
 import type { ConnecteamUser } from "../../src/mapping/apply.js";
 import { syntheticUser } from "../fixtures/connecteam-user.js";
 import type { SyncDeps } from "../../src/sync/consumer.js";
-import type { Baseline, EmployeeLink, EmployeeLinkPatch, PendingLink, SyncLogEntry } from "../../src/sync/gateway.js";
+import type {
+  Baseline,
+  EmployeeLink,
+  EmployeeLinkPatch,
+  PendingLink,
+  RollupGateway,
+  RollupKind,
+  SyncLogEntry,
+} from "../../src/sync/gateway.js";
 
 export const fieldMap = parseFieldMap(
   JSON.parse(
@@ -24,12 +32,17 @@ export const cloneUser = (): ConnecteamUser => structuredClone(syntheticUser);
 export function fakeGateway(
   seed: Partial<EmployeeLink> = {},
   approved = true,
-): SyncDeps["store"] & {
+): SyncDeps["store"] &
+  RollupGateway & {
   rows: Map<number, EmployeeLink>;
   log: SyncLogEntry[];
   counters: Map<string, number>;
   meta: Map<string, number>;
   pending: Map<number, PendingLink>;
+  /** `notice_rollup`, keyed `${kind}:${ctUserId}` (#193). */
+  rollups: Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean; summaryAt?: number }>;
+  /** How many more `notice_rollup` counts / records throw, as a transient D1 error would, or clears, as an eviction would. */
+  failRollup: { count: number; record: number; clear: number };
 } {
   const rows = new Map<number, EmployeeLink>();
   if (seed.ctUserId !== undefined) {
@@ -53,12 +66,47 @@ export function fakeGateway(
   const counters = new Map<string, number>();
   const meta = new Map<string, number>();
   const pending = new Map<number, PendingLink>();
+  const rollups = new Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean; summaryAt?: number }>();
+  const failRollup = { count: 0, record: 0, clear: 0 };
   return {
     rows,
     log,
     counters,
     meta,
     pending,
+    rollups,
+    failRollup,
+    async countRecentNotices(kind: RollupKind, since: number) {
+      if (failRollup.count > 0 && failRollup.count--) throw new Error("D1 unavailable");
+      return [...rollups.values()].filter((r) => r.kind === kind && r.at >= since).length;
+    },
+    async recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean) {
+      if (failRollup.record > 0 && failRollup.record--) throw new Error("D1 unavailable");
+      rollups.set(`${kind}:${ctUserId}`, { kind, ctUserId, at, rolledUp });
+    },
+    async listRolledUp(kind: RollupKind) {
+      return [...rollups.values()]
+        .filter((r) => r.kind === kind && r.rolledUp)
+        .sort((a, b) => a.at - b.at)
+        .map(({ ctUserId, at, summaryAt }) => ({ ctUserId, at, summaryAt: summaryAt ?? null }));
+    },
+    async assignSummary(kind: RollupKind, summaryAt: number) {
+      const picked = [...rollups.values()].filter((r) => r.kind === kind && r.rolledUp && r.summaryAt === undefined);
+      for (const r of picked) r.summaryAt = summaryAt;
+      return picked.length;
+    },
+    async clearSummary(kind: RollupKind, summaryAt: number) {
+      if (failRollup.clear > 0 && failRollup.clear--) throw new Error("evicted");
+      for (const r of rollups.values()) {
+        if (r.kind === kind && r.summaryAt === summaryAt) {
+          r.rolledUp = false;
+          delete r.summaryAt;
+        }
+      }
+    },
+    async releaseSummary(kind: RollupKind, summaryAt: number) {
+      for (const r of rollups.values()) if (r.kind === kind && r.summaryAt === summaryAt) delete r.summaryAt;
+    },
     async getPendingLink(id: number) {
       return pending.get(id) ?? null;
     },
@@ -137,6 +185,11 @@ export function fakeGateway(
       return log.filter((l) => l.ctUserId === id && l.outcome === "correction").at(-1)?.detail ?? null;
     },
   };
+}
+
+/** Seed other people's Existing-match or Link notices, recorded (sent) at these times (#193). Their ids run from 1. */
+export function recentNotices(store: ReturnType<typeof fakeGateway>, kind: RollupKind, ...at: number[]): void {
+  at.forEach((t, i) => store.rollups.set(`${kind}:${i + 1}`, { kind, ctUserId: i + 1, at: t, rolledUp: false }));
 }
 
 export interface EhStub {

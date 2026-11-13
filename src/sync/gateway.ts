@@ -180,3 +180,44 @@ export interface LinkGateway {
 export interface StatusGateway extends Pick<SyncGateway, "readMeta" | "setMarker"> {
   listRosterRows(): Promise<RosterRow[]>;
 }
+
+/**
+ * The per-person notices a burst rolls up into one Bulk summary (#193): the
+ * one list the type, the `notice_rollup.kind` column and the cron's summaries
+ * all come from.
+ */
+export const ROLLUP_KINDS = ["existing_match", "link"] as const;
+export type RollupKind = (typeof ROLLUP_KINDS)[number];
+
+/** One person a Bulk summary is waiting to count. */
+export interface RolledUpNotice {
+  ctUserId: number;
+  /** When their notice was rolled up (epoch ms). */
+  at: number;
+  /** The summary they were picked for, by the time it was picked; null until then. */
+  summaryAt: number | null;
+}
+
+/**
+ * The `notice_rollup` table (#193): who got an Existing-match or Link notice recently,
+ * and who is waiting for a Bulk summary instead. A separate interface for the
+ * same reason as {@link RecheckGateway}.
+ */
+export interface RollupGateway {
+  /** How many people got a notice of this kind, sent or rolled up, at or after `since`. */
+  countRecentNotices(kind: RollupKind, since: number): Promise<number>;
+  /** Record this person's notice: `rolledUp` means it waits for a Bulk summary instead of being sent. */
+  recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean): Promise<void>;
+  /** Everyone waiting for a Bulk summary of this kind, oldest first. */
+  listRolledUp(kind: RollupKind): Promise<RolledUpNotice[]>;
+  /**
+   * Pick everyone waiting and not yet in a summary for the one stamped
+   * `summaryAt`, in one statement, and say how many. Anyone rolled up after
+   * waits for the next summary.
+   */
+  assignSummary(kind: RollupKind, summaryAt: number): Promise<number>;
+  /** Stop that summary's people waiting, once it went out. */
+  clearSummary(kind: RollupKind, summaryAt: number): Promise<void>;
+  /** Put that summary's people back to waiting, as it never went out. */
+  releaseSummary(kind: RollupKind, summaryAt: number): Promise<void>;
+}

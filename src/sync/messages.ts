@@ -31,6 +31,7 @@
  */
 import type { EhFieldError, UnusableAnswer } from "../eh/errors.js";
 import type { ExistingMatch, MatchKey } from "./precheck.js";
+import type { RollupKind } from "./gateway.js";
 
 const MAX_LEN = 500;
 
@@ -428,6 +429,29 @@ export function linkNoticeMessage(
       differ,
     ),
   );
+}
+
+/**
+ * Bulk summary -> the admin channel (#193, ADR-0013): one message for everyone
+ * whose Existing-match or Link notice rolled up in a burst. A count only, never names:
+ * the link stage lists each Held person, and a list would be the flood again.
+ */
+export function bulkSummaryMessage(kind: RollupKind, count: number): string {
+  const one = count === 1;
+  // No default: a new kind doesn't compile until it has its own wording.
+  switch (kind) {
+    case "existing_match":
+      return sections(
+        `⚠️ Held: ${count} more ${one ? "person" : "people"} may already be in Employment Hero, so nothing was written for them.`,
+        `➡️ To fix: re-run the setup wizard's link stage, which lists ${one ? "them" : "each of them"}, and either link them to the right employee or mark them **New hire, not this person**. \`GET /status\` also lists them, as waiting on admin.`,
+        EXISTING_MATCH_FOOT[1]!,
+      );
+    case "link":
+      return sections(
+        `🔗 ${count} more Pre-existing ${one ? "employee is" : "employees are"} now linked to Employment Hero.`,
+        "For each, only the Payroll ID was set, or nothing was written if Employment Hero already had it. From now on, only what they change in Connecteam is synced.",
+      );
+  }
 }
 
 /** Why a confirmed link couldn't be made. EH ids and Connecteam ids only, never a value. */

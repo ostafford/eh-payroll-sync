@@ -89,6 +89,10 @@ The admin-channel message saying someone is a Held employee: which EH employees 
 The admin-channel line saying a Pre-existing employee is now a Linked employee, and that only their Payroll ID was set. Posted in place of the Admin success notice; the employee gets no Success message, since nothing new reached EH for them.
 _Avoid_: link confirmation, welcome
 
+**Bulk summary**:
+One admin-channel message counting the rest of a burst of Existing-match or Link notices, in place of one each (ADR-0013). The first 3 of a kind within 10 minutes go out as usual; each notice after that is **rolled up**: claimed, but counted in the summary instead of sent. A count only, never names.
+_Avoid_: digest (that's the weekly status digest), batch notice
+
 **In-scope fields**:
 Everything the employee can enter in the onboarding pack: personal, address, emergency contact, structural fields EH needs (name, start date, employment type, job title), **and** tax file number, bank account(s), superannuation, and tax-declaration answers. All flow Connecteam → EH via the API — no EH self-setup (see ADR-0001). Pay rate / award / classification stay a manual EH task for v1.
 

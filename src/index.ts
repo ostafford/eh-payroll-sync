@@ -6,6 +6,7 @@ import { EhPayrollClient } from "./eh/client.js";
 import { ConnecteamClient } from "./connecteam/client.js";
 import { SyncStore } from "./db/store.js";
 import { dispatchBatch, type SyncDeps } from "./sync/consumer.js";
+import { runBulkSummaries } from "./sync/rollup.js";
 import { runSweep } from "./cron/sweep.js";
 import { runRecheck } from "./cron/recheck.js";
 import { handleWebhook } from "./webhook/inbound.js";
@@ -204,6 +205,22 @@ async function maybeRunRecheck(
 }
 
 /**
+ * Each tick, post a Bulk summary for any burst of Existing-match or Link notices that
+ * has gone quiet (#193, ADR-0013). Gated like the recheck: a tick the sweep
+ * yielded leaves everyone waiting for the next one.
+ */
+async function maybeRunBulkSummaries(
+  env: Env,
+  store: SyncStore,
+  ct: ConnecteamClient,
+  sweepStatus: "ok" | "skipped" | "retry",
+): Promise<void> {
+  if (sweepStatus !== "ok") return;
+  const result = await runBulkSummaries({ store, ct, adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID });
+  if (result.existing_match !== "none" || result.link !== "none") logEvent({ evt: "bulk_summary", ...result });
+}
+
+/**
  * Weekly (default Monday, `STATUS_DIGEST_DAY`), post the sync-status digest to
  * the admin channel (issue #44). Gated the same way as the recheck pass: only
  * once the sweep has actually run this tick, so a digest never competes with
@@ -264,6 +281,7 @@ export default {
     logEvent({ evt: "sweep", ...result });
 
     await maybeRunRecheck(env, store, ct, result.status);
+    await maybeRunBulkSummaries(env, store, ct, result.status);
     await maybeRunStatusDigest(env, store, ct, result.status);
     await maybePushHealth(env, store);
   },
