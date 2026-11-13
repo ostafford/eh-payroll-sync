@@ -1,7 +1,7 @@
 -- Migration 0008: notice_rollup, behind the Bulk summary (#193, ADR-0013).
 --
 -- One row per person per notice kind ('existing_match' or 'link'): when their
--- latest Held or Link notice was sent or rolled up. The queue consumer counts
+-- latest Existing-match or Link notice was sent or rolled up. The queue consumer counts
 -- recent rows to tell a burst; rolled_up = 1 means the person waits for the
 -- cron's Bulk summary instead of a message of their own. summary_at is the
 -- summary they were picked for, so a tick that crashed mid-summary never

@@ -84,7 +84,7 @@ export interface SyncDeps {
   /**
    * `getPendingLink`: a confirmed link is made on the first approval, and a
    * "New hire, not this person" row skips the Pre-create check.
-   * `countRecentNotices` / `recordNotice`: a burst of Held or Link notices
+   * `countRecentNotices` / `recordNotice`: a burst of Existing-match or Link notices
    * rolls up into one Bulk summary (#193).
    */
   store: SyncGateway &
@@ -1148,7 +1148,7 @@ export async function handleDeadLetter(
 }
 
 /**
- * Record a Held or Link notice in `notice_rollup` (#193). A rolled-up notice's
+ * Record an Existing-match or Link notice in `notice_rollup` (#193). A rolled-up notice's
  * record stands in for its send, so a failed write releases its claims and the
  * job's retry rolls it up. A sent notice keeps its claim, so the retry doesn't
  * post it again; it just goes uncounted toward a burst.

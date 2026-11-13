@@ -1,4 +1,4 @@
-# A burst of Held or Link notices posts one Bulk summary
+# A burst of Existing-match or Link notices posts one Bulk summary
 
 ## Status
 
@@ -12,13 +12,13 @@ Each notice is sent from its own queue job. The sweep queues 20 approvals a tick
 
 We considered three options:
 
-- **Send every Held and Link notice from the cron.** It sees the whole picture, but it adds up to a minute of delay and a new failure path to the normal one-at-a-time case.
+- **Send every Existing-match and Link notice from the cron.** It sees the whole picture, but it adds up to a minute of delay and a new failure path to the normal one-at-a-time case.
 - **Have the sweep declare a "bulk mode".** The sweep knows how big the backlog is, but not who ends up Held and who Linked, which only the job decides. It also misses the recheck.
 - **Count recent notices in D1 and roll up the rest of a burst.** Chosen.
 
 ## Decision
 
-Every Held or Link notice is recorded in `notice_rollup` (one row per person per kind). A job that finds 3 notices of its kind in the last 10 minutes still takes its claim (ADR-0007), but records the person as rolled up instead of sending. Each tick, once the sweep has run, the cron posts one **Bulk summary** per kind whose burst has been quiet for 3 minutes, or whose first person has waited 30 minutes, so a long drain isn't silent.
+Every Existing-match or Link notice is recorded in `notice_rollup` (one row per person per kind). A job that finds 3 notices of its kind in the last 10 minutes still takes its claim (ADR-0007), but records the person as rolled up instead of sending. Each tick, once the sweep has run, the cron posts one **Bulk summary** per kind whose burst has been quiet for 3 minutes, or whose first person has waited 30 minutes, so a long drain isn't silent.
 
 The summary is a count and where to act (the link stage, which lists each Held person), never names: about 15 names fit in one 500-character message, so a list would be the flood again.
 

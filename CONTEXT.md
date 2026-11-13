@@ -90,7 +90,7 @@ The admin-channel line saying a Pre-existing employee is now a Linked employee, 
 _Avoid_: link confirmation, welcome
 
 **Bulk summary**:
-One admin-channel message counting the rest of a burst of Existing-match or Link notices, in place of one each (ADR-0013). The first 3 of a kind within 10 minutes go out as usual. A count only, never names.
+One admin-channel message counting the rest of a burst of Existing-match or Link notices, in place of one each (ADR-0013). The first 3 of a kind within 10 minutes go out as usual; each notice after that is **rolled up**: claimed, but counted in the summary instead of sent. A count only, never names.
 _Avoid_: digest (that's the weekly status digest), batch notice
 
 **In-scope fields**:

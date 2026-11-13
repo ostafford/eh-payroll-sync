@@ -1,5 +1,5 @@
 /**
- * Bulk summary (#193, ADR-0013): when many people get the same Held or Link
+ * Bulk summary (#193, ADR-0013): when many people get the same Existing-match or Link
  * notice in a burst, post one summary instead of one message each.
  *
  * Each notice is sent from its own queue job, and a go-live drains the backlog

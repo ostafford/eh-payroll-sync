@@ -187,7 +187,7 @@ export function fakeGateway(
   };
 }
 
-/** Seed other people's Held or Link notices, recorded (sent) at these times (#193). Their ids run from 1. */
+/** Seed other people's Existing-match or Link notices, recorded (sent) at these times (#193). Their ids run from 1. */
 export function recentNotices(store: ReturnType<typeof fakeGateway>, kind: RollupKind, ...at: number[]): void {
   at.forEach((t, i) => store.rollups.set(`${kind}:${i + 1}`, { kind, ctUserId: i + 1, at: t, rolledUp: false }));
 }

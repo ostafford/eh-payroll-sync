@@ -77,7 +77,7 @@ export const syncMeta = sqliteTable("sync_meta", {
 });
 
 /**
- * Who got a Held or Link notice recently, and who waits for a Bulk summary
+ * Who got an Existing-match or Link notice recently, and who waits for a Bulk summary
  * instead (#193, ADR-0013). One row per person per kind. Identifiers and times only.
  */
 export const noticeRollup = sqliteTable(

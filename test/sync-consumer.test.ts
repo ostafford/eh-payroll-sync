@@ -339,7 +339,7 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
   describe("in a burst (#193)", () => {
     const NOW = 1_000_000_000;
     const MINUTE = 60 * 1000;
-    /** Other people's Held notices, already sent at these times. */
+    /** Other people's Existing-match notices, already sent at these times. */
     const heldEarlier = (...at: number[]) => {
       const store = fakeGateway();
       recentNotices(store, "existing_match", ...at);

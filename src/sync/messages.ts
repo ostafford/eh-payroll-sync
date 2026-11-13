@@ -433,7 +433,7 @@ export function linkNoticeMessage(
 
 /**
  * Bulk summary -> the admin channel (#193, ADR-0013): one message for everyone
- * whose Held or Link notice rolled up in a burst. A count only, never names:
+ * whose Existing-match or Link notice rolled up in a burst. A count only, never names:
  * the link stage lists each Held person, and a list would be the flood again.
  */
 export function bulkSummaryMessage(kind: RollupKind, count: number): string {

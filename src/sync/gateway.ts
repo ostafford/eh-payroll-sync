@@ -199,7 +199,7 @@ export interface RolledUpNotice {
 }
 
 /**
- * The `notice_rollup` table (#193): who got a Held or Link notice recently,
+ * The `notice_rollup` table (#193): who got an Existing-match or Link notice recently,
  * and who is waiting for a Bulk summary instead. A separate interface for the
  * same reason as {@link RecheckGateway}.
  */
