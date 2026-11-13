@@ -34,6 +34,9 @@
  *     Both only once their details map cleanly: until then the sync asks them
  *     to finish their details first.
  *
+ * test/preflight-parity.test.ts runs one scenario table through both this and
+ * the sync, so a decision changed on one side only fails there.
+ *
  * Output is ids, outcomes and key names only, never a value: no name, email,
  * TFN, bank detail or Payroll ID reaches the terminal.
  */
