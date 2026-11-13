@@ -75,6 +75,30 @@ describe("setup wizard, link stage", () => {
     expect(r.stdout).toContain("The link stage stopped: the Link list was not changed.");
   });
 
+  it("on a first setup, links before the deploy, so nothing goes live until the Link list is settled (ADR-0012)", () => {
+    const script = readFileSync(join(root, WIZARD), "utf8");
+    // Whole lines only, so a comment naming a call doesn't count.
+    const at = (line: string) => {
+      const i = script.search(new RegExp(`^${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+      expect(i, line).toBeGreaterThan(-1);
+      return i;
+    };
+    const provision = at('stage "Provision Cloudflare resources"');
+    const link = at("link_stage before-deploy");
+    const deploy = at('stage "Push secrets + deploy"');
+    expect(provision).toBeLessThan(link);
+    expect(link).toBeLessThan(deploy);
+    // The only other call is --stage link's, before the first stage.
+    expect(script.slice(deploy)).not.toMatch(/^\s*link_stage\b/m);
+  });
+
+  it("before the deploy, runs the gated link and stops with nothing live if nothing was saved", () => {
+    const script = readFileSync(join(root, WIZARD), "utf8");
+    const body = script.slice(script.indexOf("link_stage() {"), script.indexOf('if [[ "$STAGE_ONLY" == "link" ]]'));
+    expect(body).toContain("npm run --silent link -- --before-deploy");
+    expect(body).toContain("nothing is live yet");
+  });
+
   it("refuses a stage it doesn't know", () => {
     const r = wizard(["--stage", "nope"]);
     expect(r.status).not.toBe(0);

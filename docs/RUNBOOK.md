@@ -350,6 +350,10 @@ npx wrangler secret put CT_WEBHOOK_SECRET --config wrangler.deploy.json
 # (see "Sync-status roster" below). Unset falls back to CT_WEBHOOK_SECRET.
 npx wrangler secret put STATUS_TOKEN --config wrangler.deploy.json
 
+# First deploy only: settle the Link list before anything goes live (ADR-0012).
+# The first sweep syncs every pack already approved.
+npm run link -- --before-deploy
+
 # Verify, then deploy
 npm run typecheck && npm test
 npm run deploy

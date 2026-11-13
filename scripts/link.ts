@@ -14,15 +14,23 @@
  * e.g. test/fixtures/link-stage-data.json): no API key, no network, and
  * nothing written.
  *
+ * `-- --before-deploy` is the wizard's first-setup run (ADR-0012): an empty
+ * Link list goes through only once the admin confirms nobody is already in EH.
+ *
+ * Exits 3 when nothing was saved (cancelled, not confirmed, or no terminal),
+ * so the wizard stops before the deploy.
+ *
  * Reads names, emails, Payroll IDs and status only: never a TFN or date of
- * birth. Run it after the deploy: it first rebuilds wrangler.deploy.json and
- * checks it against the live Worker (`npm run deploy:config -- --check-live`),
+ * birth. It first rebuilds wrangler.deploy.json and checks it against the
+ * live Worker, if there is one yet (`npm run deploy:config -- --check-live
+ * --allow-missing-secrets`: it needs the database, not the Worker's secrets),
  * so it never reads or writes a database other than the live one.
  *
  * Env (from .dev.vars or the shell): CT_API_KEY, EH_API_KEY, EH_BUSINESS_ID,
  * CT_ONBOARDING_PACK_ID, FIELD_MAP_CLIENT (optional).
  */
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
@@ -110,10 +118,22 @@ function dataFile(argv: string[]): string | undefined {
   return i === -1 ? undefined : argv[i + 1];
 }
 
+/** Exit code for "nothing saved": the wizard stops before the deploy. */
+const NOTHING_SAVED = 3;
+
+async function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^y(es)?$/i.test((await rl.question(`\n${question} [y/N] `)).trim());
+  } finally {
+    rl.close();
+  }
+}
+
 async function main(): Promise<void> {
   loadDevVars();
   const file = dataFile(process.argv);
-  if (!file) checkDeployConfig();
+  if (!file) checkDeployConfig(["--allow-missing-secrets"]);
   const load = async (): Promise<LinkStageData> => (file ? (JSON.parse(readFileSync(file, "utf8")) as LinkStageData) : loadLive());
 
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
@@ -121,17 +141,19 @@ async function main(): Promise<void> {
     const screen = createLinkScreen(buildLinkList(input), linkScreenPeople(input));
     console.log(screen.table({ columns: 160, color: false }).join("\n"));
     console.error("\nThe link stage needs a terminal (it reads single keys): nothing was saved.");
-    return;
+    process.exit(NOTHING_SAVED);
   }
 
-  await runLinkStage({
+  const outcome = await runLinkStage({
     load,
     drive: (screen) => driveLinkScreen(screen, { stdin: process.stdin, stdout: process.stdout, color: !process.env.NO_COLOR }),
     execute: async (sql) => void d1(sql),
     print: (line) => console.log(line),
     now: () => Date.now(),
     rehearsal: file !== undefined,
+    ...(process.argv.includes("--before-deploy") ? { beforeDeploy: { confirm } } : {}),
   });
+  if (outcome === "cancelled" || outcome === "unconfirmed") process.exit(NOTHING_SAVED);
 }
 
 main().catch((err) => {
