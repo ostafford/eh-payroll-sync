@@ -711,6 +711,7 @@ minutes for the rest of the digest day (UTC). The Worker logs
 | **Manual-follow-up notice** | alerts channel | a payroll admin finishes the item in EH by hand — foreign / working-holiday-maker tax scale, add the SMSF, enter the overseas address, **or set the award / pay-run defaults for a record EH marked `Incomplete`** — re-posted at most once per ~12 h per employee per reason-set |
 | **System alert** | alerts channel | never the employee's data: check Employment Hero / Connecteam status and the API credentials; once fixed, **edit the employee's profile in Connecteam** to sync again (or replay the job, below) — re-posted at most once per hour per employee while the fault persists |
 | **Existing-match notice** | alerts channel | "⚠️ Held…": the Pre-create check found someone about to be created who may already be in EH (ADR-0010), so **nothing was written**. It lists each possible EH employee and which keys matched or disagreed (email, TFN, name + date of birth; never the values), and "Terminated in EH" for a rehire. Re-run the setup wizard's link stage and link them, or mark them "New hire, not this person". The employee gets nothing. Re-posted at most once per ~12 h for the same candidates |
+| **Bulk summary** | alerts channel | the rest of a burst of Existing-match or Link notices (ADR-0013): once 3 of one kind went out within 10 minutes (a go-live backlog, or the daily recheck), the rest are counted in one message instead, about 3 minutes after the burst ends. Held: resolve them in the setup wizard's link stage, which lists each one; Linked: none. A Link notice naming details that differ is always sent on its own |
 | **Identity-collision alert** | alerts channel | two Connecteam people's EH records got merged into one (see below) — separate them directly in EH; re-posted at most once per hour per employee while it persists |
 | **Success message** | the employee (DM) | none. Sent once on their first successful sync, and once when a Correction is fixed (naming what was fixed). Off for a client with `"messages": { "employeeSuccess": false }` in `field-map.json`; on otherwise. Never sent for an ordinary edit |
 | **Admin success notice** | alerts channel | none. A ✅ naming the employee at the same two moments as the Success message; skipped when the sync lands as a Manual follow-up. Off with `"adminSuccess": false`; on otherwise. **On go-live every existing employee syncs at once**, so for a large client set it to `false` for the first run and switch it on afterwards |
@@ -964,6 +965,7 @@ member number — is ever written to D1 or to a log:
 | `onboarding_state` | assignment id, userId, status, `isWaitingApproval`, seen-at |
 | `sync_log` | userId, time, outcome, and a `detail` string of field **NAMES** + status only |
 | `sync_meta` | counters and a "last sweep ok" timestamp |
+| `notice_rollup` | userId, notice kind, time, and whether a Bulk summary is still to count them |
 | `console` logs | routed through `src/redact.ts`, which drops anything under a sensitive key |
 | integrator telemetry | ids, outcomes, counts only (see §9); redacted regardless |
 

@@ -45,10 +45,12 @@ below, with what a full re-run does to it.
 | 6e | Linked state: `employee_map` row with `linked_at` and the Baseline, and the `pending_link` delete | One D1 batch (`completeLink`), after the Link notice | Same values. Once saved, the stale-event guard skips the job, and a Linked employee never takes the full-sync path. The batch means no re-run finds them synced but not linked | Idempotent |
 | 6f | **Payroll-ID-changed alert** to the alerts channel (ADR-0011, #166): the mapped Payroll ID differs from the one stored at first sync | Claim (user + the new value, never expires) before sending; released on a failed send, and the job retries before any EH call or row | Not re-sent once sent, and a later edit with the same new value doesn't repost it | At most once per new value |
 | 6g | Stored match key: `employee_map.external_id` (ADR-0011) | Written with row 7 or 6e when EH accepted the key, and only if the row has none (`coalesce`) | Same value, or the earlier one kept | Idempotent |
+| 6h | **Bulk-summary roll-up** of a Held or Link notice, in a burst (ADR-0013, #193): a `notice_rollup` row instead of the send | Written after the notice's claim (rows 6b, 6d). A notice that's sent is recorded only once the send reports `ok` | The claim is held, so the re-run neither sends nor records it again. Same row, same values | Idempotent |
 | 7 | `employee_map` link (`lastSyncedTs`, `lastPayloadHash`, `lastOutcome`) | Upsert of one row. A hold saves `existing_match` with no EH id and no payload hash, so the same profile re-runs once the admin resolves it | Same values. Once saved, the stale-event guard (and, except on a hold, the payload hash) skips any later redelivery of this job before step 1 | Idempotent |
 | 8 | `sync_log` audit row | `INSERT`, written last | Normally skipped by row 7's guard. **Exception:** the collision and "can't link" paths don't save a link, so a redelivery appends a second identical `collision` row | Audit only; can repeat on collisions |
 | 9 | `acked_total` counter | Bumped once per batch, after the acks | A crash between an ack and the bump under-counts. The `/health` `queueBacklog` gauge can then stay above 0 | Gauge drift only |
 | 10 | Dead-letter queue: **System alert**, `dead_letter` audit row, integrator alert | Alert claimed (1 h); a failed send releases the claim (can't retry, the DLQ always acks), so the next dead-letter for that user posts it; row `INSERT`; integrator alert de-duplicated per user (1 h, `src/index.ts`) | No repeated alerts; the row can repeat if the DLQ itself redelivers | At most once / audit |
+| 11 | Cron: **Bulk summary** to the alerts channel (ADR-0013), not part of a job | Claimed (kind + the people it counts, 24 h) before sending; released on a failed send, so the next tick sends it. Its people stop waiting only after it goes out | A tick that crashed after the send finds the claim held and only clears them | At most once |
 
 Nothing a person or Employment Hero sees can be duplicated by a re-run. The
 only repeatable writes are an audit row on the collision path and a health
@@ -89,7 +91,8 @@ would have succeeded.
 ## Consequences
 
 - **An invariant for future changes:** any new side effect in `runSyncJob` must
-  be idempotent, or claimed before it happens, like rows 3, 5, 6, 6b and 6d. Otherwise
+  be idempotent, or claimed before it happens, like rows 3, 5, 6, 6b and 6d (a
+  roll-up, row 6h, comes after the claim of the send it replaces). Otherwise
   this decision must be revisited. `src/sync/consumer.ts` points here.
   (`wrangler.jsonc` deliberately has no comment: the live deploy folder keeps
   its settings as uncommitted edits to that file, and upstream changes to it

@@ -44,7 +44,8 @@ export type NoticeKind =
   | "link_blocked"
   | "payroll_id_changed"
   | "cleared_field"
-  | "baseline_key_changed";
+  | "baseline_key_changed"
+  | "bulk_summary";
 
 /** A follow-up can wait on a payroll admin for a while - at most twice a day. */
 export const FOLLOW_UP_NOTICE_DEDUPE_MS = 12 * 60 * 60 * 1000;

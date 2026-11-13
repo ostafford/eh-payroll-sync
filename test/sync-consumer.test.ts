@@ -15,7 +15,7 @@ import { takeBaseline } from "../src/sync/baseline.js";
 import type { SyncJob } from "../src/sync/job.js";
 import type { Baseline, EmployeeLink } from "../src/sync/gateway.js";
 import type { CtResult, PayRate } from "../src/connecteam/types.js";
-import { cloneUser, deps, fakeCt, fakeEh, fakeGateway, fieldMap, type CtFake } from "./support/sync-fakes.js";
+import { cloneUser, deps, fakeCt, fakeEh, fakeGateway, fieldMap, recentNotices, type CtFake } from "./support/sync-fakes.js";
 
 const job = (over: Partial<SyncJob> = {}): SyncJob => ({
   reason: "approval",
@@ -335,6 +335,70 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
     expect(eh.upserts).toHaveLength(0);
     expect(store.rows.size).toBe(0);
   });
+
+  describe("in a burst (#193)", () => {
+    const NOW = 1_000_000_000;
+    const MINUTE = 60 * 1000;
+    /** Other people's Held notices, already sent at these times. */
+    const heldEarlier = (...at: number[]) => {
+      const store = fakeGateway();
+      recentNotices(store, "existing_match", ...at);
+      return store;
+    };
+    const holdIn = async (store: ReturnType<typeof fakeGateway>, ct = fakeCt(cloneUser())) => {
+      const eh = fakeEh({ get: NONE, existing: { emailAddress: [inEh(40213)] } });
+      const out = await runSyncJob(job(), deps({ store, eh, ct, now: () => NOW }));
+      return { out, ct };
+    };
+
+    it("posts the notice as normal, and records it, when few went out lately", async () => {
+      const store = heldEarlier(NOW - MINUTE, NOW - 2 * MINUTE);
+      const { out, ct } = await holdIn(store);
+
+      expect(out).toMatchObject({ status: "held" });
+      expect(ct.channels).toHaveLength(1);
+      expect(store.rollups.get("existing_match:17760356")).toEqual({ kind: "existing_match", ctUserId: 17760356, at: NOW, rolledUp: false });
+    });
+
+    it("rolls the notice up once 3 went out in the last 10 minutes: nothing posted, the hold still recorded", async () => {
+      const store = heldEarlier(NOW - MINUTE, NOW - 5 * MINUTE, NOW - 9 * MINUTE);
+      const { out, ct } = await holdIn(store);
+
+      expect(out).toMatchObject({ status: "held" });
+      expect(ct.channels).toEqual([]);
+      expect(store.rollups.get("existing_match:17760356")).toEqual({ kind: "existing_match", ctUserId: 17760356, at: NOW, rolledUp: true });
+      expect(store.rows.get(17760356)).toMatchObject({ lastOutcome: "existing_match" });
+      expect(store.log.at(-1)).toMatchObject({ outcome: "existing_match" });
+    });
+
+    it("counts only the last 10 minutes", async () => {
+      const store = heldEarlier(NOW - 11 * MINUTE, NOW - 12 * MINUTE, NOW - 20 * MINUTE);
+      const { ct } = await holdIn(store);
+      expect(ct.channels).toHaveLength(1);
+    });
+
+    it("doesn't post a rolled-up notice when the same job runs again", async () => {
+      const store = heldEarlier(NOW - MINUTE, NOW - MINUTE, NOW - MINUTE);
+      const ct = fakeCt(cloneUser());
+      await holdIn(store, ct);
+      // A redelivery after a crash that lost the rows, with the burst now over: the claim still holds.
+      store.rows.clear();
+      for (const id of [1, 2, 3]) store.rollups.delete(`existing_match:${id}`);
+      await holdIn(store, ct);
+
+      expect(ct.channels).toEqual([]);
+      expect(store.rollups.get("existing_match:17760356")).toMatchObject({ rolledUp: true });
+    });
+
+    it("records a sent notice only once it went out", async () => {
+      const store = heldEarlier();
+      const ct = fakeCt(cloneUser());
+      ct.failSends.set("chan-1", 1);
+
+      expect((await holdIn(store, ct)).out).toMatchObject({ status: "retry" });
+      expect(store.rollups.has("existing_match:17760356")).toBe(false);
+    });
+  });
 });
 
 describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
@@ -433,6 +497,32 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
           "Only the Payroll ID was set. From now on, only what they change in Connecteam is synced.",
       },
     ]);
+  });
+
+  it("rolls a plain Link notice up in a burst (#193): nothing posted, the link still made", async () => {
+    const store = linking();
+    recentNotices(store, "link", 1_000_000 - 60_000, 1_000_000 - 60_000, 1_000_000 - 60_000);
+    const ct = fakeCt(cloneUser());
+
+    expect(await run(store, linkEh(), ct)).toMatchObject({ status: "synced", ehEmployeeId: TARGET });
+
+    expect(ct.channels).toEqual([]);
+    expect(store.rollups.get(`link:${ME}`)).toEqual({ kind: "link", ctUserId: ME, at: 1_000_000, rolledUp: true });
+    expect(store.rows.get(ME)).toMatchObject({ linkedAt: 1_000_000 });
+  });
+
+  it("records a Link notice it sent, so it counts toward a burst (#193)", async () => {
+    const store = linking();
+    await run(store, linkEh(), fakeCt(cloneUser()));
+    expect(store.rollups.get(`link:${ME}`)).toEqual({ kind: "link", ctUserId: ME, at: 1_000_000, rolledUp: false });
+  });
+
+  it("doesn't record a Link notice that failed to send (#193)", async () => {
+    const store = linking();
+    const ct = fakeCt(cloneUser());
+    ct.failSends.set("chan-1", 1);
+    expect(await run(store, linkEh(), ct)).toMatchObject({ status: "retry" });
+    expect(store.rollups.has(`link:${ME}`)).toBe(false);
   });
 
   it("stores a Baseline of fingerprints and the key id, never a value", async () => {
@@ -1378,6 +1468,19 @@ describe("runSyncJob - Payroll ID from a Connecteam field (#167, ADR-0011)", () 
     for (const value of ["876543217", "123456782", "sam@old.example.com", "sam.rivera@example.com"]) {
       expect(notice).not.toContain(value);
     }
+  });
+
+  it("still posts a Link notice that names differing details in a burst: it asks the admin to check (#193)", async () => {
+    const store = fakeGateway();
+    recentNotices(store, "link", 1_000_000 - 60_000, 1_000_000 - 60_000, 1_000_000 - 60_000);
+    const eh = payrollEh(handEntered(40213, { emailAddress: "sam@old.example.com" }));
+    const ct = fakeCt(withCopiedId());
+
+    await run(eh, ct, store);
+
+    expect(ct.channels).toHaveLength(1);
+    expect(ct.channels[0]!.text).toContain("Their email differs in Employment Hero");
+    expect(store.rollups.get(`link:${ME}`)).toMatchObject({ rolledUp: false });
   });
 
   // A typo'd ID landing on another real employee would send later edits into their pay record.

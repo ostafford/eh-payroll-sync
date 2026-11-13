@@ -11,6 +11,7 @@ import { ConnecteamClient } from "../../src/connecteam/client.js";
 import { SyncStore } from "../../src/db/store.js";
 import { deriveRosterEntry } from "../../src/status/roster.js";
 import { runSyncJob, dispatchBatch, retryDelaySeconds, type SyncDeps } from "../../src/sync/consumer.js";
+import { runBulkSummaries, BULK_SUMMARY_QUIET_MS } from "../../src/sync/rollup.js";
 import type { SyncJob } from "../../src/sync/job.js";
 import { syntheticUser } from "../fixtures/connecteam-user.js";
 
@@ -111,6 +112,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM employee_map"),
     env.DB.prepare("DELETE FROM sync_log"),
     env.DB.prepare("DELETE FROM sync_meta"),
+    env.DB.prepare("DELETE FROM notice_rollup"),
   ]);
 });
 
@@ -156,6 +158,26 @@ describe("queue consumer (in workerd, real D1)", () => {
       state: "waiting_on_admin",
       reasons: ["held on approval: may already be in EH as 40213; resolve it in the setup wizard's link stage"],
     });
+  });
+
+  it("posts the first 3 holds of a burst, then one Bulk summary for the rest, through real D1 (#193)", async () => {
+    const existing = [{ id: 40213, emailAddress: "sam.rivera@example.com", status: "Active" }];
+    const posted: string[] = [];
+    for (const ctUserId of [1, 2, 3, 4, 5]) {
+      const w = world({ ctUser: { ...syntheticUser, userId: ctUserId }, existing });
+      expect(await runSyncJob(job({ ctUserId }), w.deps)).toMatchObject({ status: "held" });
+      posted.push(...w.sent.channels.map((c) => c.text));
+    }
+    expect(posted).toHaveLength(3);
+
+    const w = world();
+    const summary = { store: new SyncStore(env.DB), ct: w.deps.ct, adminChannelId: "chan-1" };
+    expect(await runBulkSummaries({ ...summary, now: () => 1_700_000_000_000 + 60_000 })).toMatchObject({ existing_match: "waiting" });
+    expect(await runBulkSummaries({ ...summary, now: () => 1_700_000_000_000 + BULK_SUMMARY_QUIET_MS })).toMatchObject({ existing_match: "sent" });
+
+    expect(w.sent.channels).toHaveLength(1);
+    expect(w.sent.channels[0]!.text).toContain("⚠️ Held: 2 more people may already be in Employment Hero");
+    expect(await summary.store.listRolledUp("existing_match")).toEqual([]);
   });
 
   it("detects an EH identity collision (two Connecteam users resolving to the same EH employee id)", async () => {

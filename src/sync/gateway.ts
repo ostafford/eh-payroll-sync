@@ -180,3 +180,29 @@ export interface LinkGateway {
 export interface StatusGateway extends Pick<SyncGateway, "readMeta" | "setMarker"> {
   listRosterRows(): Promise<RosterRow[]>;
 }
+
+/** The per-person notices a burst rolls up into one Bulk summary (#193). */
+export type RollupKind = "existing_match" | "link";
+
+/** One person a Bulk summary is waiting to count. */
+export interface RolledUpNotice {
+  ctUserId: number;
+  /** When their notice was rolled up (epoch ms). */
+  at: number;
+}
+
+/**
+ * The `notice_rollup` table (#193): who got a Held or Link notice recently,
+ * and who is waiting for a Bulk summary instead. A separate interface for the
+ * same reason as {@link RecheckGateway}.
+ */
+export interface RollupGateway {
+  /** How many people got a notice of this kind, sent or rolled up, at or after `since`. */
+  countRecentNotices(kind: RollupKind, since: number): Promise<number>;
+  /** Record this person's notice: `rolledUp` means it waits for a Bulk summary instead of being sent. */
+  recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean): Promise<void>;
+  /** Everyone waiting for a Bulk summary of this kind, oldest first. */
+  listRolledUp(kind: RollupKind): Promise<RolledUpNotice[]>;
+  /** Stop these people waiting, once their Bulk summary went out. */
+  clearRolledUp(kind: RollupKind, ctUserIds: readonly number[]): Promise<void>;
+}

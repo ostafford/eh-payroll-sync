@@ -9,7 +9,15 @@ import { parseFieldMap } from "../../src/mapping/schema.js";
 import type { ConnecteamUser } from "../../src/mapping/apply.js";
 import { syntheticUser } from "../fixtures/connecteam-user.js";
 import type { SyncDeps } from "../../src/sync/consumer.js";
-import type { Baseline, EmployeeLink, EmployeeLinkPatch, PendingLink, SyncLogEntry } from "../../src/sync/gateway.js";
+import type {
+  Baseline,
+  EmployeeLink,
+  EmployeeLinkPatch,
+  PendingLink,
+  RollupGateway,
+  RollupKind,
+  SyncLogEntry,
+} from "../../src/sync/gateway.js";
 
 export const fieldMap = parseFieldMap(
   JSON.parse(
@@ -24,12 +32,15 @@ export const cloneUser = (): ConnecteamUser => structuredClone(syntheticUser);
 export function fakeGateway(
   seed: Partial<EmployeeLink> = {},
   approved = true,
-): SyncDeps["store"] & {
+): SyncDeps["store"] &
+  RollupGateway & {
   rows: Map<number, EmployeeLink>;
   log: SyncLogEntry[];
   counters: Map<string, number>;
   meta: Map<string, number>;
   pending: Map<number, PendingLink>;
+  /** `notice_rollup`, keyed `${kind}:${ctUserId}` (#193). */
+  rollups: Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean }>;
 } {
   const rows = new Map<number, EmployeeLink>();
   if (seed.ctUserId !== undefined) {
@@ -53,12 +64,32 @@ export function fakeGateway(
   const counters = new Map<string, number>();
   const meta = new Map<string, number>();
   const pending = new Map<number, PendingLink>();
+  const rollups = new Map<string, { kind: RollupKind; ctUserId: number; at: number; rolledUp: boolean }>();
   return {
     rows,
     log,
     counters,
     meta,
     pending,
+    rollups,
+    async countRecentNotices(kind: RollupKind, since: number) {
+      return [...rollups.values()].filter((r) => r.kind === kind && r.at >= since).length;
+    },
+    async recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean) {
+      rollups.set(`${kind}:${ctUserId}`, { kind, ctUserId, at, rolledUp });
+    },
+    async listRolledUp(kind: RollupKind) {
+      return [...rollups.values()]
+        .filter((r) => r.kind === kind && r.rolledUp)
+        .sort((a, b) => a.at - b.at)
+        .map(({ ctUserId, at }) => ({ ctUserId, at }));
+    },
+    async clearRolledUp(kind: RollupKind, ctUserIds: readonly number[]) {
+      for (const id of ctUserIds) {
+        const r = rollups.get(`${kind}:${id}`);
+        if (r) r.rolledUp = false;
+      }
+    },
     async getPendingLink(id: number) {
       return pending.get(id) ?? null;
     },
@@ -137,6 +168,11 @@ export function fakeGateway(
       return log.filter((l) => l.ctUserId === id && l.outcome === "correction").at(-1)?.detail ?? null;
     },
   };
+}
+
+/** Seed other people's Held or Link notices, recorded (sent) at these times (#193). Their ids run from 1. */
+export function recentNotices(store: ReturnType<typeof fakeGateway>, kind: RollupKind, ...at: number[]): void {
+  at.forEach((t, i) => store.rollups.set(`${kind}:${i + 1}`, { kind, ctUserId: i + 1, at: t, rolledUp: false }));
 }
 
 export interface EhStub {

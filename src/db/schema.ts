@@ -2,7 +2,7 @@
  * D1 schema. Holds identifiers, sync bookkeeping and an audit trail only -
  * never a TFN, bank detail or any other employee value. Keep it that way.
  */
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, primaryKey } from "drizzle-orm/sqlite-core";
 
 /** Connecteam user <-> Employment Hero employee, plus per-person sync state. */
 export const employeeMap = sqliteTable("employee_map", {
@@ -74,3 +74,19 @@ export const syncMeta = sqliteTable("sync_meta", {
   num: integer("num").notNull().default(0),
   updatedAt: integer("updated_at").notNull(),
 });
+
+/**
+ * Who got a Held or Link notice recently, and who waits for a Bulk summary
+ * instead (#193, ADR-0013). One row per person per kind. Identifiers and times only.
+ */
+export const noticeRollup = sqliteTable(
+  "notice_rollup",
+  {
+    kind: text("kind", { enum: ["existing_match", "link"] }).notNull(),
+    ctUserId: integer("ct_user_id").notNull(),
+    /** When their latest notice of this kind was sent or rolled up (epoch ms). */
+    at: integer("at").notNull(),
+    rolledUp: integer("rolled_up", { mode: "boolean" }).notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.kind, t.ctUserId] }), index("idx_notice_rollup_kind_at").on(t.kind, t.at)],
+);

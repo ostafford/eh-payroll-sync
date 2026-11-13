@@ -430,6 +430,26 @@ export function linkNoticeMessage(
   );
 }
 
+/**
+ * Bulk summary -> the admin channel (#193, ADR-0013): one message for everyone
+ * whose Held or Link notice rolled up in a burst. A count only, never names:
+ * the link stage lists each Held person, and a list would be the flood again.
+ */
+export function bulkSummaryMessage(kind: "existing_match" | "link", count: number): string {
+  const one = count === 1;
+  if (kind === "link") {
+    return sections(
+      `🔗 ${count} more Pre-existing ${one ? "employee is" : "employees are"} now linked to Employment Hero.`,
+      "For each, only the Payroll ID was set, or nothing was written if Employment Hero already had it. From now on, only what they change in Connecteam is synced.",
+    );
+  }
+  return sections(
+    `⚠️ Held: ${count} more ${one ? "person" : "people"} may already be in Employment Hero, so nothing was written for them.`,
+    `➡️ To fix: re-run the setup wizard's link stage, which lists ${one ? "them" : "each of them"}, and either link them to the right employee or mark them **New hire, not this person**.`,
+    EXISTING_MATCH_FOOT[1]!,
+  );
+}
+
 /** Why a confirmed link couldn't be made. EH ids and Connecteam ids only, never a value. */
 export type LinkBlock =
   | { kind: "different_payroll_id" }

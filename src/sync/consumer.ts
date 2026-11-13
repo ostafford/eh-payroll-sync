@@ -71,7 +71,8 @@ import {
   CORRECTION_NOTICE_DEDUPE_MS,
   NO_EMPLOYEE,
 } from "./notices.js";
-import type { Baseline, EmployeeLink, LinkGateway, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
+import type { Baseline, EmployeeLink, LinkGateway, RollupGateway, SyncGateway, SyncOutcomeLabel } from "./gateway.js";
+import { inBurst } from "./rollup.js";
 
 export interface SyncDeps {
   ct: Pick<
@@ -82,8 +83,12 @@ export interface SyncDeps {
   /**
    * `getPendingLink`: a confirmed link is made on the first approval, and a
    * "New hire, not this person" row skips the Pre-create check.
+   * `countRecentNotices` / `recordNotice`: a burst of Held or Link notices
+   * rolls up into one Bulk summary (#193).
    */
-  store: SyncGateway & Pick<LinkGateway, "getPendingLink" | "completeLink" | "saveBaseline">;
+  store: SyncGateway &
+    Pick<LinkGateway, "getPendingLink" | "completeLink" | "saveBaseline"> &
+    Pick<RollupGateway, "countRecentNotices" | "recordNotice">;
   /** `BASELINE_KEY`: keys a Linked employee's Baseline fingerprints (ADR-0009). */
   baselineKey: string;
   fieldMap: FieldMap;
@@ -616,15 +621,21 @@ async function holdExisting(
   // not the payload hash: a later profile edit that changes none of that
   // doesn't repost it within the window, nor does the daily recheck's re-run
   // (#155). The digest is the reminder (#143 item 5). A hold with no hint keeps the key it had before hints.
+  // In a burst (#193) each part is still claimed, so a re-run skips it, but
+  // not sent: the person is recorded for the Bulk summary instead.
   const shown = [detail, ...(held.notes ?? [])];
+  let rollUp: boolean | undefined;
   for (const [i, text] of existingMatchMessages(person, matches, held.notes).entries()) {
     const key = await noticeKey("existing_match", ctUserId, i === 0 ? shown : [...shown, `part ${i + 1}`]);
     if (!(await shouldPostNotice(deps.store, key, HELD_NOTICE_DEDUPE_MS, held.now))) continue;
+    rollUp ??= await inBurst(deps.store, "existing_match", held.now);
+    if (rollUp) continue;
     const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
       deps.ct.sendChannelMessage(deps.adminChannelId, text),
     );
     if (!sent) return sendFailed("existing_match");
   }
+  if (rollUp !== undefined) await deps.store.recordNotice("existing_match", ctUserId, held.now, rollUp);
   await deps.store.saveEmployeeLink({
     ctUserId,
     ehEmployeeId: held.storedEhEmployeeId,
@@ -712,10 +723,16 @@ async function linkOnApproval(
 
   const key = await noticeKey("link", ctUserId, [ehEmployeeId]);
   if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, linking.now)) {
-    const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
-      deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt, linking.differs)),
-    );
-    if (!sent) return sendFailed("link");
+    // In a burst a plain notice rolls up into the Bulk summary (#193). One
+    // naming details that differ asks the admin to check them, so it's sent.
+    const rollUp = !linking.differs?.length && (await inBurst(deps.store, "link", linking.now));
+    if (!rollUp) {
+      const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
+        deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt, linking.differs)),
+      );
+      if (!sent) return sendFailed("link");
+    }
+    await deps.store.recordNotice("link", ctUserId, linking.now, rollUp);
   }
 
   await deps.store.completeLink(

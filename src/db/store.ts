@@ -4,14 +4,17 @@
  * unit tests use a fake gateway instead.
  */
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, notExists, sql } from "drizzle-orm";
-import { employeeMap, onboardingState, pendingLink, syncLog, syncMeta } from "./schema.js";
+import { and, asc, count, desc, eq, exists, gte, inArray, isNotNull, isNull, notExists, sql } from "drizzle-orm";
+import { employeeMap, noticeRollup, onboardingState, pendingLink, syncLog, syncMeta } from "./schema.js";
 import type {
   Baseline,
   EmployeeLink,
   EmployeeLinkPatch,
   LinkGateway,
   PendingLink,
+  RolledUpNotice,
+  RollupGateway,
+  RollupKind,
   SyncGateway,
   SyncLogEntry,
 } from "../sync/gateway.js";
@@ -19,7 +22,10 @@ import type { OnboardingStateRow } from "../cron/sweep.js";
 import type { OnboardingAssignment } from "../connecteam/types.js";
 import { ROSTER_QUERY_SQL, parseRosterRows, type RosterRow } from "../status/roster.js";
 
-export class SyncStore implements SyncGateway, LinkGateway {
+/** People cleared per query: under D1's 100 bound parameters, with room for the kind. */
+const CLEAR_CHUNK = 90;
+
+export class SyncStore implements SyncGateway, LinkGateway, RollupGateway {
   readonly #db: DrizzleD1Database;
   readonly #raw: D1Database;
 
@@ -310,6 +316,45 @@ export class SyncStore implements SyncGateway, LinkGateway {
     const rows = await this.#db.select().from(syncMeta);
     const found = new Map(rows.map((r) => [r.key, r.num]));
     return Object.fromEntries(keys.map((k) => [k, found.get(k) ?? 0]));
+  }
+
+  // --- Bulk summary (#193, ADR-0013) ---
+
+  async countRecentNotices(kind: RollupKind, since: number): Promise<number> {
+    const [row] = await this.#db
+      .select({ n: count() })
+      .from(noticeRollup)
+      .where(and(eq(noticeRollup.kind, kind), gte(noticeRollup.at, since)));
+    return row?.n ?? 0;
+  }
+
+  /** One row per person and kind: a later notice replaces the earlier one. */
+  async recordNotice(kind: RollupKind, ctUserId: number, at: number, rolledUp: boolean): Promise<void> {
+    await this.#db
+      .insert(noticeRollup)
+      .values({ kind, ctUserId, at, rolledUp })
+      .onConflictDoUpdate({ target: [noticeRollup.kind, noticeRollup.ctUserId], set: { at, rolledUp } });
+  }
+
+  async listRolledUp(kind: RollupKind): Promise<RolledUpNotice[]> {
+    return this.#db
+      .select({ ctUserId: noticeRollup.ctUserId, at: noticeRollup.at })
+      .from(noticeRollup)
+      .where(and(eq(noticeRollup.kind, kind), eq(noticeRollup.rolledUp, true)))
+      .orderBy(asc(noticeRollup.at), asc(noticeRollup.ctUserId));
+  }
+
+  /**
+   * The rows stay, so a cleared notice still counts toward a burst. In chunks:
+   * D1 allows 100 bound parameters a query, and a go-live summary counts more.
+   */
+  async clearRolledUp(kind: RollupKind, ctUserIds: readonly number[]): Promise<void> {
+    for (let i = 0; i < ctUserIds.length; i += CLEAR_CHUNK) {
+      await this.#db
+        .update(noticeRollup)
+        .set({ rolledUp: false })
+        .where(and(eq(noticeRollup.kind, kind), inArray(noticeRollup.ctUserId, ctUserIds.slice(i, i + CLEAR_CHUNK))));
+    }
   }
 
   // --- sync-status roster (issue #44) ---
