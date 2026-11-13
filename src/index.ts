@@ -216,8 +216,7 @@ async function maybeRunBulkSummaries(
   sweepStatus: "ok" | "skipped" | "retry",
 ): Promise<void> {
   if (sweepStatus !== "ok") return;
-  const result = await runBulkSummaries({ store, ct, adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID });
-  if (result.existing_match !== "none" || result.link !== "none") logEvent({ evt: "bulk_summary", ...result });
+  await runBulkSummaries({ store, ct, adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID });
 }
 
 /**

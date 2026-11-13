@@ -142,6 +142,22 @@ describe("runBulkSummaries (#193)", () => {
     expect((await summarise(store, ct, NOW + MINUTE)).result.link).toBe("sent");
   });
 
+  it("logs the tick's results when only an Admin success summary went out (#199)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await summarise(waiting("admin_success", NOW - 10 * MINUTE));
+    const events = log.mock.calls.flat().map((line) => JSON.parse(String(line)));
+    log.mockRestore();
+
+    expect(events).toContainEqual(expect.objectContaining({ evt: "bulk_summary", admin_success: "sent" }));
+  });
+
+  it("logs nothing on a tick with nobody waiting", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await summarise(fakeGateway());
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
   it("doesn't post a summary twice when the tick that sent it crashed before clearing (ADR-0007)", async () => {
     const store = waiting("existing_match", NOW - 10 * MINUTE, NOW - 10 * MINUTE);
     const ct = fakeCt(null);
