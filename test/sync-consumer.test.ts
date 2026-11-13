@@ -414,6 +414,28 @@ describe("runSyncJob - Pre-create check (ADR-0010, #149)", () => {
       expect(store.rollups.get("existing_match:17760356")).toMatchObject({ rolledUp: true });
     });
 
+    it("finishes a split notice one by one when a burst starts between its parts", async () => {
+      const store = heldEarlier();
+      const candidates = Array.from({ length: 8 }, (_, i) => inEh(40001 + i, { status: "Terminated" }));
+      const eh = fakeEh({ get: NONE, existing: { emailAddress: candidates } });
+      const ct = fakeCt(cloneUser());
+      const send = ct.sendChannelMessage.bind(ct);
+      let calls = 0;
+      ct.sendChannelMessage = (async (id: string, text: string) =>
+        ++calls === 2 ? { outcome: "retryable", status: 503, detail: "down" } : send(id, text)) as typeof ct.sendChannelMessage;
+      const hold = () => runSyncJob(job(), deps({ store, eh, ct, now: () => NOW }));
+
+      expect(await hold()).toMatchObject({ status: "retry" });
+      expect(ct.channels.map((c) => c.text.slice(0, 8))).toEqual(["(1 of 2)"]);
+      // Three others are posted before the queue's retry: a burst is now on.
+      recentNotices(store, "existing_match", NOW, NOW, NOW);
+
+      expect(await hold()).toMatchObject({ status: "held" });
+
+      expect(ct.channels.map((c) => c.text.slice(0, 8))).toEqual(["(1 of 2)", "(2 of 2)"]);
+      expect(store.rollups.get("existing_match:17760356")).toMatchObject({ rolledUp: false });
+    });
+
     it("records a sent notice only once it went out", async () => {
       const store = heldEarlier();
       const ct = fakeCt(cloneUser());

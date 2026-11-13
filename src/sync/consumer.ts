@@ -624,13 +624,18 @@ async function holdExisting(
   // (#155). The digest is the reminder (#143 item 5). A hold with no hint keeps the key it had before hints.
   // In a burst (#193) each part is still claimed, so a re-run skips it, but
   // not sent: the person is recorded for the Bulk summary instead. Counted
-  // before any claim, so a failed count leaves nothing claimed.
+  // before any claim, so a failed count leaves nothing claimed. A notice whose
+  // earlier part already went out (a retry after a later part failed) is
+  // finished one by one, so the admin never gets half of it.
   const shown = [detail, ...(held.notes ?? [])];
-  const rollUp = await inBurst(deps.store, "existing_match", held.now);
+  let rollUp = await inBurst(deps.store, "existing_match", held.now);
   const claimed: string[] = [];
   for (const [i, text] of existingMatchMessages(person, matches, held.notes).entries()) {
     const key = await noticeKey("existing_match", ctUserId, i === 0 ? shown : [...shown, `part ${i + 1}`]);
-    if (!(await shouldPostNotice(deps.store, key, HELD_NOTICE_DEDUPE_MS, held.now))) continue;
+    if (!(await shouldPostNotice(deps.store, key, HELD_NOTICE_DEDUPE_MS, held.now))) {
+      rollUp = false;
+      continue;
+    }
     claimed.push(key);
     if (rollUp) continue;
     const sent = await sendClaimed(deps.store, key, ctUserId, "existing_match", () =>
