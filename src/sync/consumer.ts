@@ -84,8 +84,8 @@ export interface SyncDeps {
   /**
    * `getPendingLink`: a confirmed link is made on the first approval, and a
    * "New hire, not this person" row skips the Pre-create check.
-   * `countRecentNotices` / `recordNotice`: a burst of Existing-match or Link notices
-   * rolls up into one Bulk summary (#193).
+   * `countRecentNotices` / `recordNotice`: a burst of Existing-match, Link or Admin success
+   * notices rolls up into one Bulk summary (#193, #199).
    */
   store: SyncGateway &
     Pick<LinkGateway, "getPendingLink" | "completeLink" | "saveBaseline"> &
@@ -512,12 +512,21 @@ async function settle(
     // A follow-up posts its own notice to the channel below, which already
     // says the sync completed, so the ✅ is only for a clean sync.
     if (success && adminSuccess && decision.kind === "ok") {
+      // In a burst a first sync's ✅ rolls up into the Bulk summary (#199). A
+      // fixed Correction names what was fixed and comes one at a time, so it's
+      // always sent and never counted. Counted before the claim, as for a Link notice.
+      const at = now();
+      const firstSync = success.kind === "first";
+      const rollUp = firstSync && (await inBurst(deps.store, "admin_success", at));
       const key = await noticeKey("admin_success", ctUserId, [hash]);
-      if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, now())) {
-        const sent = await sendClaimed(deps.store, key, ctUserId, "admin_success", () =>
-          deps.ct.sendChannelMessage(deps.adminChannelId, adminSuccessText(success, person)),
-        );
-        if (!sent) return sendFailed("admin_success");
+      if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, at)) {
+        if (!rollUp) {
+          const sent = await sendClaimed(deps.store, key, ctUserId, "admin_success", () =>
+            deps.ct.sendChannelMessage(deps.adminChannelId, adminSuccessText(success, person)),
+          );
+          if (!sent) return sendFailed("admin_success");
+        }
+        if (firstSync) await recordRollup(deps.store, "admin_success", ctUserId, at, rollUp, [key]);
       }
     }
     await advanceCycle(deps.store, ctUserId, decision);
@@ -1148,7 +1157,7 @@ export async function handleDeadLetter(
 }
 
 /**
- * Record an Existing-match or Link notice in `notice_rollup` (#193). A rolled-up notice's
+ * Record an Existing-match, Link or Admin success notice in `notice_rollup` (#193, #199). A rolled-up notice's
  * record stands in for its send, so a failed write releases its claims and the
  * job's retry rolls it up. A sent notice keeps its claim, so the retry doesn't
  * post it again; it just goes uncounted toward a burst.

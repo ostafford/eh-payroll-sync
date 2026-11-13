@@ -433,7 +433,7 @@ export function linkNoticeMessage(
 
 /**
  * Bulk summary -> the admin channel (#193, ADR-0013): one message for everyone
- * whose Existing-match or Link notice rolled up in a burst. A count only, never names:
+ * whose Existing-match, Link or Admin success notice rolled up in a burst (#199). A count only, never names:
  * the link stage lists each Held person, and a list would be the flood again.
  */
 export function bulkSummaryMessage(kind: RollupKind, count: number): string {
@@ -450,6 +450,11 @@ export function bulkSummaryMessage(kind: RollupKind, count: number): string {
       return sections(
         `🔗 ${count} more Pre-existing ${one ? "employee is" : "employees are"} now linked to Employment Hero.`,
         "For each, only the Payroll ID was set, or nothing was written if Employment Hero already had it. From now on, only what they change in Connecteam is synced.",
+      );
+    case "admin_success":
+      return sections(
+        `✅ ${count} more ${one ? "employee has" : "employees have"} synced to Employment Hero.`,
+        `\`GET /status\` lists ${one ? "them" : "each of them"}, as ready.`,
       );
   }
 }

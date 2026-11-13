@@ -25,8 +25,9 @@ When the integration's behaviour changes, update this file in the same PR as
   differently; we set the path to match your app."
 - **The alerts group sees each new hire land.** "When someone first syncs, or
   fixes something they were asked to, a ✅ with their name goes to the alerts
-  group. On go-live day every existing employee syncs at once, so we usually
-  switch the ✅ on after that first run so the group isn't flooded."
+  group. On go-live day every existing employee syncs at once, so after the
+  first few the rest are counted in one summary message instead of flooding
+  the group."
 - **Every message says it's automated.** "Messages come from 'Employment Hero
   Sync (Automated)' and end with a line saying they were sent automatically,
   so nobody thinks a colleague is writing to them. You can change that line to

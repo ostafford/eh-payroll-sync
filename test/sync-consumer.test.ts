@@ -2764,6 +2764,69 @@ describe("runSyncJob - employee success message (issue #71)", () => {
     expect(channelTexts(b)).toEqual([ADMIN_FIRST]);
   });
 
+  // In a burst (#199, ADR-0013) a first sync's ✅ rolls up into the Bulk summary.
+  const burst = (store: ReturnType<typeof fakeGateway>) =>
+    recentNotices(store, "admin_success", 1_000_000 - 60_000, 1_000_000 - 60_000, 1_000_000 - 60_000);
+
+  it("admin ✅: a first sync in a burst rolls up: nothing posted, the employee still DMed", async () => {
+    const store = fakeGateway();
+    burst(store);
+    const ct = fakeCt(cloneUser());
+
+    expect((await runSyncJob(job(), deps({ store, ct: ct as never }))).status).toBe("synced");
+
+    expect(ct.channels).toEqual([]);
+    expect(dmsTo(ct)).toEqual([FIRST]);
+    expect(store.rollups.get("admin_success:17760356")).toEqual({ kind: "admin_success", ctUserId: 17760356, at: 1_000_000, rolledUp: true });
+  });
+
+  it("admin ✅: records a first sync's ✅ it posted, so it counts toward a burst", async () => {
+    const store = fakeGateway();
+    await runSyncJob(job(), deps({ store, ct: fakeCt(cloneUser()) as never }));
+    expect(store.rollups.get("admin_success:17760356")).toEqual({ kind: "admin_success", ctUserId: 17760356, at: 1_000_000, rolledUp: false });
+  });
+
+  it("admin ✅: doesn't record a ✅ that failed to post", async () => {
+    const store = fakeGateway();
+    const ct = fakeCt(cloneUser());
+    ct.failSends.set("chan-1", 1);
+    expect((await runSyncJob(job(), deps({ store, ct: ct as never }))).status).toBe("retry");
+    expect(store.rollups.has("admin_success:17760356")).toBe(false);
+  });
+
+  it("admin ✅: rolls up on the retry after a D1 error recording it, without DMing the employee twice", async () => {
+    const store = fakeGateway();
+    burst(store);
+    store.failRollup.record = 1;
+    const ct = fakeCt(cloneUser());
+    const attempt = () => runSyncJob(job(), deps({ store, ct: ct as never }));
+
+    await expect(attempt()).rejects.toThrow("D1 unavailable");
+    expect((await attempt()).status).toBe("synced");
+
+    expect(ct.channels).toEqual([]);
+    expect(dmsTo(ct)).toEqual([FIRST]);
+    expect(store.rollups.get("admin_success:17760356")).toMatchObject({ rolledUp: true });
+  });
+
+  it("admin ✅: switched off, it's neither posted nor counted", async () => {
+    const store = fakeGateway();
+    const noAdmin = parseFieldMap({ ...fieldMap, messages: { adminSuccess: false } });
+    await runSyncJob(job(), deps({ store, ct: fakeCt(cloneUser()) as never, fieldMap: noAdmin }));
+    expect(store.rollups.has("admin_success:17760356")).toBe(false);
+  });
+
+  it("admin ✅: a fixed Correction is posted even in a burst, and doesn't count toward one", async () => {
+    const store = inCorrection("bankAccounts[0].bsb");
+    burst(store);
+    const ct = fakeCt(cloneUser());
+
+    await runSyncJob(job({ eventTimestamp: 2000 }), deps({ store, ct: ct as never }));
+
+    expect(channelTexts(ct)).toEqual(["✅ Sam Rivera (17760356) fixed their bank details and has now synced to Employment Hero."]);
+    expect(store.rollups.has("admin_success:17760356")).toBe(false);
+  });
+
   it("the Correction message names the client's own profile path", async () => {
     const custom = parseFieldMap({ ...fieldMap, messages: { profilePath: "Profile > Payroll Details" } });
     const ct = fakeCt(cloneUser());

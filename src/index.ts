@@ -205,8 +205,8 @@ async function maybeRunRecheck(
 }
 
 /**
- * Each tick, post a Bulk summary for any burst of Existing-match or Link notices that
- * has gone quiet (#193, ADR-0013). Gated like the recheck: a tick the sweep
+ * Each tick, post a Bulk summary for any burst of Existing-match, Link or Admin success
+ * notices that has gone quiet (#193, #199, ADR-0013). Gated like the recheck: a tick the sweep
  * yielded leaves everyone waiting for the next one.
  */
 async function maybeRunBulkSummaries(
@@ -216,8 +216,7 @@ async function maybeRunBulkSummaries(
   sweepStatus: "ok" | "skipped" | "retry",
 ): Promise<void> {
   if (sweepStatus !== "ok") return;
-  const result = await runBulkSummaries({ store, ct, adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID });
-  if (result.existing_match !== "none" || result.link !== "none") logEvent({ evt: "bulk_summary", ...result });
+  await runBulkSummaries({ store, ct, adminChannelId: env.ADMIN_CONNECTEAM_CHANNEL_ID });
 }
 
 /**

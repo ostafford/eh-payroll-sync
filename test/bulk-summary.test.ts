@@ -36,14 +36,23 @@ describe("bulkSummaryMessage (#193)", () => {
     );
   });
 
+  it("counts the employees who synced and says where each is listed (#199)", () => {
+    expect(bulkSummaryMessage("admin_success", 12)).toBe(
+      "✅ 12 more employees have synced to Employment Hero.\n\n`GET /status` lists each of them, as ready.",
+    );
+  });
+
   it("reads right for one person", () => {
     expect(bulkSummaryMessage("existing_match", 1)).toContain("⚠️ Held: 1 more person may already be in Employment Hero");
     expect(bulkSummaryMessage("existing_match", 1)).toContain("which lists them,");
     expect(bulkSummaryMessage("link", 1)).toContain("🔗 1 more Pre-existing employee is now linked");
+    expect(bulkSummaryMessage("admin_success", 1)).toBe(
+      "✅ 1 more employee has synced to Employment Hero.\n\n`GET /status` lists them, as ready.",
+    );
   });
 
   it("fits one Connecteam message, so the clamp never cuts the fix off", () => {
-    for (const kind of ["existing_match", "link"] as const) expect(bulkSummaryMessage(kind, 99_999).length).toBeLessThanOrEqual(500);
+    for (const kind of ["existing_match", "link", "admin_success"] as const) expect(bulkSummaryMessage(kind, 99_999).length).toBeLessThanOrEqual(500);
   });
 
   it("never names anyone: a count only", () => {
@@ -54,7 +63,7 @@ describe("bulkSummaryMessage (#193)", () => {
 describe("runBulkSummaries (#193)", () => {
   it("sends nothing when nobody is waiting", async () => {
     const { result, ct } = await summarise(fakeGateway());
-    expect(result).toEqual({ existing_match: "none", link: "none" });
+    expect(result).toEqual({ existing_match: "none", link: "none", admin_success: "none" });
     expect(ct.channels).toEqual([]);
   });
 
@@ -89,10 +98,16 @@ describe("runBulkSummaries (#193)", () => {
   it("posts each kind as its own summary", async () => {
     const store = waiting("existing_match", NOW - 10 * MINUTE);
     store.rollups.set("link:201", { kind: "link", ctUserId: 201, at: NOW - 10 * MINUTE, rolledUp: true });
+    store.rollups.set("admin_success:301", { kind: "admin_success", ctUserId: 301, at: NOW - 10 * MINUTE, rolledUp: true });
+    store.rollups.set("admin_success:302", { kind: "admin_success", ctUserId: 302, at: NOW - 10 * MINUTE, rolledUp: true });
     const { result, ct } = await summarise(store);
 
-    expect(result).toEqual({ existing_match: "sent", link: "sent" });
-    expect(ct.channels.map((c) => c.text)).toEqual([bulkSummaryMessage("existing_match", 1), bulkSummaryMessage("link", 1)]);
+    expect(result).toEqual({ existing_match: "sent", link: "sent", admin_success: "sent" });
+    expect(ct.channels.map((c) => c.text)).toEqual([
+      bulkSummaryMessage("existing_match", 1),
+      bulkSummaryMessage("link", 1),
+      bulkSummaryMessage("admin_success", 2),
+    ]);
   });
 
   it("keeps them waiting when the send fails, and the next tick sends it", async () => {
@@ -125,6 +140,22 @@ describe("runBulkSummaries (#193)", () => {
     log.mockRestore();
 
     expect((await summarise(store, ct, NOW + MINUTE)).result.link).toBe("sent");
+  });
+
+  it("logs the tick's results when only an Admin success summary went out (#199)", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await summarise(waiting("admin_success", NOW - 10 * MINUTE));
+    const events = log.mock.calls.flat().map((line) => JSON.parse(String(line)));
+    log.mockRestore();
+
+    expect(events).toContainEqual(expect.objectContaining({ evt: "bulk_summary", admin_success: "sent" }));
+  });
+
+  it("logs nothing on a tick with nobody waiting", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await summarise(fakeGateway());
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
   });
 
   it("doesn't post a summary twice when the tick that sent it crashed before clearing (ADR-0007)", async () => {

@@ -1,6 +1,6 @@
 /**
- * Bulk summary (#193, ADR-0013): when many people get the same Existing-match or Link
- * notice in a burst, post one summary instead of one message each.
+ * Bulk summary (#193, ADR-0013): when many people get the same Existing-match, Link or
+ * Admin success notice (#199) in a burst, post one summary instead of one message each.
  *
  * Each notice is sent from its own queue job, and a go-live drains the backlog
  * 20 approvals a tick, so no one invocation ever sees "many". The count lives
@@ -13,6 +13,7 @@
  * just under it, so a burst may post a few more than 3 one by one.
  */
 import type { ConnecteamClient } from "../connecteam/client.js";
+import { logEvent } from "../log.js";
 import { ROLLUP_KINDS, type RollupGateway, type RollupKind, type SyncGateway } from "./gateway.js";
 import { bulkSummaryMessage } from "./messages.js";
 import { noticeKey, sendClaimed, NO_EMPLOYEE } from "./notices.js";
@@ -59,7 +60,8 @@ function summaryKey(kind: RollupKind, summaryAt: number): Promise<string> {
  * statement, then the summary is claimed, sent and they are cleared. A tick
  * that crashed partway leaves them picked: the next tick clears them if the
  * claim shows the summary went out, or puts them back to waiting if it
- * didn't, so nobody is counted twice. A failed send releases both.
+ * didn't, so nobody is counted twice. A failed send releases both. Logs the
+ * tick's results whenever any kind had someone waiting.
  */
 export async function runBulkSummaries(deps: BulkSummaryDeps): Promise<Record<RollupKind, BulkSummaryResult>> {
   const now = (deps.now ?? Date.now)();
@@ -92,6 +94,7 @@ export async function runBulkSummaries(deps: BulkSummaryDeps): Promise<Record<Ro
     await deps.store.clearSummary(kind, now);
     result[kind] = "sent";
   }
+  if (ROLLUP_KINDS.some((kind) => result[kind] !== "none")) logEvent({ evt: "bulk_summary", ...result });
   return result;
 }
 
