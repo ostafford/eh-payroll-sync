@@ -30,6 +30,8 @@ interface WorldOpts {
   ctDown?: boolean;
   /** What every Pre-create check filter returns (default: nobody). */
   existing?: Array<Record<string, unknown>>;
+  /** The id Employment Hero gives a new employee (default 987). */
+  ehId?: number;
 }
 
 /** A tiny in-memory Employment Hero + Connecteam, driven through the real clients. */
@@ -37,6 +39,7 @@ function world(opts: WorldOpts = {}) {
   let record: Record<string, unknown> | null = null;
   const sent = { dms: [] as Array<{ userId: number; text: string }>, channels: [] as Array<{ id: string; text: string }> };
   const ctUser = "ctUser" in opts ? opts.ctUser : syntheticUser;
+  const ehId = opts.ehId ?? 987;
 
   const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
@@ -52,9 +55,9 @@ function world(opts: WorldOpts = {}) {
     }
     if (method === "POST" && u.endsWith("/employee/unstructured?matchType=None")) {
       if (opts.ehValidationMessage) return json(400, { message: opts.ehValidationMessage });
-      record = { id: 987, ...bodyJson, status: opts.ehStatus ?? "Active" };
+      record = { id: ehId, ...bodyJson, status: opts.ehStatus ?? "Active" };
       return json(201, {
-        id: 987,
+        id: ehId,
         status: opts.ehStatus ?? "Active",
         detailedStatus: opts.ehDetailedStatus ?? null,
         operationType: "Create",
@@ -62,9 +65,9 @@ function world(opts: WorldOpts = {}) {
     }
     if (method === "PUT" && u.includes("/employee/unstructured/")) {
       if (opts.ehValidationMessage) return json(400, { message: opts.ehValidationMessage });
-      record = { ...record, ...bodyJson, id: 987, status: opts.ehStatus ?? "Active" };
+      record = { ...record, ...bodyJson, id: ehId, status: opts.ehStatus ?? "Active" };
       return json(200, {
-        id: 987,
+        id: ehId,
         status: opts.ehStatus ?? "Active",
         detailedStatus: opts.ehDetailedStatus ?? null,
         operationType: "Update",
@@ -180,9 +183,33 @@ describe("queue consumer (in workerd, real D1)", () => {
     expect(await summary.store.listRolledUp("existing_match")).toEqual([]);
   });
 
+  it("posts the first 3 new hires' ✅ of a burst, then one Bulk summary for the rest, through real D1 (#199)", async () => {
+    const posted: string[] = [];
+    const dmed: number[] = [];
+    for (const ctUserId of [1, 2, 3, 4, 5]) {
+      const w = world({ ctUser: { ...syntheticUser, userId: ctUserId }, ehId: 900 + ctUserId });
+      expect(await runSyncJob(job({ ctUserId }), w.deps)).toMatchObject({ status: "synced" });
+      posted.push(...w.sent.channels.map((c) => c.text));
+      dmed.push(...w.sent.dms.map((d) => d.userId));
+    }
+    expect(posted).toHaveLength(3);
+    expect(posted.every((text) => text.startsWith("✅ "))).toBe(true);
+    expect(dmed).toEqual([1, 2, 3, 4, 5]);
+
+    const w = world();
+    const summary = { store: new SyncStore(env.DB), ct: w.deps.ct, adminChannelId: "chan-1" };
+    expect(await runBulkSummaries({ ...summary, now: () => 1_700_000_000_000 + 60_000 })).toMatchObject({ admin_success: "waiting" });
+    expect(await runBulkSummaries({ ...summary, now: () => 1_700_000_000_000 + BULK_SUMMARY_QUIET_MS })).toMatchObject({ admin_success: "sent" });
+
+    expect(w.sent.channels).toEqual([
+      { id: "chan-1", text: "✅ 2 more employees have synced to Employment Hero.\n\n`GET /status` lists each of them, as ready." },
+    ]);
+    expect(await summary.store.listRolledUp("admin_success")).toEqual([]);
+  });
+
   it("detects an EH identity collision (two Connecteam users resolving to the same EH employee id)", async () => {
     // First employee syncs cleanly and owns EH employee 987 (world()'s fake
-    // always assigns id 987, standing in for Employment Hero matching two
+    // assigns id 987 by default, standing in for Employment Hero matching two
     // people by TFN and merging them onto one record).
     await runSyncJob(job({ ctUserId: 17760356 }), world().deps);
 
