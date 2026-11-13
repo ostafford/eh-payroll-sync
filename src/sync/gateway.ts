@@ -181,8 +181,13 @@ export interface StatusGateway extends Pick<SyncGateway, "readMeta" | "setMarker
   listRosterRows(): Promise<RosterRow[]>;
 }
 
-/** The per-person notices a burst rolls up into one Bulk summary (#193). */
-export type RollupKind = "existing_match" | "link";
+/**
+ * The per-person notices a burst rolls up into one Bulk summary (#193): the
+ * one list the type, the `notice_rollup.kind` column and the cron's summaries
+ * all come from.
+ */
+export const ROLLUP_KINDS = ["existing_match", "link"] as const;
+export type RollupKind = (typeof ROLLUP_KINDS)[number];
 
 /** One person a Bulk summary is waiting to count. */
 export interface RolledUpNotice {

@@ -13,7 +13,7 @@
  * just under it, so a burst may post a few more than 3 one by one.
  */
 import type { ConnecteamClient } from "../connecteam/client.js";
-import type { RollupGateway, RollupKind, SyncGateway } from "./gateway.js";
+import { ROLLUP_KINDS, type RollupGateway, type RollupKind, type SyncGateway } from "./gateway.js";
 import { bulkSummaryMessage } from "./messages.js";
 import { noticeKey, sendClaimed, NO_EMPLOYEE } from "./notices.js";
 
@@ -35,8 +35,6 @@ export async function inBurst(
 export const BULK_SUMMARY_QUIET_MS = 3 * 60 * 1000;
 /** Post anyway once the first person has waited this long, so a long drain isn't silent. */
 export const BULK_SUMMARY_MAX_WAIT_MS = 30 * 60 * 1000;
-
-const KINDS: readonly RollupKind[] = ["existing_match", "link"];
 
 export interface BulkSummaryDeps {
   ct: Pick<ConnecteamClient, "sendChannelMessage">;
@@ -66,7 +64,7 @@ function summaryKey(kind: RollupKind, summaryAt: number): Promise<string> {
 export async function runBulkSummaries(deps: BulkSummaryDeps): Promise<Record<RollupKind, BulkSummaryResult>> {
   const now = (deps.now ?? Date.now)();
   const result = {} as Record<RollupKind, BulkSummaryResult>;
-  for (const kind of KINDS) {
+  for (const kind of ROLLUP_KINDS) {
     await recoverCrashedSummaries(deps.store, kind);
     const people = await deps.store.listRolledUp(kind);
     if (people.length === 0) {

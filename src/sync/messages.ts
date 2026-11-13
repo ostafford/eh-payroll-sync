@@ -31,6 +31,7 @@
  */
 import type { EhFieldError, UnusableAnswer } from "../eh/errors.js";
 import type { ExistingMatch, MatchKey } from "./precheck.js";
+import type { RollupKind } from "./gateway.js";
 
 const MAX_LEN = 500;
 
@@ -435,7 +436,7 @@ export function linkNoticeMessage(
  * whose Held or Link notice rolled up in a burst. A count only, never names:
  * the link stage lists each Held person, and a list would be the flood again.
  */
-export function bulkSummaryMessage(kind: "existing_match" | "link", count: number): string {
+export function bulkSummaryMessage(kind: RollupKind, count: number): string {
   const one = count === 1;
   if (kind === "link") {
     return sections(

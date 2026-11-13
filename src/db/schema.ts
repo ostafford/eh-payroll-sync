@@ -3,6 +3,7 @@
  * never a TFN, bank detail or any other employee value. Keep it that way.
  */
 import { sqliteTable, text, integer, index, primaryKey } from "drizzle-orm/sqlite-core";
+import { ROLLUP_KINDS } from "../sync/gateway.js";
 
 /** Connecteam user <-> Employment Hero employee, plus per-person sync state. */
 export const employeeMap = sqliteTable("employee_map", {
@@ -82,7 +83,7 @@ export const syncMeta = sqliteTable("sync_meta", {
 export const noticeRollup = sqliteTable(
   "notice_rollup",
   {
-    kind: text("kind", { enum: ["existing_match", "link"] }).notNull(),
+    kind: text("kind", { enum: ROLLUP_KINDS }).notNull(),
     ctUserId: integer("ct_user_id").notNull(),
     /** When their latest notice of this kind was sent or rolled up (epoch ms). */
     at: integer("at").notNull(),
