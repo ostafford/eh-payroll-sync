@@ -20,7 +20,13 @@
 import type { SyncJob } from "./job.js";
 import type { FieldMap } from "../mapping/schema.js";
 import { FOLLOW_UP } from "../mapping/rules.js";
-import { applyFieldMap, leftOutBy, type ConnecteamUser as MappingUser, type MappingResult } from "../mapping/apply.js";
+import {
+  applyFieldMap,
+  leftOutBy,
+  type ConnecteamUser as MappingUser,
+  type MappingResult,
+  type PayloadValue,
+} from "../mapping/apply.js";
 import type { ConnecteamClient } from "../connecteam/client.js";
 import type { CtResult, PayRate } from "../connecteam/types.js";
 import type { EhPayrollClient, EhResult } from "../eh/client.js";
@@ -58,7 +64,17 @@ import {
 import { runPreCreateCheck, existingMatchDetail, compareKeys, isTerminated, type ExistingMatch, type MatchKey } from "./precheck.js";
 import { advanceCycle, directManagerUserId, MANAGER_ESCALATION_CYCLE } from "./cycles.js";
 import { payloadHash } from "./canonical.js";
-import { baselineKeyId, changedUnits, clearedFields, newUnits, takeBaseline, unitOf } from "./baseline.js";
+import {
+  baselineKeyId,
+  changedUnits,
+  clearedFields,
+  newUnits,
+  takeBaseline,
+  unitOf,
+  UNIT,
+  type GroupUnit,
+  type PayRunKey,
+} from "./baseline.js";
 import { logEvent } from "../log.js";
 import {
   noticeKey,
@@ -356,70 +372,125 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
 
     // Match order: stored link -> externalId (both handled by upsertByExternalId).
     // A create goes out with EH's own merge off (`matchType=None`).
-    const write = await deps.eh.upsertByExternalId(matchKey, mapped.payload, current);
-    // A validation failure isn't retried: it's the employee's to fix (decide below).
-    if (write.outcome === "retryable" || write.outcome === "client_error") return ehRetry(write);
-
-    let readBack: ReadBackResult | undefined;
-    if (write.outcome === "ok") {
-      ehEmployeeId = String(write.data.id);
-      keyToStore = matchKey;
-
-      // Backstop (ADR-0010): creates now go out with `matchType=None` after the
-      // Pre-create check, but EH's unstructured endpoint used to match/merge by
-      // TFN - a write for a brand-new externalId could land on and silently
-      // overwrite an EXISTING employee (even relabelling its externalId). The
-      // read-back below can't catch this: EH relabels the merged record's
-      // externalId too, so a read-back-by-externalId finds exactly what we just
-      // sent. Check employee_map instead.
-      const collidingCtUserId = await deps.store.findByEhEmployeeId(ehEmployeeId);
-      if (collidingCtUserId !== null && collidingCtUserId !== ctUserId) {
-        const key = await noticeKey("collision", ctUserId, [ehEmployeeId]);
-        if (await shouldPostNotice(deps.store, key, SYSTEM_ALERT_NOTICE_DEDUPE_MS, now())) {
-          const text = collisionAlertMessage(
-            ehEmployeeId,
-            person,
-            collidingCtUserId,
-          );
-          const sent = await sendClaimed(deps.store, key, ctUserId, "collision", () =>
-            deps.ct.sendChannelMessage(deps.adminChannelId, text),
-          );
-          // Before the audit row, so the retry doesn't write a second one.
-          if (!sent) return sendFailed("collision");
-        }
-        await deps.store.appendSyncLog({
-          ctUserId,
-          at: now(),
-          outcome: "collision",
-          detail: `collision: EH employee ${ehEmployeeId} already linked to Connecteam user ${collidingCtUserId}`,
-        });
-        // Deliberately not saved as a link and the failure cycle is left
-        // untouched - this isn't a normal sync outcome for this person, it's
-        // two people's records needing a human to untangle them in EH.
-        return {
-          status: "collision",
-          reason: `EH employee ${ehEmployeeId} already linked to Connecteam user ${collidingCtUserId}`,
-        };
-      }
-
-      const rb = await deps.eh.getByExternalId(matchKey);
-      if (rb.outcome === "ok" && rb.data) {
-        readBack = compareReadBack(
-          mapped.payload,
-          rb.data as Record<string, unknown>,
-          readBackFields(deps.fieldMap),
-        );
-      }
-    }
-    decision = decide({
-      write,
+    const step = await writeAndDecide(deps, {
+      matchKey,
+      payload: mapped.payload,
+      ehRecord: current,
       followUps,
       payRunDefaultsComplete: mapped.payRunDefaultsComplete,
-      ...(readBack ? { readBack } : {}),
+      // A merge the write landed on is a collision, not a sync.
+      onAccepted: (writtenId) => collisionOutcome(deps, person, writtenId, now),
     });
+    if ("outcome" in step) return step.outcome;
+    decision = step.decision;
+    if (step.ehEmployeeId !== undefined) {
+      ehEmployeeId = step.ehEmployeeId;
+      keyToStore = matchKey;
+    }
   }
 
   return settle(deps, { link, user, person, hash, decision, ehEmployeeId, keyToStore, eventTimestamp, now });
+}
+
+/** What a sync carries from the start of its job to {@link settle}. */
+interface SyncContext {
+  link: EmployeeLink | null;
+  user: { customFields: Parameters<typeof directManagerUserId>[0] };
+  person: PersonRef;
+  hash: string;
+  eventTimestamp: number;
+  now: () => number;
+}
+
+/**
+ * Write a payload to EH, read back what was sent, and decide: the step a full
+ * sync and a Linked employee's changed-units sync share. `onAccepted` runs
+ * once EH accepts the write, before the read-back: an outcome it returns ends
+ * the sync. `ehEmployeeId` is set only when EH accepted the write. The
+ * re-map against EH's record (#102) stays with each caller: the full sync
+ * needs it before its own checks, a Linked employee only for a changed
+ * pay-run unit.
+ */
+async function writeAndDecide(
+  deps: SyncDeps,
+  request: {
+    matchKey: string;
+    payload: Record<string, PayloadValue>;
+    ehRecord: EhEmployee | null | undefined;
+    followUps: string[];
+    payRunDefaultsComplete: boolean;
+    onAccepted?: (ehEmployeeId: string) => Promise<SyncJobOutcome | null>;
+  },
+): Promise<{ outcome: SyncJobOutcome } | { decision: SyncDecision; ehEmployeeId: string | undefined }> {
+  const result = await deps.eh.upsertByExternalId(request.matchKey, request.payload, request.ehRecord);
+  // A validation failure isn't retried: it's the employee's to fix (decide below).
+  if (result.outcome === "retryable" || result.outcome === "client_error") return { outcome: ehRetry(result) };
+
+  let ehEmployeeId: string | undefined;
+  let readBack: ReadBackResult | undefined;
+  if (result.outcome === "ok") {
+    ehEmployeeId = String(result.data.id);
+    const stop = await request.onAccepted?.(ehEmployeeId);
+    if (stop) return { outcome: stop };
+    // Only what was sent is read back: EH is the source of truth for the rest.
+    const written = await deps.eh.getByExternalId(request.matchKey);
+    if (written.outcome === "ok" && written.data) {
+      readBack = compareReadBack(request.payload, written.data as Record<string, unknown>, readBackFields(deps.fieldMap));
+    }
+  }
+  const decision = decide({
+    write: result,
+    followUps: request.followUps,
+    payRunDefaultsComplete: request.payRunDefaultsComplete,
+    ...(readBack ? { readBack } : {}),
+  });
+  return { decision, ehEmployeeId };
+}
+
+/**
+ * The collision backstop, run once EH accepts a full sync's write: the EH
+ * employee written is already linked to someone else. Null when it isn't.
+ */
+async function collisionOutcome(
+  deps: SyncDeps,
+  person: PersonRef,
+  writtenId: string,
+  now: () => number,
+): Promise<SyncJobOutcome | null> {
+  const { ctUserId } = person;
+  // Backstop (ADR-0010): creates now go out with `matchType=None` after the
+  // Pre-create check, but EH's unstructured endpoint used to match/merge by
+  // TFN - a write for a brand-new externalId could land on and silently
+  // overwrite an EXISTING employee (even relabelling its externalId). The
+  // read-back after it can't catch this: EH relabels the merged record's
+  // externalId too, so a read-back-by-externalId finds exactly what we just
+  // sent. Check employee_map instead.
+  const collidingCtUserId = await deps.store.findByEhEmployeeId(writtenId);
+  if (collidingCtUserId !== null && collidingCtUserId !== ctUserId) {
+    const key = await noticeKey("collision", ctUserId, [writtenId]);
+    if (await shouldPostNotice(deps.store, key, SYSTEM_ALERT_NOTICE_DEDUPE_MS, now())) {
+      const text = collisionAlertMessage(writtenId, person, collidingCtUserId);
+      const sent = await sendClaimed(deps.store, key, ctUserId, "collision", () =>
+        deps.ct.sendChannelMessage(deps.adminChannelId, text),
+      );
+      // Before the audit row, so the retry doesn't write a second one.
+      if (!sent) return sendFailed("collision");
+    }
+    await deps.store.appendSyncLog({
+      ctUserId,
+      at: now(),
+      outcome: "collision",
+      detail: `collision: EH employee ${writtenId} already linked to Connecteam user ${collidingCtUserId}`,
+    });
+    // Deliberately not saved as a link and the failure cycle is left
+    // untouched - this isn't a normal sync outcome for this person, it's
+    // two people's records needing a human to untangle them in EH.
+    return {
+      status: "collision",
+      reason: `EH employee ${writtenId} already linked to Connecteam user ${collidingCtUserId}`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -429,19 +500,13 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
  */
 async function settle(
   deps: SyncDeps,
-  s: {
-    link: EmployeeLink | null;
-    user: { customFields: Parameters<typeof directManagerUserId>[0] };
-    person: PersonRef;
-    hash: string;
+  settling: SyncContext & {
     decision: SyncDecision;
     ehEmployeeId: string | undefined;
     keyToStore: string | null;
-    eventTimestamp: number;
-    now: () => number;
   },
 ): Promise<SyncJobOutcome> {
-  const { link, user, person, hash, decision, ehEmployeeId, keyToStore, eventTimestamp, now } = s;
+  const { link, user, person, hash, decision, ehEmployeeId, keyToStore, eventTimestamp, now } = settling;
   const { ctUserId } = person;
   if (decision.kind === "retry") return { status: "retry", reason: decision.detail };
 
@@ -771,10 +836,10 @@ async function linkOnApproval(
 }
 
 /** The unit each mapping follow-up is about. One not listed here is always posted. */
-const FOLLOW_UP_UNIT: Record<string, string> = {
-  [FOLLOW_UP.nonResident]: "taxDeclaration",
-  [FOLLOW_UP.smsfSuper]: "super",
-  [FOLLOW_UP.internationalAddress]: "residentialAddress",
+const FOLLOW_UP_UNIT: Record<string, GroupUnit> = {
+  [FOLLOW_UP.nonResident]: UNIT.taxDeclaration,
+  [FOLLOW_UP.smsfSuper]: UNIT.super,
+  [FOLLOW_UP.internationalAddress]: UNIT.residentialAddress,
 };
 
 /**
@@ -783,16 +848,11 @@ const FOLLOW_UP_UNIT: Record<string, string> = {
  */
 async function syncChangedUnits(
   deps: SyncDeps,
-  sync: {
+  sync: SyncContext & {
     link: EmployeeLink;
-    user: { customFields: Parameters<typeof directManagerUserId>[0] };
-    person: PersonRef;
     mapped: MappingResult;
     payRate: PayRate | null | undefined;
     matchKey: string;
-    hash: string;
-    eventTimestamp: number;
-    now: () => number;
   },
 ): Promise<SyncJobOutcome> {
   const { link, mapped } = sync;
@@ -840,7 +900,7 @@ async function syncChangedUnits(
   // to the rate, so it isn't marked: once fixed, a rate that differs is sent.
   // A Baseline with no pay-run fingerprint has nothing to differ from.
   const rateUnusable = mapped.payRunIssues.length > 0 && !mapped.payRunBlocking;
-  const payRunUnmapped = rateUnusable && baseline.units.payRun ? ["rate"] : [];
+  const payRunUnmapped: PayRunKey[] = rateUnusable && baseline.units[UNIT.payRun] ? ["rate"] : [];
   const unmapped = [...mapped.issues.map((i) => i.ehField), ...payRunUnmapped];
   const current = await takeBaseline(mapped.payload, deps.fieldMap, deps.baselineKey, unmapped);
   const changed = new Set(changedUnits(baseline, current));
@@ -892,10 +952,10 @@ async function syncChangedUnits(
     // (#102): a `defaults` value EH already holds is left off, so one set by
     // hand survives. An unusable rate sends nothing about pay, whatever EH
     // holds: the Connecteam rate didn't change to anything EH can take.
-    const payRunIssues = changed.has("payRun") && rateUnusable ? mapped.payRunIssues : [];
+    const payRunIssues = changed.has(UNIT.payRun) && rateUnusable ? mapped.payRunIssues : [];
     let sending = mapped;
     let ehRecord: EhEmployee | null | undefined;
-    if (changed.has("payRun") && !rateUnusable) {
+    if (changed.has(UNIT.payRun) && !rateUnusable) {
       const found = await deps.eh.getByExternalId(sync.matchKey);
       if (found.outcome !== "ok") return ehRetry(found);
       ehRecord = found.data;
@@ -909,25 +969,20 @@ async function syncChangedUnits(
       // Only the unusable rate changed: nothing to write, the reasons go to the admin.
       decision = decide({ payRunUnresolved: payRunIssues, followUps });
     } else {
-      const write = await deps.eh.upsertByExternalId(sync.matchKey, payload, ehRecord);
-      if (write.outcome === "retryable" || write.outcome === "client_error") return ehRetry(write);
-      // Only what was sent is read back: EH is the source of truth for the rest.
-      let readBack: ReadBackResult | undefined;
-      if (write.outcome === "ok") {
-        ehEmployeeId = String(write.data.id);
-        // A unit counts as sent only if the write carried a key of it.
-        sent = new Set(Object.keys(payload).map(unitOf));
-        const rb = await deps.eh.getByExternalId(sync.matchKey);
-        if (rb.outcome === "ok" && rb.data) {
-          readBack = compareReadBack(payload, rb.data as Record<string, unknown>, readBackFields(deps.fieldMap));
-        }
-      }
-      decision = decide({
-        write,
+      const step = await writeAndDecide(deps, {
+        matchKey: sync.matchKey,
+        payload,
+        ehRecord,
         followUps: [...payRunIssues, ...followUps],
         payRunDefaultsComplete: sending.payRunDefaultsComplete,
-        ...(readBack ? { readBack } : {}),
       });
+      if ("outcome" in step) return step.outcome;
+      decision = step.decision;
+      if (step.ehEmployeeId !== undefined) {
+        ehEmployeeId = step.ehEmployeeId;
+        // A unit counts as sent only if the write carried a key of it.
+        sent = new Set(Object.keys(payload).map(unitOf));
+      }
     }
   }
 
