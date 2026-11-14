@@ -16,8 +16,24 @@ import { canonicalJson } from "./canonical.js";
 import type { Baseline } from "./gateway.js";
 import type { FieldMap } from "../mapping/schema.js";
 
-/** Every pay-run key the mapping can emit (as `PAY_RUN_ALL` in mapping/apply.ts). */
-const PAY_RUN_KEYS: ReadonlySet<string> = new Set([
+/**
+ * The names of the units that group several EH fields. Any other unit is a
+ * single field, named after it. Use these, not bare strings, so a misspelt
+ * unit fails to compile.
+ */
+export const UNIT = {
+  payRun: "payRun",
+  taxDeclaration: "taxDeclaration",
+  bankAccount1: "bankAccount1",
+  residentialAddress: "residentialAddress",
+  emergencyContact1: "emergencyContact1",
+  super: "super",
+} as const;
+
+/** A unit that groups several EH fields: one of {@link UNIT}. */
+export type GroupUnit = (typeof UNIT)[keyof typeof UNIT];
+
+const PAY_RUN_KEY_LIST = [
   "paySchedule",
   "primaryLocation",
   "primaryPayCategory",
@@ -27,14 +43,20 @@ const PAY_RUN_KEYS: ReadonlySet<string> = new Set([
   "hoursPerWeek",
   "hoursPerDay",
   "awardId",
-]);
+] as const;
+
+/** An EH field in the pay-run unit. */
+export type PayRunKey = (typeof PAY_RUN_KEY_LIST)[number];
+
+/** Every pay-run key the mapping can emit (as `PAY_RUN_ALL` in mapping/apply.ts). */
+const PAY_RUN_KEYS: ReadonlySet<string> = new Set(PAY_RUN_KEY_LIST);
 
 /**
  * What the pay-run unit's fingerprint covers: the Connecteam pay rate only.
  * The rest of the set comes from the field map, so a client changing a
  * default doesn't send every Linked employee's set again (ADR-0009).
  */
-const PAY_RATE_KEYS: ReadonlySet<string> = new Set(["rate", "rateUnit"]);
+const PAY_RATE_KEYS: ReadonlySet<string> = new Set<PayRunKey>(["rate", "rateUnit"]);
 
 const TAX_DECLARATION_KEYS: ReadonlySet<string> = new Set([
   "claimTaxFreeThreshold",
@@ -44,17 +66,17 @@ const TAX_DECLARATION_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /** Groups matched by EH field-name prefix. `bankAccount1` itself (the payment method) is in the bank group. */
-const PREFIX_GROUPS: ReadonlyArray<readonly [prefix: string, unit: string]> = [
-  ["bankAccount1", "bankAccount1"],
-  ["residential", "residentialAddress"],
-  ["emergencyContact1_", "emergencyContact1"],
-  ["superFund1_", "super"],
+const PREFIX_GROUPS: ReadonlyArray<readonly [prefix: string, unit: GroupUnit]> = [
+  ["bankAccount1", UNIT.bankAccount1],
+  ["residential", UNIT.residentialAddress],
+  ["emergencyContact1_", UNIT.emergencyContact1],
+  ["superFund1_", UNIT.super],
 ];
 
 /** The unit an EH field belongs to: its group's name, or the field's own name. */
 export function unitOf(ehField: string): string {
-  if (PAY_RUN_KEYS.has(ehField)) return "payRun";
-  if (TAX_DECLARATION_KEYS.has(ehField)) return "taxDeclaration";
+  if (PAY_RUN_KEYS.has(ehField)) return UNIT.payRun;
+  if (TAX_DECLARATION_KEYS.has(ehField)) return UNIT.taxDeclaration;
   for (const [prefix, unit] of PREFIX_GROUPS) if (ehField.startsWith(prefix)) return unit;
   return ehField;
 }
@@ -100,7 +122,7 @@ function unitsInMap(map: BaselineMap): string[] {
   const constants = constantsOf(map);
   const units = new Set((map.fields ?? []).filter((f) => !constants.has(f.eh)).map((f) => unitOf(f.eh)));
   const eh = map.employmentHero;
-  if (eh?.defaults || eh?.perEmployeeRate) units.add("payRun");
+  if (eh?.defaults || eh?.perEmployeeRate) units.add(UNIT.payRun);
   return [...units];
 }
 
@@ -138,7 +160,8 @@ export async function takeBaseline(
   const units: Record<string, string> = {};
   const filled: Record<string, string[]> = {};
   for (const [unit, values] of Object.entries(unitsOf(payload, map, unmapped))) {
-    const signed = unit === "payRun" ? Object.fromEntries(Object.entries(values).filter(([k]) => PAY_RATE_KEYS.has(k))) : values;
+    const signed =
+      unit === UNIT.payRun ? Object.fromEntries(Object.entries(values).filter(([k]) => PAY_RATE_KEYS.has(k))) : values;
     units[unit] = await hmacHex(key, canonicalJson({ unit, values: signed }));
     filled[unit] = Object.keys(values).sort();
   }
@@ -166,7 +189,7 @@ export function newUnits(before: Baseline, now: Baseline): string[] {
 export function clearedFields(before: Baseline, now: Baseline): Record<string, string[]> {
   const cleared: Record<string, string[]> = {};
   for (const [unit, fields] of Object.entries(before.filled ?? {})) {
-    if (unit === "payRun") continue;
+    if (unit === UNIT.payRun) continue;
     const still = new Set(now.filled?.[unit] ?? []);
     const gone = fields.filter((f) => !still.has(f));
     if (gone.length > 0) cleared[unit] = gone;
