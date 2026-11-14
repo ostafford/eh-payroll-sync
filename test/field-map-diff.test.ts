@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { chooseFieldMapWrite, diffFieldMaps } from "../scripts/lib/field-map-diff.js";
 
 const map = (packId: number, businessId: string, fields: Array<{ eh: string; id: number }> = [], extra: object = {}) => ({
@@ -28,6 +30,13 @@ describe("chooseFieldMapWrite", () => {
 
   it("treats a different EH business on the same pack as another account", () => {
     expect(chooseFieldMapWrite(map(5474, "555455"), map(5474, "999")).action).toBe("replace");
+  });
+
+  it("replaces the placeholder npm install copies in, even when it's from this account (#172)", () => {
+    const placeholder = JSON.parse(readFileSync(fileURLToPath(new URL("../clients/_example/field-map.json", import.meta.url)), "utf8"));
+    const sameAccount = map(placeholder.connecteam.onboardingPackId, placeholder.employmentHero.businessId);
+    expect(placeholder.client).toBe("example");
+    expect(chooseFieldMapWrite(placeholder, sameAccount)).toEqual({ action: "write" });
   });
 
   it("keeps an existing map it cannot read the account from", () => {

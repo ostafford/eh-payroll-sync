@@ -125,6 +125,25 @@ export function missingSecrets(live: readonly LiveBinding[]): string[] {
   return REQUIRED_SECRETS.filter((name) => !present.has(name));
 }
 
+/**
+ * What `--put-baseline-key` (update.sh, #172) does about `BASELINE_KEY`.
+ * Only a live Worker without one gets one: replacing a key it has would
+ * re-baseline every Linked employee (ADR-0009). The one in `.dev.vars` is
+ * reused when it's there; otherwise a new one is made, to keep in `.dev.vars`
+ * before it's put, so a failed put is retried with the same key.
+ */
+export type BaselineKeyPlan = { action: "none" } | { action: "put"; key: string; keepInDevVars: boolean };
+
+export function planBaselineKey(
+  missing: readonly string[],
+  devVars: Record<string, string>,
+  newKey: () => string,
+): BaselineKeyPlan {
+  if (!missing.includes("BASELINE_KEY")) return { action: "none" };
+  const kept = devVars.BASELINE_KEY?.trim();
+  return kept ? { action: "put", key: kept, keepInDevVars: false } : { action: "put", key: newKey(), keepInDevVars: true };
+}
+
 /** One binding as `wrangler versions view --json` lists it. */
 export interface LiveBinding {
   name: string;
