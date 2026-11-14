@@ -378,12 +378,12 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
       ehRecord: current,
       followUps,
       payRunDefaultsComplete: mapped.payRunDefaultsComplete,
-      // A merge the write landed on is a Collision, not a sync.
+      // A merge the write landed on is a collision, not a sync.
       onAccepted: (writtenId) => collisionOutcome(deps, person, writtenId, now),
     });
     if ("outcome" in step) return step.outcome;
     decision = step.decision;
-    if (step.ehEmployeeId !== null) {
+    if (step.ehEmployeeId !== undefined) {
       ehEmployeeId = step.ehEmployeeId;
       keyToStore = matchKey;
     }
@@ -406,11 +406,14 @@ interface SyncContext {
  * Write a payload to EH, read back what was sent, and decide: the step a full
  * sync and a Linked employee's changed-units sync share. `onAccepted` runs
  * once EH accepts the write, before the read-back: an outcome it returns ends
- * the sync. `ehEmployeeId` is set only when EH accepted the write.
+ * the sync. `ehEmployeeId` is set only when EH accepted the write. The
+ * re-map against EH's record (#102) stays with each caller: the full sync
+ * needs it before its own checks, a Linked employee only for a changed
+ * pay-run unit.
  */
 async function writeAndDecide(
   deps: SyncDeps,
-  write: {
+  request: {
     matchKey: string;
     payload: Record<string, PayloadValue>;
     ehRecord: EhEmployee | null | undefined;
@@ -418,34 +421,34 @@ async function writeAndDecide(
     payRunDefaultsComplete: boolean;
     onAccepted?: (ehEmployeeId: string) => Promise<SyncJobOutcome | null>;
   },
-): Promise<{ outcome: SyncJobOutcome } | { decision: SyncDecision; ehEmployeeId: string | null }> {
-  const result = await deps.eh.upsertByExternalId(write.matchKey, write.payload, write.ehRecord);
+): Promise<{ outcome: SyncJobOutcome } | { decision: SyncDecision; ehEmployeeId: string | undefined }> {
+  const result = await deps.eh.upsertByExternalId(request.matchKey, request.payload, request.ehRecord);
   // A validation failure isn't retried: it's the employee's to fix (decide below).
   if (result.outcome === "retryable" || result.outcome === "client_error") return { outcome: ehRetry(result) };
 
-  let ehEmployeeId: string | null = null;
+  let ehEmployeeId: string | undefined;
   let readBack: ReadBackResult | undefined;
   if (result.outcome === "ok") {
     ehEmployeeId = String(result.data.id);
-    const stop = await write.onAccepted?.(ehEmployeeId);
+    const stop = await request.onAccepted?.(ehEmployeeId);
     if (stop) return { outcome: stop };
     // Only what was sent is read back: EH is the source of truth for the rest.
-    const written = await deps.eh.getByExternalId(write.matchKey);
+    const written = await deps.eh.getByExternalId(request.matchKey);
     if (written.outcome === "ok" && written.data) {
-      readBack = compareReadBack(write.payload, written.data as Record<string, unknown>, readBackFields(deps.fieldMap));
+      readBack = compareReadBack(request.payload, written.data as Record<string, unknown>, readBackFields(deps.fieldMap));
     }
   }
   const decision = decide({
     write: result,
-    followUps: write.followUps,
-    payRunDefaultsComplete: write.payRunDefaultsComplete,
+    followUps: request.followUps,
+    payRunDefaultsComplete: request.payRunDefaultsComplete,
     ...(readBack ? { readBack } : {}),
   });
   return { decision, ehEmployeeId };
 }
 
 /**
- * The Collision backstop, run once EH accepts a full sync's write: the EH
+ * The collision backstop, run once EH accepts a full sync's write: the EH
  * employee written is already linked to someone else. Null when it isn't.
  */
 async function collisionOutcome(
@@ -975,7 +978,7 @@ async function syncChangedUnits(
       });
       if ("outcome" in step) return step.outcome;
       decision = step.decision;
-      if (step.ehEmployeeId !== null) {
+      if (step.ehEmployeeId !== undefined) {
         ehEmployeeId = step.ehEmployeeId;
         // A unit counts as sent only if the write carried a key of it.
         sent = new Set(Object.keys(payload).map(unitOf));
