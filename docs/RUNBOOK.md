@@ -810,8 +810,14 @@ backed up with `.dev.vars`. If it changes, whether rotated or lost, nobody in
 EH is overwritten. Each Linked employee is re-baselined against their current
 Connecteam profile on their next sync, with nothing sent, and the admin channel
 gets one line about it. The cost: a Connecteam edit that hadn't synced before
-the change is absorbed into the new Baseline and never sent. Ask anyone who
-edited their profile around then to check EH, and fix it there by hand.
+the change is absorbed into the new Baseline and never sent. Re-saving the
+same value won't send it either, since it now matches the Baseline. Ask anyone
+who edited their profile around then to check EH: fix it there by hand, or
+have the employee change the value and change it back.
+
+To rotate on purpose, first check nothing is waiting: `ops.queueBacklog` on
+`/health` is `0`. Then put the new key the way the rollout's step 1 does,
+replacing the `BASELINE_KEY` line in `.dev.vars`.
 
 ---
 
@@ -847,6 +853,120 @@ cp ~/field-map.backup.json clients/self/field-map.json
 Before the `reset`, check `git status` and `git log origin/main..` show
 nothing but the field map. Anything else is a local change to the code; send
 it to the integrator first. After this, `git pull` never touches the map again.
+
+---
+
+## Rolling out linking on a live deployment
+
+For a client already running the sync whose **Pre-existing employees** are
+still waiting for approval (ADR-0009, ADR-0010). A first setup doesn't need
+this: the wizard's link stage already runs before the deploy (ADR-0012).
+
+> **Rehearse first.** No client runs the link stage until every scenario in
+> [`linking-rehearsal.md`](linking-rehearsal.md) has passed on the rehearsal
+> deployment.
+
+The integrator runs these steps. The client's admin keeps holding approvals
+for Pre-existing employees until step 3 is done; new hires are approved as
+normal throughout.
+
+1. **Put `BASELINE_KEY`.** The deploy check refuses to deploy without it, and
+   prints the command to run. Build the config first, then make the key, keep
+   it in `.dev.vars` and put it:
+
+   ```bash
+   npm run deploy:config
+   key=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
+   echo "BASELINE_KEY=$key" >> .dev.vars
+   printf %s "$key" | npx wrangler secret put BASELINE_KEY --config wrangler.deploy.json
+   ```
+
+   Back up `.dev.vars` afterwards: a lost key re-baselines every Linked
+   employee ("Rotating keys" below).
+2. **Update:** `./scripts/update.sh` applies the linking migrations and
+   deploys. From here the Pre-create check is live, so a mistaken approval
+   becomes a **Held employee**, never an overwrite.
+3. **Link stage:** `./scripts/setup-wizard.sh --stage link`. It runs the
+   pre-go-live check first, then the Link list, with the admin on a
+   screen-share. Employees who already synced aren't listed. Two rows need no
+   choice:
+   - **already matched by Payroll ID**: the EH employee already carries this
+     person's Payroll ID. Nothing to link; nothing about them changes.
+   - **Can't link: already linked to someone else**: the EH match is already
+     linked to a different Connecteam user. Fix it by hand with the admin.
+
+   Anyone already approved but never synced (an old dead-letter, say) is
+   linked by the sweep within a minute of saving, with no profile edit.
+4. **Release the held approvals:**
+   1. **Canary.** Pick 3–5 people from the Link list. Snapshot their EH records
+      (`npm run eh-diff -- snapshot <EH id>...`), have the admin approve them,
+      wait for them to sync, then `npm run eh-diff -- diff`. It must exit `0`,
+      showing `externalId set` and nothing else. `GET /status` shows each
+      `ready` with `linked: true`.
+   2. **Everyone else at once.** The sweep paces approvals at 20 a minute
+      (~180 people ≈ 9 minutes). After the first 3 Link notices, the rest are
+      counted in one Bulk summary (ADR-0013).
+   3. Delete `eh-snapshot.json` when done: it holds full EH records.
+
+### Payroll IDs from a Connecteam field
+
+When the client has copied each existing employee's EH Payroll ID into a
+Connecteam text field (ADR-0011), the field does the matching and no Link list
+is needed for those people:
+
+1. Put `BASELINE_KEY` (step 1 above).
+2. Pick the field: `npm run field-check`, choose it as the Payroll ID, then
+   `npm run discover -- --client self`. On a deployment with a tuned map,
+   discover writes `clients/self/field-map.draft.json` beside it: copy its
+   `identity` block into `clients/self/field-map.json`, then
+   `npm run validate-field-map`.
+3. `npm run preflight`, and fix what it flags in Connecteam: IDs not found in
+   EH, an ID used twice, blanks for people already in EH, and rows where no
+   other detail agrees.
+4. `./scripts/update.sh`.
+5. Release a canary of 3–5 people whose rows came back found with every key
+   agreeing (snapshot and diff as above; the diff should show no change at
+   all, since EH already holds their Payroll ID), then everyone else.
+
+A Payroll ID changed in Connecteam after the first sync or link raises one
+alert ("The Payroll ID for … changed in Connecteam; the sync still uses the
+old one"), and the sync keeps the stored key. To re-key
+someone on purpose, change it in EH and in D1 `employee_map.external_id` by hand.
+
+### What to watch
+
+- **`/health`:** `ops.pendingLinks` falls to `0`, `ops.linked` rises by the
+  same amount, `ops.held` stays `0` and `ops.queueBacklog` drains.
+- **`GET /status`:** nobody `broken`, and nobody `waiting_on_admin` with
+  "held on approval".
+- **Stop rule:** if any EH record changes beyond its Payroll ID (the diff
+  exits `2`, or the admin spots it in EH), use the **Emergency stop** straight
+  away, then work out why before resuming.
+
+### Undoing a link by hand
+
+v1 has no unlink. For one person on the Link list path:
+
+1. Pause the queue (Emergency stop).
+2. Clear the Payroll ID on that EH employee in EH's UI.
+3. Delete their `employee_map` row:
+
+   ```bash
+   npx wrangler d1 execute eh-payroll-sync --remote --config wrangler.deploy.json \
+     --command "DELETE FROM employee_map WHERE ct_user_id = <Connecteam user id>"
+   ```
+
+4. Re-run the link stage (`./scripts/setup-wizard.sh --stage link`) and link
+   them to the right EH employee, or mark them "New hire, not this person".
+5. Resume the queue.
+
+Step 2 matters: without it, their next edit finds the EH record by Payroll ID
+and runs a **full** sync over it. With it cleared, the Pre-create check holds
+them instead.
+
+For someone linked by a Payroll ID from a Connecteam field, don't clear EH's
+Payroll ID: it's the client's own. Fix the ID in Connecteam first, then delete
+their `employee_map` row; their next edit links them again by the new ID.
 
 ---
 
