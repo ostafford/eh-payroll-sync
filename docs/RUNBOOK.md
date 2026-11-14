@@ -328,6 +328,9 @@ The wizard does all of this. Manual equivalent:
 # Log in to the CLIENT's account
 npx wrangler login
 npx wrangler whoami          # confirm it's the right account
+# A brand-new account has no workers.dev subdomain, and the deploy can't
+# register one unattended: this checks, and registers one if there's none
+npm run workers-subdomain
 
 # Provision (one D1 database, two queues)
 npx wrangler d1 create eh-payroll-sync
