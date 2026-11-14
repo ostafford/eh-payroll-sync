@@ -34,6 +34,14 @@ export const NAME_RULES =
 /** Where to see or change it by hand, as a dashboard path: wrangler's deep link 404s (#194). */
 export const DASHBOARD_PATH = "Cloudflare dashboard > Workers & Pages > Account details > Subdomain";
 
+/** The Worker's name in wrangler.jsonc, part of its workers.dev address. */
+export const WORKER_NAME = "eh-payroll-sync";
+
+/** The sync's address on the account's workers.dev subdomain. */
+export function workerUrl(subdomain: string): string {
+  return `https://${WORKER_NAME}.${subdomain}.workers.dev`;
+}
+
 /** The account's subdomain, or null when it has none yet. Throws on any other answer. */
 export async function readSubdomain(api: CfApi, accountId: string): Promise<string | null> {
   const r = await api("GET", `/accounts/${accountId}/workers/subdomain`);

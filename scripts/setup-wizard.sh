@@ -188,7 +188,7 @@ finish() {
 ENV_FILE=".dev.vars"
 TOTAL_STAGES=14
 
-# --stage NAME runs one stage on its own, on a live deployment. Only "link" so far.
+# --stage NAME runs one stage on its own, on a live deployment: link or webhook.
 # Read without shifting: the session log below re-runs this script with "$@".
 STAGE_ONLY=""
 _want_stage=""
@@ -199,10 +199,10 @@ for _arg in "$@"; do
     *) printf 'unknown option: %s\n' "$_arg" >&2; exit 2 ;;
   esac
 done
-[[ -z "$_want_stage" ]] || { printf -- '--stage needs a name (the one stage that runs alone is: link)\n' >&2; exit 2; }
+[[ -z "$_want_stage" ]] || { printf -- '--stage needs a name (the stages that run alone are: link, webhook)\n' >&2; exit 2; }
 case "$STAGE_ONLY" in
-  ""|link) ;;
-  *) printf 'unknown stage: %s (the one stage that runs alone is: link)\n' "$STAGE_ONLY" >&2; exit 2 ;;
+  ""|link|webhook) ;;
+  *) printf 'unknown stage: %s (the stages that run alone are: link, webhook)\n' "$STAGE_ONLY" >&2; exit 2 ;;
 esac
 
 # ── extra helpers (below the marker, wizard-specific) ─────────────────────
@@ -474,9 +474,191 @@ link_stage() {
   npm run --silent link || { fail "The link stage stopped: the Link list was not changed."; exit 1; }
 }
 
+# The webhook stage. A first setup runs it right after the deploy, with the
+# address the deploy printed; `--stage webhook` runs it alone on a live
+# deployment (#195). Needs WORKER_URL (empty: register by hand), CT_API_KEY and
+# CT_WEBHOOK_SECRET.
+webhook_stage() {
+  stage "Register the Connecteam webhook"
+  why "So that an employee's later profile edits reach Employment Hero within" \
+      "seconds, Connecteam tells the sync whenever a profile changes (a \"webhook\")." \
+      "Only the API can give it the secret the sync checks, so the wizard does this."
+  WEBHOOK_TARGET="${WORKER_URL:-https://<your-worker>.workers.dev}/webhook"
+  printf '\n'
+  note "URL:    $WEBHOOK_TARGET"
+  note "Event:  users / user_updated"
+  printf '\n'
+  if [[ -n "${WORKER_URL:-}" ]]; then
+    wh_body=$(printf '{"name":"EH Payroll Sync (profile updates)","url":"%s","featureType":"users","eventTypes":["user_updated"],"secretKey":"%s","isDisabled":false}' "$WEBHOOK_TARGET" "$CT_WEBHOOK_SECRET")
+    # Re-running must not add a second webhook (#82): update one already pointing
+    # at this Worker - same secret as the Worker, turned on - and offer to delete
+    # any extras.
+    existing_ids=$(ct_api "/settings/v1/webhooks" | node -e '
+      let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+        try {
+          const list = JSON.parse(s).data?.webhooks || [];
+          console.log(list.filter(w => w.url === process.argv[1] && w.featureType === "users").map(w => w.id).join(" "));
+        } catch (e) { console.log(""); }
+      })' "$WEBHOOK_TARGET")
+    read -r -a existing <<< "$existing_ids"
+    if (( ${#existing[@]} > 0 )); then
+      wid="${existing[0]}"
+      upd=$(ct_api_put "/settings/v1/webhooks/$wid" "$wh_body")
+      wh_updated=""
+      if printf '%s' "$upd" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.exit(j.detail||j.error?1:0)}catch(e){process.exit(1)}})'; then
+        wh_updated=1
+        printf '  %s✓ updated%s the existing webhook id %s (current secret, turned on) - no new one added\n' "$GREEN" "$RESET" "$wid"
+      else
+        warn "could not update the existing webhook $wid. Response:"
+        printf '%s\n' "$upd" | sed 's/^/    /'
+        SKIPPED+=("Connecteam webhook $wid - update its secretKey to CT_WEBHOOK_SECRET: PUT /settings/v1/webhooks/$wid (docs/RUNBOOK.md step 6)")
+      fi
+      # Only once the update worked: until then an extra may be the one that works.
+      if [[ -n "$wh_updated" ]] && (( ${#existing[@]} > 1 )); then
+        extras=("${existing[@]:1}")
+        warn "${#extras[@]} more webhook(s) point at this Worker (ids ${extras[*]}), from earlier runs."
+        if confirm "Delete the extra webhook(s) ${extras[*]} in Connecteam"; then
+          for x in "${extras[@]}"; do
+            ct_api_delete "/settings/v1/webhooks/$x" >/dev/null && printf '  %s✓ deleted%s webhook id %s\n' "$GREEN" "$RESET" "$x"
+          done
+        fi
+      fi
+    else
+      reg=$(ct_api_post "/settings/v1/webhooks" "$wh_body")
+      wid=$(printf '%s' "$reg" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(String(JSON.parse(s).data?.id??""))}catch(e){console.log("")}})')
+      if [[ -n "$wid" ]]; then
+        printf '  %s✓ registered%s webhook id %s\n' "$GREEN" "$RESET" "$wid"
+      else
+        warn "could not confirm the webhook registered. Response:"
+        printf '%s\n' "$reg" | sed 's/^/    /'
+        SKIPPED+=("Connecteam webhook - register by API: POST /settings/v1/webhooks (see docs/RUNBOOK.md step 6)")
+      fi
+    fi
+  else
+    warn "no deployed URL captured - register the webhook by hand once the Worker is live (docs/RUNBOOK.md step 6)."
+    SKIPPED+=("Connecteam webhook registration (no Worker URL was captured)")
+  fi
+
+  # Show the webhook exactly as Connecteam now has it, so a wrong URL or a
+  # disabled toggle is visible here rather than a mystery later. Connecteam's
+  # list (GET /settings/v1/webhooks) marks a turned-off webhook with
+  # `isDisabled: true` (#68). The last line is a machine-readable summary.
+  say ""
+  say "Connecteam's registered webhooks for this account:"
+  wh_out=$(ct_api "/settings/v1/webhooks" | node -e '
+    const target = process.argv[1];
+    let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+      let ours = [];
+      try {
+        const list = JSON.parse(s).data?.webhooks || [];
+        if (list.length === 0) console.log("   (none returned - inspect GET /settings/v1/webhooks by hand)");
+        for (const w of list) {
+          const mine = w.url === target;
+          if (mine) ours.push(w);
+          const state = w.isDisabled === true ? "DISABLED" : w.isDisabled === false ? "enabled" : "enabled: ?";
+          console.log(`   ${mine ? "->" : "  "} ${w.id}  ${w.url}  events: ${(w.eventTypes || []).join(",") || "?"}  ${state}`);
+        }
+        if (ours.length) console.log("   (-> = this Worker)");
+      } catch (e) { console.log("   (could not parse the webhook list)"); }
+      const status = ours.length === 0 ? "missing" : ours.every(w => w.isDisabled === true) ? "disabled" : "ok";
+      console.log(`STATUS=${status} COUNT=${ours.length} DISABLED_IDS=${ours.filter(w => w.isDisabled === true).map(w => w.id).join(",")}`);
+    })' "$WEBHOOK_TARGET")
+  printf '%s\n' "$wh_out" | sed '$d'
+  wh_summary=$(printf '%s\n' "$wh_out" | tail -n1)
+  wh_status=$(printf '%s' "$wh_summary" | sed -n 's/.*STATUS=\([a-z]*\).*/\1/p')
+  wh_count=$(printf '%s' "$wh_summary" | sed -n 's/.*COUNT=\([0-9]*\).*/\1/p')
+  wh_disabled=$(printf '%s' "$wh_summary" | sed -n 's/.*DISABLED_IDS=\(.*\)$/\1/p')
+  if [[ "$wh_status" == "disabled" ]]; then
+    warn "The webhook for this Worker is turned OFF in Connecteam (id $wh_disabled), so profile"
+    warn "edits won't reach the sync. Turn it on in Connecteam's webhook settings."
+    pause "Press Enter once it's turned on."
+  elif [[ -n "$wh_disabled" ]]; then
+    warn "Webhook id(s) $wh_disabled for this Worker are turned off; at least one other is on."
+  fi
+  if [[ "${wh_count:-0}" -gt 1 ]]; then
+    warn "$wh_count webhooks point at this Worker (from re-running this stage). Each edit is"
+    warn "delivered once per webhook; the sync coalesces them, but delete the extras in Connecteam."
+  fi
+  if [[ "$wh_status" == "missing" && -n "${WORKER_URL:-}" ]]; then
+    warn "No webhook points at $WEBHOOK_TARGET - profile edits won't sync. See docs/RUNBOOK.md step 6."
+  fi
+
+  # Close the loop: prove Connecteam is actually delivering to the Worker now,
+  # instead of finding out later. /health counts accepted (202) and rejected
+  # (401) user_updated deliveries.
+  if [[ -n "${WORKER_URL:-}" ]] && confirm "Do a live delivery check now (edit a test profile while the wizard watches)?"; then
+    before=$(health_num webhookAccepted)
+    rej_before=$(health_num webhookRejected)
+    if [[ ! "$before" =~ ^[0-9]+$ || ! "$rej_before" =~ ^[0-9]+$ ]]; then
+      warn "couldn't read $WORKER_URL/health to baseline the check - skipping."
+      warn "verify by hand: edit a test profile, then re-check $WORKER_URL/health (ops.webhookAccepted)."
+      SKIPPED+=("Confirm the first webhook delivery (docs/RUNBOOK.md 'Verify')")
+    else
+      say ""
+      step "Now edit ANY mapped field on a TEST user's Connecteam profile and save it."
+      printf '  %swaiting up to 90s for the delivery%s ' "$DIM" "$RESET"
+      result="" ; waited=0
+      while (( waited < 90 )); do
+        sleep 5 ; waited=$(( waited + 5 )) ; printf '.'
+        if (( $(health_num webhookAccepted) > before ));     then result="ok";       break; fi
+        if (( $(health_num webhookRejected) > rej_before )); then result="rejected"; break; fi
+      done
+      printf '\n'
+      case "$result" in
+        ok)
+          printf '  %s✓ the Worker accepted a profile update from Connecteam (202)%s\n' "$GREEN" "$RESET"
+          say "The webhook path is live." ;;
+        rejected)
+          warn "a delivery ARRIVED but was rejected (401): the secretKey Connecteam sends"
+          warn "does not match CT_WEBHOOK_SECRET. Run ./scripts/setup-wizard.sh --stage webhook:"
+          warn "it updates the existing webhook with the current secret (no new one is added)."
+          SKIPPED+=("Webhook secret mismatch - run ./scripts/setup-wizard.sh --stage webhook to update the Connecteam webhook's secret (docs/RUNBOOK.md step 6)") ;;
+        *)
+          warn "no delivery seen in 90s. Usual causes:"
+          note "  - the registered URL is not exactly $WEBHOOK_TARGET"
+          note "  - the webhook shows DISABLED above (turn it on in Connecteam's webhook settings)"
+          note "  - the edited field isn't mapped, or it was the admin-only side of the pack"
+          say  "See raw deliveries with:  npx wrangler tail --format pretty   then edit a profile again."
+          SKIPPED+=("Confirm the first webhook delivery (docs/RUNBOOK.md 'Verify')") ;;
+      esac
+    fi
+  fi
+}
+
 if [[ "$STAGE_ONLY" == "link" ]]; then
   TOTAL_STAGES=1
   link_stage
+  exit 0
+fi
+
+# `--stage webhook` (#195): for a first setup that stopped after the deploy,
+# without the whole wizard again. The keys come from .dev.vars and the address
+# from the account's workers.dev subdomain, once the built config checks out
+# against the live Worker.
+if [[ "$STAGE_ONLY" == "webhook" ]]; then
+  TOTAL_STAGES=1
+  CT_API_KEY=$(_existing CT_API_KEY || true)
+  CT_WEBHOOK_SECRET=$(_existing CT_WEBHOOK_SECRET || true)
+  if [[ -z "$CT_API_KEY" || -z "$CT_WEBHOOK_SECRET" ]]; then
+    fail "$ENV_FILE has no CT_API_KEY or CT_WEBHOOK_SECRET: run the whole wizard instead. Nothing was changed."; exit 1
+  fi
+  # Without --allow-missing-secrets: the live Worker must already hold the webhook secret.
+  if ! out=$(npm run --silent deploy:config -- --check-live 2>&1); then
+    fail "The deploy settings don't check out against the live Worker:"; printf '%s\n' "$out" | sed 's/^/    /'; exit 1
+  fi
+  if ! WORKER_URL=$(npm run --silent workers-subdomain -- --print-url) || [[ ! "$WORKER_URL" =~ ^https://[a-zA-Z0-9.-]+\.workers\.dev$ ]]; then
+    fail "Couldn't work out the sync's address (see above). Nothing was changed."; exit 1
+  fi
+  # 503 still answers: /health reports a problem with JSON, it doesn't go quiet.
+  if [[ "$(curl -sS "$WORKER_URL/health" 2>/dev/null || true)" != *'"ok":'* ]]; then
+    fail "Nothing answers at $WORKER_URL/health: is the sync deployed? Nothing was changed."; exit 1
+  fi
+  webhook_stage
+  if (( ${#SKIPPED[@]} )); then
+    printf '\n'; warn "still to do by hand:"
+    for s in "${SKIPPED[@]}"; do note "  - $s"; done
+    exit 1
+  fi
   exit 0
 fi
 
@@ -827,150 +1009,7 @@ fi
 next_up "connect Connecteam's profile updates to the sync."
 
 # ─────────────────────────────────────────────────────────────────────────
-stage "Register the Connecteam webhook"
-why "So that an employee's later profile edits reach Employment Hero within" \
-    "seconds, Connecteam tells the sync whenever a profile changes (a \"webhook\")." \
-    "Only the API can give it the secret the sync checks, so the wizard does this."
-WEBHOOK_TARGET="${WORKER_URL:-https://<your-worker>.workers.dev}/webhook"
-printf '\n'
-note "URL:    $WEBHOOK_TARGET"
-note "Event:  users / user_updated"
-printf '\n'
-if [[ -n "${WORKER_URL:-}" ]]; then
-  wh_body=$(printf '{"name":"EH Payroll Sync (profile updates)","url":"%s","featureType":"users","eventTypes":["user_updated"],"secretKey":"%s","isDisabled":false}' "$WEBHOOK_TARGET" "$CT_WEBHOOK_SECRET")
-  # Re-running must not add a second webhook (#82): update one already pointing
-  # at this Worker - same secret as the Worker, turned on - and offer to delete
-  # any extras.
-  existing_ids=$(ct_api "/settings/v1/webhooks" | node -e '
-    let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
-      try {
-        const list = JSON.parse(s).data?.webhooks || [];
-        console.log(list.filter(w => w.url === process.argv[1] && w.featureType === "users").map(w => w.id).join(" "));
-      } catch (e) { console.log(""); }
-    })' "$WEBHOOK_TARGET")
-  read -r -a existing <<< "$existing_ids"
-  if (( ${#existing[@]} > 0 )); then
-    wid="${existing[0]}"
-    upd=$(ct_api_put "/settings/v1/webhooks/$wid" "$wh_body")
-    wh_updated=""
-    if printf '%s' "$upd" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.exit(j.detail||j.error?1:0)}catch(e){process.exit(1)}})'; then
-      wh_updated=1
-      printf '  %s✓ updated%s the existing webhook id %s (current secret, turned on) - no new one added\n' "$GREEN" "$RESET" "$wid"
-    else
-      warn "could not update the existing webhook $wid. Response:"
-      printf '%s\n' "$upd" | sed 's/^/    /'
-      SKIPPED+=("Connecteam webhook $wid - update its secretKey to CT_WEBHOOK_SECRET: PUT /settings/v1/webhooks/$wid (docs/RUNBOOK.md step 6)")
-    fi
-    # Only once the update worked: until then an extra may be the one that works.
-    if [[ -n "$wh_updated" ]] && (( ${#existing[@]} > 1 )); then
-      extras=("${existing[@]:1}")
-      warn "${#extras[@]} more webhook(s) point at this Worker (ids ${extras[*]}), from earlier runs."
-      if confirm "Delete the extra webhook(s) ${extras[*]} in Connecteam"; then
-        for x in "${extras[@]}"; do
-          ct_api_delete "/settings/v1/webhooks/$x" >/dev/null && printf '  %s✓ deleted%s webhook id %s\n' "$GREEN" "$RESET" "$x"
-        done
-      fi
-    fi
-  else
-    reg=$(ct_api_post "/settings/v1/webhooks" "$wh_body")
-    wid=$(printf '%s' "$reg" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(String(JSON.parse(s).data?.id??""))}catch(e){console.log("")}})')
-    if [[ -n "$wid" ]]; then
-      printf '  %s✓ registered%s webhook id %s\n' "$GREEN" "$RESET" "$wid"
-    else
-      warn "could not confirm the webhook registered. Response:"
-      printf '%s\n' "$reg" | sed 's/^/    /'
-      SKIPPED+=("Connecteam webhook - register by API: POST /settings/v1/webhooks (see docs/RUNBOOK.md step 6)")
-    fi
-  fi
-else
-  warn "no deployed URL captured - register the webhook by hand once the Worker is live (docs/RUNBOOK.md step 6)."
-  SKIPPED+=("Connecteam webhook registration (no Worker URL was captured)")
-fi
-
-# Show the webhook exactly as Connecteam now has it, so a wrong URL or a
-# disabled toggle is visible here rather than a mystery later. Connecteam's
-# list (GET /settings/v1/webhooks) marks a turned-off webhook with
-# `isDisabled: true` (#68). The last line is a machine-readable summary.
-say ""
-say "Connecteam's registered webhooks for this account:"
-wh_out=$(ct_api "/settings/v1/webhooks" | node -e '
-  const target = process.argv[1];
-  let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
-    let ours = [];
-    try {
-      const list = JSON.parse(s).data?.webhooks || [];
-      if (list.length === 0) console.log("   (none returned - inspect GET /settings/v1/webhooks by hand)");
-      for (const w of list) {
-        const mine = w.url === target;
-        if (mine) ours.push(w);
-        const state = w.isDisabled === true ? "DISABLED" : w.isDisabled === false ? "enabled" : "enabled: ?";
-        console.log(`   ${mine ? "->" : "  "} ${w.id}  ${w.url}  events: ${(w.eventTypes || []).join(",") || "?"}  ${state}`);
-      }
-      if (ours.length) console.log("   (-> = this Worker)");
-    } catch (e) { console.log("   (could not parse the webhook list)"); }
-    const status = ours.length === 0 ? "missing" : ours.every(w => w.isDisabled === true) ? "disabled" : "ok";
-    console.log(`STATUS=${status} COUNT=${ours.length} DISABLED_IDS=${ours.filter(w => w.isDisabled === true).map(w => w.id).join(",")}`);
-  })' "$WEBHOOK_TARGET")
-printf '%s\n' "$wh_out" | sed '$d'
-wh_summary=$(printf '%s\n' "$wh_out" | tail -n1)
-wh_status=$(printf '%s' "$wh_summary" | sed -n 's/.*STATUS=\([a-z]*\).*/\1/p')
-wh_count=$(printf '%s' "$wh_summary" | sed -n 's/.*COUNT=\([0-9]*\).*/\1/p')
-wh_disabled=$(printf '%s' "$wh_summary" | sed -n 's/.*DISABLED_IDS=\(.*\)$/\1/p')
-if [[ "$wh_status" == "disabled" ]]; then
-  warn "The webhook for this Worker is turned OFF in Connecteam (id $wh_disabled), so profile"
-  warn "edits won't reach the sync. Turn it on in Connecteam's webhook settings."
-  pause "Press Enter once it's turned on."
-elif [[ -n "$wh_disabled" ]]; then
-  warn "Webhook id(s) $wh_disabled for this Worker are turned off; at least one other is on."
-fi
-if [[ "${wh_count:-0}" -gt 1 ]]; then
-  warn "$wh_count webhooks point at this Worker (from re-running this stage). Each edit is"
-  warn "delivered once per webhook; the sync coalesces them, but delete the extras in Connecteam."
-fi
-if [[ "$wh_status" == "missing" && -n "${WORKER_URL:-}" ]]; then
-  warn "No webhook points at $WEBHOOK_TARGET - profile edits won't sync. See docs/RUNBOOK.md step 6."
-fi
-
-# Close the loop: prove Connecteam is actually delivering to the Worker now,
-# instead of finding out later. /health counts accepted (202) and rejected
-# (401) user_updated deliveries.
-if [[ -n "${WORKER_URL:-}" ]] && confirm "Do a live delivery check now (edit a test profile while the wizard watches)?"; then
-  before=$(health_num webhookAccepted)
-  rej_before=$(health_num webhookRejected)
-  if [[ ! "$before" =~ ^[0-9]+$ || ! "$rej_before" =~ ^[0-9]+$ ]]; then
-    warn "couldn't read $WORKER_URL/health to baseline the check - skipping."
-    warn "verify by hand: edit a test profile, then re-check $WORKER_URL/health (ops.webhookAccepted)."
-    SKIPPED+=("Confirm the first webhook delivery (docs/RUNBOOK.md 'Verify')")
-  else
-    say ""
-    step "Now edit ANY mapped field on a TEST user's Connecteam profile and save it."
-    printf '  %swaiting up to 90s for the delivery%s ' "$DIM" "$RESET"
-    result="" ; waited=0
-    while (( waited < 90 )); do
-      sleep 5 ; waited=$(( waited + 5 )) ; printf '.'
-      if (( $(health_num webhookAccepted) > before ));     then result="ok";       break; fi
-      if (( $(health_num webhookRejected) > rej_before )); then result="rejected"; break; fi
-    done
-    printf '\n'
-    case "$result" in
-      ok)
-        printf '  %s✓ the Worker accepted a profile update from Connecteam (202)%s\n' "$GREEN" "$RESET"
-        say "The webhook path is live." ;;
-      rejected)
-        warn "a delivery ARRIVED but was rejected (401): the secretKey Connecteam sends"
-        warn "does not match CT_WEBHOOK_SECRET. Re-run the wizard: its webhook stage now"
-        warn "updates the existing webhook with the current secret (no new one is added)."
-        SKIPPED+=("Webhook secret mismatch - re-run the wizard to update the Connecteam webhook's secret (docs/RUNBOOK.md step 6)") ;;
-      *)
-        warn "no delivery seen in 90s. Usual causes:"
-        note "  - the registered URL is not exactly $WEBHOOK_TARGET"
-        note "  - the webhook shows DISABLED above (turn it on in Connecteam's webhook settings)"
-        note "  - the edited field isn't mapped, or it was the admin-only side of the pack"
-        say  "See raw deliveries with:  npx wrangler tail --format pretty   then edit a profile again."
-        SKIPPED+=("Confirm the first webhook delivery (docs/RUNBOOK.md 'Verify')") ;;
-    esac
-  fi
-fi
+webhook_stage
 
 # The approval sweep is a Cron Trigger, and Cloudflare can take up to 15
 # minutes to start a new one after the first deploy (#69). Until it has run

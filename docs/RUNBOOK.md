@@ -416,6 +416,15 @@ changes accordingly.
 Needs the deployed URL, so it comes after deploy. The wizard does this in its
 last stage; the manual equivalent is below.
 
+To run that stage alone on a live deployment (the wizard stopped after the
+deploy, say, or the secret changed), run `./scripts/setup-wizard.sh --stage
+webhook` (#195). It takes `CT_API_KEY` and `CT_WEBHOOK_SECRET` from
+`.dev.vars`. It checks the built config against the live Worker. It reads the
+Worker's address from the account's workers.dev subdomain
+(`npm run workers-subdomain -- --print-url`) and checks that `/health` answers
+there. Then it registers or updates the webhook exactly as the full wizard
+does. It exits non-zero if anything is still left to do by hand.
+
 **It must be done via the API, not the Connecteam UI.** The webhook's signing
 secret (`secretKey`) can only be set through `POST /settings/v1/webhooks` — the
 UI has no field for it — and the Worker rejects every delivery that arrives
@@ -461,7 +470,7 @@ the sweep doesn't use the webhook.
 > and it polls `/health` for ~90 s. `ops.webhookAccepted` going up means
 > Connecteam is delivering and the signature verifies; `ops.webhookRejected`
 > going up means a delivery arrived but its `secretKey` doesn't match
-> `CT_WEBHOOK_SECRET` (re-run the wizard, or `PUT` the secret as above). Nothing after 90 s
+> `CT_WEBHOOK_SECRET` (run `./scripts/setup-wizard.sh --stage webhook`, or `PUT` the secret as above). Nothing after 90 s
 > usually means a wrong URL, a disabled webhook, or an unmapped field — inspect
 > with `npx wrangler tail --format pretty`.
 

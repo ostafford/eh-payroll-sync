@@ -167,7 +167,12 @@ describe("the secrets check is wired into every deploy path", () => {
   });
 
   it("the wizard skips the check only because it puts every required secret before deploying", () => {
-    for (const line of wizard.split("\n").filter((l) => l.includes("deploy:config -- --check-live"))) {
+    // Except `--stage webhook` (#195): it deploys nothing, and the live Worker must already hold the
+    // webhook secret it registers, so it runs the full check.
+    const alone = wizard.slice(wizard.indexOf('if [[ "$STAGE_ONLY" == "webhook" ]]'));
+    const strict = alone.slice(0, alone.indexOf("\nfi\n"));
+    expect(strict).toContain("npm run --silent deploy:config -- --check-live 2>&1)");
+    for (const line of wizard.replace(strict, "").split("\n").filter((l) => l.includes("deploy:config -- --check-live"))) {
       expect(line).toContain("--allow-missing-secrets");
     }
     // The link stage (#154) and the preflight reach D1 only through the check, so they never touch a
