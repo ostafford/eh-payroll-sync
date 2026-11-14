@@ -35,10 +35,14 @@ function who(e: DigestEmployee): string {
   return name ? `**${name}** (${e.ctUserId})` : `Connecteam user ${e.ctUserId}`;
 }
 
-/** One or more admin-channel messages, each already within the 500-char clamp. */
-export function digestMessages(employees: readonly DigestEmployee[], totalCount: number): string[] {
+/**
+ * One or more admin-channel messages, each already within the 500-char clamp.
+ * `linksAwaitingApproval`: people on the Link list whose pack isn't approved
+ * yet (#143 item 3), shown as a count, never names.
+ */
+export function digestMessages(employees: readonly DigestEmployee[], totalCount: number, linksAwaitingApproval = 0): string[] {
   const nonReady = employees.filter((e) => e.state !== "ready" && e.state !== "left_out");
-  const leftOut = leftOutLines(employees);
+  const leftOut = [...leftOutLines(employees), ...linkListLines(linksAwaitingApproval)];
   if (nonReady.length === 0) {
     const synced = totalCount - employees.filter((e) => e.state === "left_out").length;
     const singular = synced === 1;
@@ -81,6 +85,12 @@ function leftOutLines(employees: readonly DigestEmployee[]): string[] {
     counts.set(why, (counts.get(why) ?? 0) + 1);
   }
   return [...counts].map(([why, n]) => `**⚪ Left out by choice: ${n}** (${why})`);
+}
+
+/** The Link list's one count line, when anyone on it is still waiting for approval. */
+function linkListLines(waiting: number): string[] {
+  if (waiting <= 0) return [];
+  return [`**🔗 ${waiting} ${waiting === 1 ? "person on the link list is" : "people on the link list are"} waiting for approval in Connecteam**`];
 }
 
 /** Pack lines into messages no longer than {@link MAX_CHUNK}, splitting on line boundaries only. */

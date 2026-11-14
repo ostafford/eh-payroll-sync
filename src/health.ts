@@ -1,5 +1,13 @@
 import { loadFieldMap } from "./mapping/loader.js";
-import { ROSTER_QUERY_SQL, parseRosterRows, deriveRosterEntry, summarizeRoster } from "./status/roster.js";
+import {
+  LINK_LIST_COUNTS_SQL,
+  ROSTER_QUERY_SQL,
+  countLinking,
+  deriveRosterEntry,
+  parseLinkListCounts,
+  parseRosterRows,
+  summarizeRoster,
+} from "./status/roster.js";
 
 /** The bits of the Worker env that /health inspects. The real Env satisfies this. */
 export interface HealthEnv {
@@ -43,6 +51,12 @@ export interface Health {
     broken: number;
     /** Left out of the sync by choice (`rules.exclude`): nothing to act on, never counted as broken. */
     leftOut: number;
+    /** Linking (ADR-0009, ADR-0010, #143 item 4): counts only, never an alert. Linked employees. */
+    linked: number;
+    /** Held employees: approved, stopped by the Pre-create check, waiting on the admin. */
+    held: number;
+    /** Links confirmed in the link stage and not made yet (the Link list). */
+    pendingLinks: number;
   } | null;
 }
 
@@ -85,8 +99,10 @@ async function readOps(env: HealthEnv): Promise<Health["ops"]> {
     const deadLettered = m.get("dl_total") ?? 0;
     const sweepAt = m.get("last_sweep_ok_at") ?? 0;
 
-    const roster = await env.DB.prepare(ROSTER_QUERY_SQL).all();
-    const counts = summarizeRoster(parseRosterRows(roster.results).map(deriveRosterEntry));
+    const rows = parseRosterRows((await env.DB.prepare(ROSTER_QUERY_SQL).all()).results);
+    const counts = summarizeRoster(rows.map(deriveRosterEntry));
+    const linking = countLinking(rows);
+    const linkList = parseLinkListCounts((await env.DB.prepare(LINK_LIST_COUNTS_SQL).all()).results);
 
     return {
       queueBacklog: Math.max(0, enqueued - acked - deadLettered),
@@ -99,6 +115,9 @@ async function readOps(env: HealthEnv): Promise<Health["ops"]> {
       waitingAdmin: counts.waitingAdmin,
       broken: counts.broken,
       leftOut: counts.leftOut,
+      linked: linking.linked,
+      held: linking.held,
+      pendingLinks: linkList.pending,
     };
   } catch {
     return null;

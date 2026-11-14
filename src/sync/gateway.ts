@@ -5,7 +5,7 @@
  * into the Worker.
  */
 import type { CycleStore } from "./cycles.js";
-import type { RosterRow } from "../status/roster.js";
+import type { LinkListCounts, RosterRow } from "../status/roster.js";
 
 /** Matches the `sync_log.outcome` enum in {@link ../db/schema}. */
 export type SyncOutcomeLabel =
@@ -179,6 +179,7 @@ export interface LinkGateway {
  */
 export interface StatusGateway extends Pick<SyncGateway, "readMeta" | "setMarker"> {
   listRosterRows(): Promise<RosterRow[]>;
+  countLinkList(): Promise<LinkListCounts>;
 }
 
 /**
