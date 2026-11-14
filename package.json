@@ -18,6 +18,7 @@
     "preflight": "tsx scripts/preflight.ts",
     "link": "tsx scripts/link.ts",
     "eh-diff": "tsx scripts/eh-diff.ts",
+    "workers-subdomain": "tsx scripts/workers-subdomain.ts",
     "validate-field-map": "tsx scripts/validate-field-map.ts",
     "provision-classification-field": "tsx scripts/provision-award-classification-field.ts",
     "test:integration": "vitest run --project integration",

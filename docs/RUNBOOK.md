@@ -328,6 +328,9 @@ The wizard does all of this. Manual equivalent:
 # Log in to the CLIENT's account
 npx wrangler login
 npx wrangler whoami          # confirm it's the right account
+# A brand-new account has no workers.dev subdomain, and the deploy can't
+# register one unattended: this checks, and registers one if there's none
+npm run workers-subdomain
 
 # Provision (one D1 database, two queues)
 npx wrangler d1 create eh-payroll-sync
@@ -635,6 +638,7 @@ effect). Holding and expiry are from Cloudflare's Queues docs.
 | `ops.webhookRejected` | `user_updated` deliveries rejected (`401`) | anything `> 0` = a `secretKey` mismatch |
 | `ops.ready` / `ops.waitingEmployee` / `ops.waitingAdmin` / `ops.broken` | sync-status roster counts — see below | `waitingAdmin` or `broken` staying above `0` for a while |
 | `ops.leftOut` | employees left out of the sync by choice (`rules.exclude`, e.g. Employee Status `PBV`): no EH record, no message | nothing to act on; a jump nobody expected = check the field map's `rules.exclude` |
+| `ops.linked` / `ops.held` / `ops.pendingLinks` | Linked employees, Held employees, and links confirmed in the link stage but not made yet (the Link list) | counts only, never an alert; `held` staying above `0` = resolve them in the setup wizard's link stage |
 
 Full request / queue / sweep detail is in the Cloudflare **Workers Logs** for the
 Worker — one JSON line per event, every line passed through `src/redact.ts` first.
@@ -695,7 +699,9 @@ automatically (`STATUS_DIGEST_DAY`, default Monday, UTC) and on demand:
 curl -X POST -H "Authorization: Bearer $STATUS_TOKEN" https://<worker>.workers.dev/status/digest
 ```
 
-Silent but for a one-line "all clear" when everyone is `ready`. The on-demand
+Silent but for a one-line "all clear" when everyone is `ready`. When anyone on
+the Link list hasn't had their pack approved yet, it adds one count line, with
+no names: "N people on the link list are waiting for approval in Connecteam". The on-demand
 call answers `{"status":"sent","messages":N}`, or **502**
 `{"status":"failed","sent":n,"messages":N}` if Connecteam didn't take a
 message. Sending stops at the first failure, so nothing arrives with a gap;

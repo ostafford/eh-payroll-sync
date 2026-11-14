@@ -8,6 +8,8 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM sync_meta"),
     env.DB.prepare("DELETE FROM employee_map"),
     env.DB.prepare("DELETE FROM sync_log"),
+    env.DB.prepare("DELETE FROM pending_link"),
+    env.DB.prepare("DELETE FROM onboarding_state"),
   ]);
 });
 
@@ -32,6 +34,9 @@ describe("/health (in workerd, real D1)", () => {
       waitingAdmin: 0,
       broken: 0,
       leftOut: 0,
+      linked: 0,
+      held: 0,
+      pendingLinks: 0,
     });
     expect(body.d1).toBe("ok");
   });
@@ -57,6 +62,9 @@ describe("/health (in workerd, real D1)", () => {
       waitingAdmin: 0,
       broken: 0,
       leftOut: 0,
+      linked: 0,
+      held: 0,
+      pendingLinks: 0,
     });
   });
 
@@ -69,5 +77,21 @@ describe("/health (in workerd, real D1)", () => {
 
     const { body } = await getHealth();
     expect(body.ops).toMatchObject({ ready: 1, waitingEmployee: 1, waitingAdmin: 0, broken: 0 });
+  });
+
+  it("counts Linked and Held employees and pending links from real D1 rows (#156)", async () => {
+    const store = new SyncStore(env.DB);
+    const baseline = { keyId: "k1", units: { phone: "fp-phone" } };
+    await store.completeLink({ ctUserId: 1, ehEmployeeId: "41", lastSyncedTs: 1, lastPayloadHash: "h1", lastOutcome: "ok" }, 10, baseline);
+    await store.completeLink({ ctUserId: 2, ehEmployeeId: "42", lastSyncedTs: 1, lastPayloadHash: "h2", lastOutcome: "ok" }, 11, baseline);
+    await store.saveEmployeeLink({ ctUserId: 3, ehEmployeeId: null, lastSyncedTs: 1, lastPayloadHash: null, lastOutcome: "existing_match" });
+    await store.appendSyncLog({ ctUserId: 3, at: 1, outcome: "existing_match", detail: "existing_match: 40213" });
+    await store.saveEmployeeLink({ ctUserId: 4, ehEmployeeId: "44", lastSyncedTs: 1, lastPayloadHash: "h4", lastOutcome: "ok" });
+    await store.savePendingLink({ ctUserId: 5, ehEmployeeId: "45", confirmedAt: 1 });
+    await store.savePendingLink({ ctUserId: 6, ehEmployeeId: null, confirmedAt: 1 });
+    await store.savePendingLink({ ctUserId: 3, ehEmployeeId: "40213", confirmedAt: 1 });
+
+    const { body } = await getHealth();
+    expect(body.ops).toMatchObject({ linked: 2, held: 1, pendingLinks: 3 });
   });
 });

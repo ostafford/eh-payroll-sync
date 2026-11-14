@@ -19,6 +19,25 @@ beforeEach(async () => {
   ]);
 });
 
+describe("countLinkList (#156)", () => {
+  it("counts every pending link, and those whose pack isn't approved yet", async () => {
+    expect(await store.countLinkList()).toEqual({ pending: 0, awaitingApproval: 0 });
+
+    await store.savePendingLink({ ctUserId: 1, ehEmployeeId: "41", confirmedAt: 1 }); // no assignment seen yet
+    await store.savePendingLink({ ctUserId: 2, ehEmployeeId: "42", confirmedAt: 1 }); // in progress
+    await store.savePendingLink({ ctUserId: 3, ehEmployeeId: null, confirmedAt: 1 }); // approved, waiting on the sync
+    await store.writeOnboardingState(
+      [
+        { id: 1002, userId: 2, status: "in_progress", isWaitingApproval: true },
+        { id: 1003, userId: 3, status: "completed", isWaitingApproval: false },
+      ],
+      1,
+    );
+
+    expect(await store.countLinkList()).toEqual({ pending: 3, awaitingApproval: 2 });
+  });
+});
+
 describe("pending_link", () => {
   it("adds, reads, lists and deletes a pending link", async () => {
     await store.savePendingLink({ ctUserId: 1, ehEmployeeId: "40213", confirmedAt: 100 });

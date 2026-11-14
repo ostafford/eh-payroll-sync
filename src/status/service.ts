@@ -82,7 +82,8 @@ export type DigestResult =
  */
 export async function runStatusDigestNow(deps: StatusDeps): Promise<DigestResult> {
   const roster = await buildStatusRoster(deps);
-  const messages = digestMessages(roster.employees as DigestEmployee[], roster.employees.length);
+  const { awaitingApproval } = await deps.store.countLinkList();
+  const messages = digestMessages(roster.employees as DigestEmployee[], roster.employees.length, awaitingApproval);
   for (const [sent, text] of messages.entries()) {
     const res = await deps.ct.sendChannelMessage(deps.adminChannelId, text);
     if (res.outcome !== "ok") {
