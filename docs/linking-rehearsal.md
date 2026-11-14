@@ -49,9 +49,10 @@ fixture's Connecteam user id and EH employee id on your own copy, not here.
 Each scenario's expected result is what passes. Anything else fails it.
 
 1. **Rollout.** Pause the queue, approve F7, then follow the RUNBOOK's rollout
-   steps: `BASELINE_KEY` put → `./scripts/update.sh` →
-   `./scripts/setup-wizard.sh --stage link`. Save the Link list, then resume the queue.
-   - [ ] `update.sh` ends with `✓ update complete`.
+   steps: `./scripts/update.sh` → `./scripts/setup-wizard.sh --stage link`.
+   Save the Link list, then resume the queue.
+   - [ ] `update.sh` says it put `BASELINE_KEY` (a new one, kept in `.dev.vars`)
+         and ends with `✓ update complete`.
    - [ ] F1 (and F1b–d) are suggested; F2 needs a choice; F6 isn't listed;
          F8 shows "Can't link: already linked to someone else".
    - [ ] F7 is linked within a minute or two of resuming, with no profile edit.
