@@ -819,8 +819,18 @@ who edited their profile around then to check EH: fix it there by hand, or
 have the employee change the value and change it back.
 
 To rotate on purpose, first check nothing is waiting: `ops.queueBacklog` on
-`/health` is `0`. Then put the new key the way the rollout's step 1 does,
-replacing the `BASELINE_KEY` line in `.dev.vars`.
+`/health` is `0`. Then make a new key, replace the `BASELINE_KEY` line in
+`.dev.vars` with it, and put it (`update.sh` never replaces a key the Worker
+already has):
+
+```bash
+npm run deploy:config
+key=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
+grep -v '^BASELINE_KEY=' .dev.vars > .dev.vars.new && echo "BASELINE_KEY=$key" >> .dev.vars.new && mv .dev.vars.new .dev.vars
+printf %s "$key" | npx wrangler secret put BASELINE_KEY --config wrangler.deploy.json
+```
+
+Back up `.dev.vars` afterwards.
 
 ---
 
@@ -876,26 +886,16 @@ this: the wizard's link stage already runs before the deploy (ADR-0012).
 > deployment.
 
 The integrator runs these steps. The client's admin keeps holding approvals
-for Pre-existing employees until step 3 is done; new hires are approved as
+for Pre-existing employees until step 2 is done; new hires are approved as
 normal throughout.
 
-1. **Put `BASELINE_KEY`.** The deploy check refuses to deploy without it, and
-   prints the command to run. Build the config first, then make the key, keep
-   it in `.dev.vars` and put it:
-
-   ```bash
-   npm run deploy:config
-   key=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
-   echo "BASELINE_KEY=$key" >> .dev.vars
-   printf %s "$key" | npx wrangler secret put BASELINE_KEY --config wrangler.deploy.json
-   ```
-
-   Back up `.dev.vars` afterwards: a lost key re-baselines every Linked
-   employee ("Rotating keys" below).
-2. **Update:** `./scripts/update.sh` applies the linking migrations and
-   deploys. From here the Pre-create check is live, so a mistaken approval
-   becomes a **Held employee**, never an overwrite.
-3. **Link stage:** `./scripts/setup-wizard.sh --stage link`. It runs the
+1. **Update:** `./scripts/update.sh` puts the `BASELINE_KEY` linking needs
+   (see "Updating the deployment"), applies the linking migrations and
+   deploys. Back up `.dev.vars` afterwards: it now holds that key, and a lost
+   key re-baselines every Linked employee ("Rotating keys"). From here the
+   Pre-create check is live, so a mistaken approval becomes a **Held
+   employee**, never an overwrite.
+2. **Link stage:** `./scripts/setup-wizard.sh --stage link`. It runs the
    pre-go-live check first, then the Link list, with the admin on a
    screen-share. Employees who already synced aren't listed. Two rows need no
    choice:
@@ -906,7 +906,7 @@ normal throughout.
 
    Anyone already approved but never synced (an old dead-letter, say) is
    linked by the sweep within a minute of saving, with no profile edit.
-4. **Release the held approvals:**
+3. **Release the held approvals:**
    1. **Canary.** Pick 3–5 people from the Link list. Snapshot their EH records
       (`npm run eh-diff -- snapshot <EH id>...`), have the admin approve them,
       wait for them to sync, then `npm run eh-diff -- diff`. It must exit `0`,
@@ -923,17 +923,16 @@ When the client has copied each existing employee's EH Payroll ID into a
 Connecteam text field (ADR-0011), the field does the matching and no Link list
 is needed for those people:
 
-1. Put `BASELINE_KEY` (step 1 above).
-2. Pick the field: `npm run field-check`, choose it as the Payroll ID, then
+1. Pick the field: `npm run field-check`, choose it as the Payroll ID, then
    `npm run discover -- --client self`. On a deployment with a tuned map,
    discover writes `clients/self/field-map.draft.json` beside it: copy its
    `identity` block into `clients/self/field-map.json`, then
    `npm run validate-field-map`.
-3. `npm run preflight`, and fix what it flags in Connecteam: IDs not found in
+2. `npm run preflight`, and fix what it flags in Connecteam: IDs not found in
    EH, an ID used twice, blanks for people already in EH, and rows where no
    other detail agrees.
-4. `./scripts/update.sh`.
-5. Release a canary of 3–5 people whose rows came back found with every key
+3. `./scripts/update.sh` (it puts `BASELINE_KEY`, as in step 1 above; back up `.dev.vars`).
+4. Release a canary of 3–5 people whose rows came back found with every key
    agreeing (snapshot and diff as above; the diff should show no change at
    all, since EH already holds their Payroll ID), then everyone else.
 
