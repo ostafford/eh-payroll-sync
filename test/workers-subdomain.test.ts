@@ -12,6 +12,7 @@ import {
   registerSubdomain,
   registerUntilDone,
   toCfResponse,
+  workerUrl,
   type CfApi,
   type CfResponse,
 } from "../scripts/lib/workers-subdomain.js";
@@ -117,9 +118,11 @@ describe("toCfResponse", () => {
 
 describe("the wizard", () => {
   const wizard = readFileSync("scripts/setup-wizard.sh", "utf8");
+  // The account stage's check, at the start of a line: --stage webhook's --print-url call comes earlier.
+  const ACCOUNT_CHECK = "\nnpm run --silent workers-subdomain";
 
   it("checks the subdomain at the Cloudflare account stage, before any secret is stored or anything is provisioned", () => {
-    const check = wizard.indexOf("npm run --silent workers-subdomain");
+    const check = wizard.indexOf(ACCOUNT_CHECK);
     expect(check).toBeGreaterThan(wizard.indexOf('stage "Cloudflare account"'));
     expect(check).toBeLessThan(wizard.indexOf('stage "Connecteam: API key"'));
     // The first call, at the start of a line; the helper's definition comes earlier.
@@ -129,7 +132,14 @@ describe("the wizard", () => {
   });
 
   it("stops if the account still has no subdomain", () => {
-    const at = wizard.indexOf("npm run --silent workers-subdomain");
+    const at = wizard.indexOf(ACCOUNT_CHECK);
     expect(wizard.slice(at, at + 300)).toMatch(/\|\| \{ fail .*; exit 1; \}/);
+  });
+});
+
+describe("workerUrl", () => {
+  it("is the Worker's name on the account's subdomain, as wrangler.jsonc names it", () => {
+    expect(workerUrl("acme")).toBe("https://eh-payroll-sync.acme.workers.dev");
+    expect(readFileSync("wrangler.jsonc", "utf8")).toMatch(/"name": "eh-payroll-sync"/);
   });
 });

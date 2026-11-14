@@ -1,5 +1,5 @@
 /**
- * `npm run workers-subdomain [-- --check-only]`
+ * `npm run workers-subdomain [-- --check-only | --print-url]`
  *
  * The wizard's check, at the Cloudflare account stage, that the account has a
  * workers.dev subdomain, the address the sync is reached at (#194). A
@@ -10,8 +10,12 @@
  * Signs in the way wrangler is signed in (`wrangler auth token`), on the
  * account `CLOUDFLARE_ACCOUNT_ID` names, or the only one wrangler can see.
  *
+ * `--print-url` prints only the sync's address on that subdomain, for the
+ * wizard's `--stage webhook` (#195); it never registers one.
+ *
  * Exit code: 0 = the account has a subdomain (now), 2 = it has none (and
- * `--check-only`, no terminal, or a blank answer), 1 = the check failed.
+ * `--check-only`, `--print-url`, no terminal, or a blank answer), 1 = the
+ * check failed.
  */
 import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
@@ -21,6 +25,7 @@ import {
   readSubdomain,
   registerUntilDone,
   toCfResponse,
+  workerUrl,
   type CfApi,
 } from "./lib/workers-subdomain.js";
 
@@ -59,7 +64,8 @@ function accountId(): string {
 }
 
 async function main(): Promise<void> {
-  const checkOnly = process.argv.includes("--check-only");
+  const printUrl = process.argv.includes("--print-url");
+  const checkOnly = printUrl || process.argv.includes("--check-only");
   const credentials = wranglerJson<Credentials>(["auth", "token", "--json"]);
   const id = accountId();
   const api: CfApi = async (method, path, body) => {
@@ -72,14 +78,20 @@ async function main(): Promise<void> {
   };
 
   const existing = await readSubdomain(api, id);
+  if (existing && printUrl) {
+    console.log(workerUrl(existing));
+    return;
+  }
   if (existing) {
-    console.log(`✓ The account's workers.dev subdomain is ${existing}: the sync will be at https://eh-payroll-sync.${existing}.workers.dev`);
+    console.log(`✓ The account's workers.dev subdomain is ${existing}: the sync will be at ${workerUrl(existing)}`);
     return;
   }
 
-  console.log("This Cloudflare account has no workers.dev subdomain yet. The sync needs one: it's part of its web address.");
+  // On stderr with --print-url, so stdout stays only ever an address.
+  const log = printUrl ? console.error : console.log;
+  log("This Cloudflare account has no workers.dev subdomain yet. The sync needs one: it's part of its web address.");
   if (checkOnly || !process.stdin.isTTY) {
-    console.log(`Register one in the ${DASHBOARD_PATH}, or run \`npm run workers-subdomain\` in a terminal.`);
+    log(`Register one in the ${DASHBOARD_PATH}, or run \`npm run workers-subdomain\` in a terminal.`);
     process.exitCode = 2;
     return;
   }
@@ -93,7 +105,7 @@ async function main(): Promise<void> {
       process.exitCode = 2;
       return;
     }
-    console.log(`✓ Registered ${got}.workers.dev. The sync will be at https://eh-payroll-sync.${got}.workers.dev (it can take a few minutes to answer).`);
+    console.log(`✓ Registered ${got}.workers.dev. The sync will be at ${workerUrl(got)} (it can take a few minutes to answer).`);
   } finally {
     rl.close();
   }
