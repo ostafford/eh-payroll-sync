@@ -6,15 +6,18 @@ import {
   STATUS_DIGEST_MIN_GAP_MS,
   STATUS_DIGEST_RETRY_MS,
 } from "../src/status/service.js";
-import type { RosterRow } from "../src/status/roster.js";
+import type { LinkListCounts, RosterRow } from "../src/status/roster.js";
 import type { ConnecteamUser, CtResult } from "../src/connecteam/types.js";
 
-function fakeStore(rows: RosterRow[]) {
+function fakeStore(rows: RosterRow[], linkList: LinkListCounts = { pending: 0, awaitingApproval: 0 }) {
   const meta = new Map<string, number>();
   return {
     meta,
     async listRosterRows() {
       return rows;
+    },
+    async countLinkList() {
+      return linkList;
     },
     async readMeta(keys: string[]) {
       return Object.fromEntries(keys.map((k) => [k, meta.get(k) ?? 0]));
@@ -147,6 +150,15 @@ describe("runStatusDigestNow", () => {
     expect(ct.channels).toHaveLength(1);
     expect(ct.channels[0]?.id).toBe(ADMIN_CHANNEL);
     expect(ct.channels[0]?.text).toContain("**🟠 Waiting on admin (1):**");
+  });
+
+  it("counts the people on the link list still waiting for approval, not every pending link (#156)", async () => {
+    const store = fakeStore([row({ ctUserId: 1 })], { pending: 5, awaitingApproval: 3 });
+    const ct = fakeCt();
+
+    await runStatusDigestNow({ store, ct, adminChannelId: ADMIN_CHANNEL });
+
+    expect(ct.channels.map((c) => c.text).join("\n")).toContain("3 people on the link list are waiting for approval in Connecteam");
   });
 });
 
