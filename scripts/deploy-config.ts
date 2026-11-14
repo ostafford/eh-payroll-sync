@@ -1,5 +1,5 @@
 /**
- * `npm run deploy:config [-- --check-live] [-- --allow-database-change] [-- --allow-missing-secrets]`
+ * `npm run deploy:config [-- --check-live] [-- --allow-database-change] [-- --allow-missing-secrets] [-- --put-baseline-key]`
  *
  * Writes `wrangler.deploy.json` - the config every deploy and remote D1 command
  * uses - from the `wrangler.jsonc` template plus this deployment's values in
@@ -18,17 +18,23 @@
  *    (REQUIRED_SECRETS, names only). The built config is kept, so the secret
  *    can be put with it. --allow-missing-secrets skips this, for the setup
  *    wizard, which puts every secret itself just before it deploys.
+ * With --put-baseline-key (update.sh): a live Worker missing only BASELINE_KEY
+ * gets one, the one in `.dev.vars` or a new one kept there, instead of
+ * refusing: a deployment from before linking has none (#172). One the Worker
+ * already has is never replaced.
  * Settings the deploy would change on the live Worker are listed, not blocked:
  * changing one (a new alerts channel, say) is a normal reason to deploy.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
   DEPLOY_CONFIG_PATH,
   DATABASE_ID_KEY,
   compareWithLive,
   missingSecrets,
   parseDevVars,
+  planBaselineKey,
   renderDeployConfig,
   type LiveBinding,
 } from "./lib/deploy-config.js";
@@ -37,6 +43,7 @@ import { checkDeployableFieldMap } from "./lib/validate-field-map.js";
 const checkLive = process.argv.includes("--check-live");
 const allowDatabaseChange = process.argv.includes("--allow-database-change");
 const allowMissingSecrets = process.argv.includes("--allow-missing-secrets");
+const putBaselineKey = process.argv.includes("--put-baseline-key");
 
 function stop(...lines: string[]): never {
   // A config that failed a check must not be left lying around to deploy by hand.
@@ -54,12 +61,12 @@ function readText(path: string, missing: string): string {
   }
 }
 
-/** Runs wrangler; returns its output, or throws with stdout + stderr in the message. */
-function wrangler(args: string[]): string {
+/** Runs wrangler, with `input` on its stdin; returns its output, or throws with stdout + stderr in the message. */
+function wrangler(args: string[], input?: string): string {
   try {
     return execFileSync("npx", ["--yes", "wrangler", ...args, "--config", DEPLOY_CONFIG_PATH], {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      ...(input === undefined ? { stdio: ["ignore", "pipe", "pipe"] } : { input, stdio: ["pipe", "pipe", "pipe"] }),
     });
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string };
@@ -146,7 +153,26 @@ if (checkLive) {
       );
     }
     console.log(`✓ Matches the live Worker's database${diff.databaseChange ? " (change allowed)" : ""}.`);
-    const missing = allowMissingSecrets ? [] : missingSecrets(bindings);
+    let missing = allowMissingSecrets ? [] : missingSecrets(bindings);
+    if (putBaselineKey) {
+      const plan = planBaselineKey(missing, devVars, () => randomBytes(32).toString("hex"));
+      if (plan.action === "put") {
+        if (plan.keepInDevVars) {
+          const text = readFileSync(".dev.vars", "utf8");
+          appendFileSync(".dev.vars", `${text.endsWith("\n") || text === "" ? "" : "\n"}BASELINE_KEY=${plan.key}\n`);
+          console.log("✓ Made a BASELINE_KEY for linking and kept it in .dev.vars. Back up .dev.vars: a lost key re-baselines every Linked employee.");
+        }
+        try {
+          wrangler(["secret", "put", "BASELINE_KEY"], plan.key);
+        } catch (e) {
+          console.error("✗ Couldn't put BASELINE_KEY on the live Worker.", String(e).trim());
+          console.error("  Run this again: it reuses the key in .dev.vars. Nothing was deployed.");
+          process.exit(1);
+        }
+        console.log(`✓ Put BASELINE_KEY on the live Worker (${plan.keepInDevVars ? "the new one" : "the one in .dev.vars"}).`);
+        missing = missing.filter((k) => k !== "BASELINE_KEY");
+      }
+    }
     if (missing.length > 0) {
       // Kept, unlike stop(): the config is right, and putting the secret needs it.
       for (const l of [
