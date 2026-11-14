@@ -111,19 +111,23 @@ async function listPackPeople(
   // Every assignee, approved or not: Pre-existing employees aren't approved yet.
   const userIds = [...new Set(assignments.data.map((a) => a.userId))];
 
+  // One read of every active user, 500 a page, instead of one call per person
+  // (#196). It leaves archived users out, as the per-user lookup does (demo
+  // account, 2026-11-14), so a pack person not in it counts as missing.
+  const all = await ct.listUsers();
+  if (all.outcome !== "ok") throw new Error(`Connecteam users -> HTTP ${all.status}`);
+  const byId = new Map(all.data.map((u) => [u.userId, u]));
+
   const people: PreflightPerson[] = [];
   let missing = 0;
-  for (const [i, userId] of userIds.entries()) {
-    process.stderr.write(`\rReading Connecteam people in the onboarding pack: ${i + 1}/${userIds.length}`);
-    if ((ct.lastRateLimit?.minuteRemaining ?? Infinity) <= 1) await new Promise((r) => setTimeout(r, 60_000));
-    const u = await ct.getUser(userId);
-    if (u.outcome !== "ok") throw new Error(`Connecteam user ${userId} -> HTTP ${u.status}`);
-    if (!u.data) {
+  for (const userId of userIds) {
+    const found = byId.get(userId);
+    if (!found) {
       missing++;
       continue;
     }
     // The same mapping the sync runs, so the key and details are exactly what EH would get.
-    const user = u.data as unknown as ConnecteamUser;
+    const user = found as unknown as ConnecteamUser;
     const mapped = applyFieldMap(user, fieldMap, {});
     people.push({
       ctUserId: userId,
@@ -134,7 +138,6 @@ async function listPackPeople(
       payload: mapped.payload,
     });
   }
-  process.stderr.write("\n");
   return { people, missing };
 }
 
@@ -144,10 +147,18 @@ async function main(): Promise<void> {
   loadDevVars();
   const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY"), customPublisherId: 0 });
   const fieldMap = loadFieldMap(process.env.FIELD_MAP_CLIENT);
+  process.stderr.write("Reading Connecteam users, Employment Hero employees and the sync's records...\n");
+  const t0 = Date.now();
   const { people, missing } = await listPackPeople(ct, Number(need("CT_ONBOARDING_PACK_ID")), fieldMap);
+  const t1 = Date.now();
   const eh = await listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY"));
-
+  const t2 = Date.now();
   const records = readSyncRecords(readDevVarsFile(), { check: () => checkDeployConfig(["--allow-missing-secrets"]), query: d1 });
+  const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  process.stderr.write(
+    `Read ${people.length + missing} pack people in ${secs(t1 - t0)}, ${eh.length} EH employees in ${secs(t2 - t1)}, ` +
+      `the sync's records in ${secs(Date.now() - t2)}.\n`,
+  );
 
   const rows = classifyAll(people, eh, { payrollIdField: fieldMap.identity.externalIdFrom !== "userId", records });
   console.log(renderPreflight(rows, eh.length, { missing, recordsRead: records !== null }));
