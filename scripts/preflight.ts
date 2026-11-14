@@ -148,17 +148,18 @@ async function main(): Promise<void> {
   const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY"), customPublisherId: 0 });
   const fieldMap = loadFieldMap(process.env.FIELD_MAP_CLIENT);
   process.stderr.write("Reading Connecteam users, Employment Hero employees and the sync's records...\n");
-  const t0 = Date.now();
+  // Each read's time prints as it finishes, so a later read failing doesn't hide the earlier ones.
+  let t = Date.now();
+  const lap = (what: string) => {
+    process.stderr.write(`  ${what} in ${((Date.now() - t) / 1000).toFixed(1)}s\n`);
+    t = Date.now();
+  };
   const { people, missing } = await listPackPeople(ct, Number(need("CT_ONBOARDING_PACK_ID")), fieldMap);
-  const t1 = Date.now();
+  lap(`Read ${people.length + missing} pack people from Connecteam`);
   const eh = await listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY"));
-  const t2 = Date.now();
+  lap(`Read ${eh.length} EH employees`);
   const records = readSyncRecords(readDevVarsFile(), { check: () => checkDeployConfig(["--allow-missing-secrets"]), query: d1 });
-  const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-  process.stderr.write(
-    `Read ${people.length + missing} pack people in ${secs(t1 - t0)}, ${eh.length} EH employees in ${secs(t2 - t1)}, ` +
-      `the sync's records in ${secs(Date.now() - t2)}.\n`,
-  );
+  lap(records === null ? "No sync database to read yet" : "Read the sync's records");
 
   const rows = classifyAll(people, eh, { payrollIdField: fieldMap.identity.externalIdFrom !== "userId", records });
   console.log(renderPreflight(rows, eh.length, { missing, recordsRead: records !== null }));
