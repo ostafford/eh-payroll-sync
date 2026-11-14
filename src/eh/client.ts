@@ -7,6 +7,7 @@
  * Confirmed against the live API (issue #2):
  *  - GET .../employee/unstructured/externalid/{id}  -> 200 full record, or 404
  *  - GET .../employee/unstructured?$filter=...       -> 200 [records], terminated ones included (#131, #141)
+ *  - GET .../employee/unstructured?$top=&$skip=      -> 200 [records], one page
  *  - POST .../employee/unstructured                 -> 201 { id, status, detailedStatus, operationType }
  *  - PUT  .../employee/unstructured/{id}            -> 200 same envelope
  *  - validation failures are HTTP 400 with { message: "Field: reason\n..." }
@@ -31,6 +32,9 @@ export interface EhClientConfig {
 }
 
 const DEFAULT_BASE = "https://api.yourpayroll.com.au/api/v2";
+
+/** Rows per page when listing every employee. */
+const LIST_PAGE = 100;
 
 export class EhPayrollClient {
   readonly #base: string;
@@ -90,6 +94,23 @@ export class EhPayrollClient {
     const r = await this.#get(`/employee/unstructured?$filter=${encodeURIComponent(filter)}`);
     if (r.kind === "success") return { outcome: "ok", data: Array.isArray(r.body) ? (r.body as EhEmployee[]) : [] };
     return toResult(r);
+  }
+
+  /**
+   * Every employee in the business, a page at a time, terminated ones
+   * included. For the read-only scripts (the link stage, the preflight). The
+   * rows are raw and carry full values (TFN unmasked): a caller keeps only
+   * the fields it needs, and never logs or stores the rest.
+   */
+  async listEmployees(): Promise<EhResult<Record<string, unknown>[]>> {
+    const out: Record<string, unknown>[] = [];
+    for (let skip = 0; ; skip += LIST_PAGE) {
+      const r = await this.#get(`/employee/unstructured?$top=${LIST_PAGE}&$skip=${skip}`);
+      if (r.kind !== "success") return toResult(r);
+      const page = Array.isArray(r.body) ? (r.body as Record<string, unknown>[]) : [];
+      out.push(...page);
+      if (page.length < LIST_PAGE) return { outcome: "ok", data: out };
+    }
   }
 
   /**

@@ -11,6 +11,7 @@
 import { AWARD_FIELD_NAME, findAwardField } from "./award-field.js";
 import { compatibleType, optionsOf, resolveField, type FieldPicks, type OptionMap } from "./field-resolve.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec, type Group } from "./field-spec.js";
+import { palette, wrap } from "./terminal-text.js";
 
 /** "optional": only used if the client has it, never created (#118). */
 export type Level = "required" | "recommended" | "optional" | "admin" | "notSynced";
@@ -265,40 +266,6 @@ function explain(r: CheckRow): { why: string; fix: string } {
 export const typeName = (t: string): string =>
   ({ str: "text", dropdown: "dropdown", date: "date", birthday: "birthday", location: "location", directManager: "direct manager", number: "number" })[t] ?? t;
 
-function wrap(text: string, indent: string): string[] {
-  const out: string[] = [];
-  let line = "";
-  for (const word of text.split(" ")) {
-    if (line && indent.length + line.length + 1 + word.length > WIDTH) {
-      out.push(indent + line);
-      line = word;
-    } else line = line ? `${line} ${word}` : word;
-  }
-  if (line) out.push(indent + line);
-  return out;
-}
-
-/**
- * The check's colours and marks, shared by the screens that follow its
- * conventions (the link stage, #154): Employment Hero purple, Connecteam cyan,
- * changes yellow. With `color` off, plain text and `[ok]` / `[!]` / `[x]` / `[-]`.
- */
-export function palette(color: boolean) {
-  const c = (code: string) => (s: string) => (color ? `\u001b[${code}m${s}\u001b[0m` : s);
-  const p = { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1"), ok: c("32"), bad: c("31") };
-  return {
-    ...p,
-    mark: {
-      ok: p.ok(color ? "✓" : "[ok]"),
-      warn: p.change(color ? "⚠" : "[!]"),
-      bad: p.bad(color ? "✗" : "[x]"),
-      none: p.dim(color ? "–" : "[-]"),
-    },
-    /** The visible width of a mark. */
-    markWidth: color ? 1 : 4,
-  };
-}
-
 export interface RenderOptions {
   color: boolean;
   /** Number the fields that can be changed (the interactive check). */
@@ -318,21 +285,19 @@ const CT_W = 28;
  * are purple, Connecteam fields cyan, changes yellow (when `color`).
  */
 export function renderFieldCheck(rows: CheckRow[], opts: RenderOptions): string {
-  const c = (code: string, s: string) => (opts.color ? `\u001b[${code}m${s}\u001b[0m` : s);
-  const eh = (s: string) => c("35", s);
-  const ct = (s: string) => c("36", s);
-  const dim = (s: string) => c("2", s);
+  const p = palette(opts.color);
+  const { eh, ct, dim } = p;
   const fit = (s: string, w: number) => (s.length > w ? `${s.slice(0, w - 1)}…` : s.padEnd(w));
 
   const markOf = (r: CheckRow): string =>
     r.result.status === "found"
-      ? c("32", opts.color ? "✓" : "[ok]")
+      ? p.mark.ok
       : notUsed(r)
-        ? c("2", opts.color ? "–" : "[-]")
+        ? p.mark.none
         : r.blocking && r.result.status !== "toCreate"
-          ? c("31", opts.color ? "✗" : "[x]")
-          : c("33", opts.color ? "⚠" : "[!]");
-  const markW = opts.color ? 2 : 5;
+          ? p.mark.bad
+          : p.mark.warn;
+  const markW = p.markWidth + 1;
   const numW = opts.numbered ? 6 : 2;
 
   const yours = (r: CheckRow): string => {
@@ -349,40 +314,40 @@ export function renderFieldCheck(rows: CheckRow[], opts: RenderOptions): string 
 
   const statusOf = (r: CheckRow): string => {
     const res = r.result;
-    if (opts.changed?.has(r.name) && ["found", "skipped", "toCreate"].includes(res.status)) return c("33", "changed");
+    if (opts.changed?.has(r.name) && ["found", "skipped", "toCreate"].includes(res.status)) return p.change("changed");
     switch (res.status) {
       case "found":
         return r.profile ? "profile name" : r.picked ? "confirmed" : "matched by name";
       case "missing":
-        return notUsed(r) ? dim("not used") : c(r.blocking ? "31" : "33", "missing");
+        return notUsed(r) ? dim("not used") : (r.blocking ? p.bad : p.change)("missing");
       case "skipped":
         return dim("skipped");
       case "toCreate":
-        return c("33", "to be created");
+        return p.change("to be created");
       case "wrongType":
-        return c(r.blocking ? "31" : "33", `wrong type (${typeName(res.got)})`);
+        return (r.blocking ? p.bad : p.change)(`wrong type (${typeName(res.got)})`);
       case "options": {
         const text = res.unknown.length
           ? `${res.unknown.length} option${res.unknown.length === 1 ? "" : "s"} to map`
           : `no ${res.absent.map((o) => `"${o}"`).join("/")} option`;
-        return c(r.blocking ? "31" : "33", text);
+        return (r.blocking ? p.bad : p.change)(text);
       }
       case "ambiguous":
-        return c(r.blocking ? "31" : "33", "more than one match");
+        return (r.blocking ? p.bad : p.change)("more than one match");
       case "stalePick":
-        return c(r.blocking ? "31" : "33", "picked field deleted");
+        return (r.blocking ? p.bad : p.change)("picked field deleted");
       case "toAsk":
-        return c("33", "to decide");
+        return p.change("to decide");
       case "userEditable":
-        return c("33", "editable by employees");
+        return p.change("editable by employees");
       case "taxGuess":
-        return c("33", `${res.guesses.length} answer${res.guesses.length === 1 ? "" : "s"} to check`);
+        return p.change(`${res.guesses.length} answer${res.guesses.length === 1 ? "" : "s"} to check`);
     }
   };
 
   const indent = " ".repeat(numW + markW);
   const lines: string[] = [
-    `${indent}${c("1", eh("Employment Hero needs".padEnd(EH_W)))} ${c("1", ct("Your Connecteam field".padEnd(CT_W)))} ${c("1", "Status")}`,
+    `${indent}${p.bold(eh("Employment Hero needs".padEnd(EH_W)))} ${p.bold(ct("Your Connecteam field".padEnd(CT_W)))} ${p.bold("Status")}`,
     `${indent}${dim("─".repeat(EH_W))} ${dim("─".repeat(CT_W))} ${dim("─".repeat(20))}`,
   ];
   let group = "";
@@ -390,24 +355,24 @@ export function renderFieldCheck(rows: CheckRow[], opts: RenderOptions): string 
   for (const r of rows) {
     if (r.group !== group) {
       group = r.group;
-      lines.push("", c("1", group));
+      lines.push("", p.bold(group));
     }
     const num = opts.numbered && r.group !== "Award" ? `${String(++n).padStart(4)}) ` : " ".repeat(numW);
-    const mark = `${markOf(r)}${" ".repeat(Math.max(1, markW - (opts.color ? 1 : 4)))}`;
+    const mark = `${markOf(r)}${" ".repeat(Math.max(1, markW - p.markWidth))}`;
     lines.push(`${num}${mark}${eh(r.name.padEnd(EH_W))} ${yours(r)} ${statusOf(r)}`);
     if (opts.explain !== false && r.result.status !== "found" && !notUsed(r) && r.result.status !== "toCreate") {
       const { why, fix } = explain(r);
-      lines.push(...wrap(`Why: ${why}`, "        "), ...wrap(`Fix: ${fix}`, "        "));
+      lines.push(...wrap(`        Why: ${why}`, WIDTH, " ", "        "), ...wrap(`        Fix: ${fix}`, WIDTH, " ", "        "));
     }
   }
 
   const s = summarise(rows);
   lines.push(
     "",
-    `${c("32", `${s.ok} ok`)} · ${c(s.blocking ? "31" : "32", `${s.blocking} required to fix`)} · ` +
-      c(s.warnings ? "33" : "32", `${s.warnings} to check`) +
-      (s.toCreate ? c("33", ` · ${s.toCreate} to create`) : "") +
-      (s.skipped ? c("2", ` · ${s.skipped} not used`) : ""),
+    `${p.ok(`${s.ok} ok`)} · ${(s.blocking ? p.bad : p.ok)(`${s.blocking} required to fix`)} · ` +
+      (s.warnings ? p.change : p.ok)(`${s.warnings} to check`) +
+      (s.toCreate ? p.change(` · ${s.toCreate} to create`) : "") +
+      (s.skipped ? p.dim(` · ${s.skipped} not used`) : ""),
   );
   return lines.map((l) => l.trimEnd()).join("\n");
 }

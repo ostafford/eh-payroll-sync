@@ -22,6 +22,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
+import { EhPayrollClient } from "../src/eh/client.js";
 import { applyFieldMap, leftOutBy, type ConnecteamUser } from "../src/mapping/apply.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
 import type { FieldMap } from "../src/mapping/schema.js";
@@ -71,32 +72,21 @@ function need(name: string): string {
 
 // --- EH --------------------------------------------------------------------
 
-const PAGE = 100;
-
 async function listEhEmployees(businessId: string, apiKey: string): Promise<PreflightEhEmployee[]> {
-  const auth = `Basic ${Buffer.from(`${apiKey}:`).toString("base64")}`;
-  const out: PreflightEhEmployee[] = [];
-  for (let skip = 0; ; skip += PAGE) {
-    const url = `https://api.yourpayroll.com.au/api/v2/business/${businessId}/employee/unstructured?$top=${PAGE}&$skip=${skip}`;
-    const r = await fetch(url, { headers: { authorization: auth, accept: "application/json" } });
-    // Status only: a response body can echo an employee's details back.
-    if (!r.ok) throw new Error(`Employment Hero employee list -> HTTP ${r.status}`);
-    const page = (await r.json()) as Array<Record<string, unknown>>;
-    for (const e of page) {
-      // Only what the Pre-create check compares, plus the Payroll ID and status (terminated).
-      out.push({
-        id: Number(e.id),
-        externalId: e.externalId,
-        firstName: e.firstName,
-        surname: e.surname,
-        emailAddress: e.emailAddress,
-        taxFileNumber: e.taxFileNumber,
-        dateOfBirth: e.dateOfBirth,
-        status: e.status,
-      });
-    }
-    if (page.length < PAGE) return out;
-  }
+  const list = await new EhPayrollClient({ businessId, apiKey }).listEmployees();
+  // Status only: a response body can echo an employee's details back.
+  if (list.outcome !== "ok") throw new Error(`Employment Hero employee list -> ${list.status === null ? "no response" : `HTTP ${list.status}`}`);
+  // Only what the Pre-create check compares, plus the Payroll ID and status (terminated).
+  return list.data.map((e) => ({
+    id: Number(e.id),
+    externalId: e.externalId,
+    firstName: e.firstName,
+    surname: e.surname,
+    emailAddress: e.emailAddress,
+    taxFileNumber: e.taxFileNumber,
+    dateOfBirth: e.dateOfBirth,
+    status: e.status,
+  }));
 }
 
 // --- Connecteam ----------------------------------------------------------
@@ -145,7 +135,7 @@ async function listPackPeople(
 
 async function main(): Promise<void> {
   loadDevVars();
-  const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY"), customPublisherId: 0 });
+  const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY") });
   const fieldMap = loadFieldMap(process.env.FIELD_MAP_CLIENT);
   process.stderr.write("Reading Connecteam users, Employment Hero employees and the sync's records...\n");
   // Each read's time prints as it finishes, so a later read failing doesn't hide the earlier ones.

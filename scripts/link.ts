@@ -33,6 +33,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
+import { EhPayrollClient } from "../src/eh/client.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
 import type { LinkStageData, LinkStageMapRow } from "./lib/link-input.js";
 import { linkListInput } from "./lib/link-input.js";
@@ -77,24 +78,16 @@ const HELD_SQL =
 
 // --- APIs ------------------------------------------------------------------
 
-const EH_PAGE = 100;
-
 async function listEhEmployees(businessId: string, apiKey: string): Promise<Record<string, unknown>[]> {
-  const auth = `Basic ${Buffer.from(`${apiKey}:`).toString("base64")}`;
-  const out: Record<string, unknown>[] = [];
-  for (let skip = 0; ; skip += EH_PAGE) {
-    const url = `https://api.yourpayroll.com.au/api/v2/business/${businessId}/employee/unstructured?$top=${EH_PAGE}&$skip=${skip}`;
-    const r = await fetch(url, { headers: { authorization: auth, accept: "application/json" } });
-    if (!r.ok) throw new Error(`Employment Hero employee list -> ${r.status} ${await r.text()}`);
-    const page = (await r.json()) as Record<string, unknown>[];
-    // Only what the link list reads, so nothing else (a TFN, a birth date) is kept.
-    out.push(...page.map(({ id, firstName, surname, emailAddress, externalId, status }) => ({ id, firstName, surname, emailAddress, externalId, status })));
-    if (page.length < EH_PAGE) return out;
-  }
+  const list = await new EhPayrollClient({ businessId, apiKey }).listEmployees();
+  // Status only: a response body can echo an employee's details back.
+  if (list.outcome !== "ok") throw new Error(`Employment Hero employee list -> ${list.status === null ? "no response" : `HTTP ${list.status}`}`);
+  // Only what the link list reads, so nothing else (a TFN, a birth date) is kept.
+  return list.data.map(({ id, firstName, surname, emailAddress, externalId, status }) => ({ id, firstName, surname, emailAddress, externalId, status }));
 }
 
 async function loadLive(): Promise<LinkStageData> {
-  const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY"), customPublisherId: 0 });
+  const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY") });
   process.stderr.write("Reading Connecteam users, Employment Hero employees and the sync's records...\n");
   const users = await ct.listUsers();
   if (users.outcome !== "ok") throw new Error(`Connecteam users -> ${users.status} ${users.detail}`);

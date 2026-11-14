@@ -25,8 +25,12 @@ import type {
 
 export interface CtClientConfig {
   apiKey: string;
-  /** Custom publisher id (from Settings -> Feed settings). Required to send chat. */
-  customPublisherId: number;
+  /**
+   * Custom publisher id (from Settings -> Feed settings). Needed only to send
+   * chat: a send without one reports `outcome: "error"` and sends nothing.
+   * Leave it out for a read-only caller.
+   */
+  customPublisherId?: number;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 }
@@ -35,10 +39,13 @@ const DEFAULT_BASE = "https://api.connecteam.com";
 const MAX_TEXT = 500;
 const USERS_PAGE = 500;
 
+/** A send from a client made without a custom publisher id. No HTTP call was made, so no status. */
+const NO_PUBLISHER: CtResult<null> = { outcome: "error", status: 0, detail: "no custom publisher id: nothing sent" };
+
 export class ConnecteamClient {
   readonly #base: string;
   readonly #apiKey: string;
-  readonly #publisherId: number;
+  readonly #publisherId: number | undefined;
   readonly #fetch: typeof fetch;
 
   /** Rate-limit headers from the most recent call, for callers that back off. */
@@ -121,6 +128,7 @@ export class ConnecteamClient {
 
   /** DM a user as the custom publisher. Text is clamped to 500 chars. */
   async sendDirectMessage(userId: number, text: string): Promise<CtResult<null>> {
+    if (this.#publisherId === undefined) return NO_PUBLISHER;
     const r = await this.#call("POST", `/chat/v1/conversations/privateMessage/${userId}`, {
       senderId: this.#publisherId,
       text: clamp(text),
@@ -130,6 +138,7 @@ export class ConnecteamClient {
 
   /** Post to a team/channel conversation as the custom publisher. */
   async sendChannelMessage(conversationId: string, text: string): Promise<CtResult<null>> {
+    if (this.#publisherId === undefined) return NO_PUBLISHER;
     const r = await this.#call("POST", `/chat/v1/conversations/${conversationId}/message`, {
       senderId: this.#publisherId,
       text: clamp(text),
