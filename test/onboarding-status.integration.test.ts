@@ -23,7 +23,7 @@ const live = apiKey ? describe : describe.skip;
 
 live("Onboarding pack status probe (live account, read-only)", () => {
   it(`dumps every assignment's status for pack ${packId}`, async () => {
-    const client = new ConnecteamClient({ apiKey: apiKey!, customPublisherId: 0 });
+    const client = new ConnecteamClient({ apiKey: apiKey! });
     const r = await client.listAssignments(packId);
 
     if (r.outcome !== "ok") {

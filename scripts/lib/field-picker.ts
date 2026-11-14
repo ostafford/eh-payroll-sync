@@ -5,6 +5,7 @@
 import { compatibleType, resolveField, type FieldDef, type FieldPick, type FieldPicks, type OptionMap } from "./field-resolve.js";
 import { checkFields, liveOptions, renderFieldCheck, taxGuess, typeName, type CheckRow } from "./field-check.js";
 import { FIELD_SPEC, requiredForSync, type FieldSpec } from "./field-spec.js";
+import { palette, type Palette } from "./terminal-text.js";
 import { answerLine } from "../../src/sync/messages.js";
 
 export type Choice = { kind: "use"; field: FieldDef } | { kind: "profile" } | { kind: "create" } | { kind: "skip" };
@@ -40,20 +41,6 @@ export interface PickerIo {
   /** Colour the output (a terminal only): Employment Hero purple, Connecteam cyan, changes yellow. */
   color?: boolean;
 }
-
-/** Which side each name is on, told apart by colour as well as by the column headings. */
-interface Palette {
-  eh(s: string): string;
-  ct(s: string): string;
-  change(s: string): string;
-  dim(s: string): string;
-  bold(s: string): string;
-}
-
-const palette = (on: boolean): Palette => {
-  const c = (code: string) => (s: string) => (on ? `\u001b[${code}m${s}\u001b[0m` : s);
-  return { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1") };
-};
 
 /** Not a problem to fix: found, decided (skipped / to be created), or optional and absent. */
 const settledRow = (r: CheckRow) =>

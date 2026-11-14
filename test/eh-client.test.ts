@@ -79,6 +79,28 @@ describe("EhPayrollClient.findEmployees", () => {
   });
 });
 
+describe("EhPayrollClient.listEmployees", () => {
+  it("pages until a short page and returns every row", async () => {
+    const full = Array.from({ length: 100 }, (_, i) => ({ ...EMP, id: i }));
+    const f = fakeFetch({
+      "GET $skip=0": { status: 200, body: full },
+      "GET $skip=100": { status: 200, body: [EMP] },
+    });
+    const r = await new EhPayrollClient(cfg(f)).listEmployees();
+    expect(r).toEqual({ outcome: "ok", data: [...full, EMP] });
+    const urls = (f as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) => String(url));
+    expect(urls).toEqual([
+      "https://eh.test/api/v2/business/555455/employee/unstructured?$top=100&$skip=0",
+      "https://eh.test/api/v2/business/555455/employee/unstructured?$top=100&$skip=100",
+    ]);
+  });
+
+  it("returns a failed page's outcome", async () => {
+    const f = fakeFetch({ "GET $skip=0": { status: 401, body: "no" } });
+    expect(await new EhPayrollClient(cfg(f)).listEmployees()).toMatchObject({ outcome: "client_error", status: 401 });
+  });
+});
+
 describe("EhPayrollClient.getEmployee", () => {
   it("returns the employee by EH id, or null on 404", async () => {
     const f = fakeFetch({

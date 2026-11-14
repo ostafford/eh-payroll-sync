@@ -173,6 +173,14 @@ describe("ConnecteamClient messaging", () => {
     expect(JSON.parse(init.body as string)).toEqual({ senderId: 777, text: "Needs a person: SMSF super." });
   });
 
+  it("sends nothing and reports outcome:error without a custom publisher id", async () => {
+    const f = fakeFetch({});
+    const ct = new ConnecteamClient({ apiKey: "ct-key", baseUrl: "https://ct.test", fetchImpl: f });
+    expect(await ct.sendDirectMessage(55, "hi")).toMatchObject({ outcome: "error" });
+    expect(await ct.sendChannelMessage("abc-123", "hi")).toMatchObject({ outcome: "error" });
+    expect(f).not.toHaveBeenCalled();
+  });
+
   it("reports an API error as outcome:error", async () => {
     const f = fakeFetch({ "POST /chat/v1/conversations/privateMessage/55": { status: 400, body: { detail: "bad senderId" } } });
     const r = await new ConnecteamClient(cfg(f)).sendDirectMessage(55, "hi");

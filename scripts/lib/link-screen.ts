@@ -3,7 +3,7 @@
  * keys change and the frame drawn from it. Pure - the script owns the terminal
  * (raw mode, the alternate screen) and feeds keys in.
  */
-import { palette } from "./field-check.js";
+import { ansiParts, palette, visibleWidth, wrap } from "./terminal-text.js";
 import type { LinkDecision } from "./link-changes.js";
 import type { ChoiceReason, LinkCandidate, LinkCtUser, LinkEhEmployee, LinkList, LinkListInput, LinkRow, PackStatus } from "./link-list.js";
 
@@ -91,8 +91,6 @@ const REASON: Record<ChoiceReason, string> = {
   payrollIdShared: "Payroll ID shared in Connecteam",
 };
 
-// eslint-disable-next-line no-control-regex
-const visibleWidth = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, "").length;
 const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - visibleWidth(s)));
 const cut = (s: string, w: number) => (s.length > w ? `${s.slice(0, w - 1)}…` : s);
 
@@ -101,8 +99,7 @@ function fit(s: string, w: number): string {
   if (visibleWidth(s) <= w) return s;
   let out = "";
   let seen = 0;
-  // eslint-disable-next-line no-control-regex
-  for (const part of s.split(/(\u001b\[[0-9;]*m)/)) {
+  for (const part of ansiParts(s)) {
     if (part.startsWith("\u001b")) out += part;
     else {
       out += part.slice(0, Math.max(0, w - 1 - seen));
@@ -113,28 +110,6 @@ function fit(s: string, w: number): string {
   return `${out}…${s.includes("\u001b") ? "\u001b[0m" : ""}`;
 }
 
-/** Wraps a line at its `sep` separators to `w` wide, never cutting a part: continuations are indented. */
-function wrap(s: string, w: number, sep: string, indent = "      "): string[] {
-  const lead = /^ */.exec(s)![0];
-  const out: string[] = [];
-  let line = "";
-  for (const part of s.slice(lead.length).split(sep)) {
-    const next = line ? `${line}${sep}${part}` : `${out.length ? indent : lead}${part}`;
-    if (line && visibleWidth(next) > w) {
-      out.push(line);
-      line = `${indent}${part}`;
-    } else line = next;
-  }
-  out.push(line);
-  // A single part wider than the terminal: break it, rather than lose the end of it.
-  return out.flatMap((l) => {
-    const plain = l.replace(/\u001b\[[0-9;]*m/g, "");
-    if (plain.length <= w) return [l];
-    const pieces: string[] = [];
-    for (let k = 0; k < plain.length; k += w) pieces.push(plain.slice(k, k + w));
-    return pieces;
-  });
-}
 const fullName = (first: string, last: string) => `${first} ${last}`.trim();
 
 export function createLinkScreen(list: LinkList, people: LinkScreenPeople) {
