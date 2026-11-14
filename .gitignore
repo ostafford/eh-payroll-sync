@@ -46,5 +46,8 @@ clients/self/field-map.json
 # the field check's choices (#112): this deployment's own data, the same way
 clients/self/field-picks.json
 
+# the EH before/after diff's snapshot (#157): full employee records, TFN included
+eh-snapshot*.json
+
 # the wizard's session log (#83) - may name the client's accounts
 setup-wizard-*.log
