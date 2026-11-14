@@ -20,7 +20,14 @@ import type {
 } from "../sync/gateway.js";
 import type { OnboardingStateRow } from "../cron/sweep.js";
 import type { OnboardingAssignment } from "../connecteam/types.js";
-import { ROSTER_QUERY_SQL, parseRosterRows, type RosterRow } from "../status/roster.js";
+import {
+  LINK_LIST_COUNTS_SQL,
+  ROSTER_QUERY_SQL,
+  parseLinkListCounts,
+  parseRosterRows,
+  type LinkListCounts,
+  type RosterRow,
+} from "../status/roster.js";
 
 export class SyncStore implements SyncGateway, LinkGateway, RollupGateway {
   readonly #db: DrizzleD1Database;
@@ -383,6 +390,12 @@ export class SyncStore implements SyncGateway, LinkGateway, RollupGateway {
   async listRosterRows(): Promise<RosterRow[]> {
     const { results } = await this.#raw.prepare(ROSTER_QUERY_SQL).all();
     return parseRosterRows(results);
+  }
+
+  /** The Link list's counts (#156), through the same raw query `GET /health` runs. */
+  async countLinkList(): Promise<LinkListCounts> {
+    const { results } = await this.#raw.prepare(LINK_LIST_COUNTS_SQL).all();
+    return parseLinkListCounts(results);
   }
 }
 

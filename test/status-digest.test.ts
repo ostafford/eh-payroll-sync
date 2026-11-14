@@ -6,6 +6,27 @@ function employee(over: Partial<DigestEmployee>): DigestEmployee {
   return { ctUserId: 100, ehEmployeeId: "1", state: "waiting_on_employee", reasons: ["taxFileNumber"], ...over };
 }
 
+describe("digestMessages: the link list's count line (#156)", () => {
+  const ready = employee({ ctUserId: 1, state: "ready", reasons: [] });
+  const LINE = /on the link list (is|are) waiting for approval/;
+
+  it("is left out when nobody on the link list is waiting", () => {
+    expect(digestMessages([ready], 1, 0).join("\n")).not.toMatch(LINE);
+    expect(digestMessages([ready], 1).join("\n")).not.toMatch(LINE);
+  });
+
+  it("follows the all-clear line, as a count with no names", () => {
+    expect(digestMessages([ready], 1, 4)).toEqual([
+      "✅ All 1 employee is Complete in Employment Hero - no follow-up needed.\n\n**🔗 4 people on the link list are waiting for approval in Connecteam**",
+    ]);
+  });
+
+  it("sits with the other count lines when someone needs attention, and says 'person' for one", () => {
+    const [msg] = digestMessages([ready, employee({ ctUserId: 2 })], 2, 1);
+    expect(msg).toContain("**🔗 1 person on the link list is waiting for approval in Connecteam**\n✅ 1 complete in Employment Hero");
+  });
+});
+
 describe("digestMessages", () => {
   it("is a single all-clear line when everyone is ready", () => {
     const msgs = digestMessages([employee({ state: "ready", reasons: [] })], 1);

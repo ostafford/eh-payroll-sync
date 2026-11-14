@@ -7,10 +7,13 @@ beforeEach(resetFieldMapCache);
 const okDb = (
   metaRows: Array<{ key: string; num: number }> = [],
   rosterRows: Array<Record<string, unknown>> = [],
+  linkList: { pending: number; awaitingApproval: number } = { pending: 0, awaitingApproval: 0 },
 ) => ({
   prepare: (query: string) => ({
     first: async () => ({ ok: 1 }),
-    all: async () => ({ results: query.includes("employee_map") ? rosterRows : metaRows }),
+    all: async () => ({
+      results: query.includes("FROM pending_link") ? [linkList] : query.includes("employee_map") ? rosterRows : metaRows,
+    }),
   }),
 });
 
@@ -90,6 +93,9 @@ describe("buildHealth", () => {
       waitingAdmin: 0,
       broken: 0,
       leftOut: 0,
+      linked: 0,
+      held: 0,
+      pendingLinks: 0,
     });
   });
 
@@ -106,6 +112,9 @@ describe("buildHealth", () => {
       waitingAdmin: 0,
       broken: 0,
       leftOut: 0,
+      linked: 0,
+      held: 0,
+      pendingLinks: 0,
     });
   });
 
@@ -126,5 +135,23 @@ describe("buildHealth", () => {
     );
     // Left out by choice (rules.exclude) is its own count, never "broken".
     expect(h.ops).toMatchObject({ ready: 1, waitingEmployee: 1, waitingAdmin: 1, broken: 1, leftOut: 1 });
+  });
+
+  it("counts Linked and Held employees and pending links (#156), and stays ok however many are held", async () => {
+    const h = await buildHealth(
+      baseEnv({
+        DB: okDb(
+          [],
+          [
+            { ctUserId: 1, ehEmployeeId: "1", failureCycleCount: 0, lastOutcome: "ok", latestOutcome: "ok", latestDetail: "linked: Payroll ID only", linkedAt: 5 },
+            { ctUserId: 2, ehEmployeeId: "2", failureCycleCount: 0, lastOutcome: "ok", latestOutcome: "ok", latestDetail: "synced", linkedAt: 6 },
+            { ctUserId: 3, ehEmployeeId: null, failureCycleCount: 0, lastOutcome: "existing_match", latestOutcome: "existing_match", latestDetail: "existing_match: 40213" },
+          ],
+          { pending: 4, awaitingApproval: 3 },
+        ),
+      }),
+    );
+    expect(h.ops).toMatchObject({ linked: 2, held: 1, pendingLinks: 4 });
+    expect(h.ok).toBe(true);
   });
 });

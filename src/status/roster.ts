@@ -189,6 +189,44 @@ export function leftOutLabel(reason: string, exclude: ReadonlyArray<{ customFiel
   return values.length ? `${m[2]}: ${values.join(", ")}` : m[2]!;
 }
 
+/** Linked and Held employees among the roster rows (#143 item 4): counts only. */
+export function countLinking(rows: readonly RosterRow[]): { linked: number; held: number } {
+  return {
+    linked: rows.filter((r) => r.linkedAt != null).length,
+    // The same rule the daily recheck uses to find Held employees (SyncStore.listHeld).
+    held: rows.filter((r) => r.lastOutcome === "existing_match").length,
+  };
+}
+
+/** The Link list's size, and how many on it haven't had their pack approved yet (#156). */
+export interface LinkListCounts {
+  /** Every `pending_link` row: links confirmed in the link stage and not made yet. */
+  pending: number;
+  /** Of those, the people whose onboarding pack isn't approved in Connecteam yet. */
+  awaitingApproval: number;
+}
+
+/**
+ * One SELECT, shared by `GET /health` and `SyncStore.countLinkList` the same
+ * way as {@link ROSTER_QUERY_SQL}. "Approved" is the sweep's own test: the
+ * assignment's last-seen status is `completed`.
+ */
+export const LINK_LIST_COUNTS_SQL = `
+SELECT
+  COUNT(*) AS pending,
+  COALESCE(SUM(NOT EXISTS (
+    SELECT 1 FROM onboarding_state
+    WHERE onboarding_state.ct_user_id = pending_link.ct_user_id AND onboarding_state.status = 'completed'
+  )), 0) AS awaitingApproval
+FROM pending_link
+`;
+
+/** Parse the one row {@link LINK_LIST_COUNTS_SQL} returns. */
+export function parseLinkListCounts(results: readonly unknown[]): LinkListCounts {
+  const r = (results[0] ?? {}) as Record<string, unknown>;
+  return { pending: Number(r.pending ?? 0), awaitingApproval: Number(r.awaitingApproval ?? 0) };
+}
+
 /** Parse the raw rows a D1 `.all()` call returns for {@link ROSTER_QUERY_SQL}. */
 export function parseRosterRows(results: readonly unknown[]): RosterRow[] {
   return (results as Array<Record<string, unknown>>).map((r) => ({
