@@ -80,7 +80,7 @@ webhook, longer for linking a large headcount, and up to 15 for Cloudflare to st
 
 | # | Stage | The client… | They should see | Time |
 |---|---|---|---|---|
-| 1 | Cloudflare account | Signs in when a browser tab opens | Their own account name. **Check it**: the deploy goes to whatever account this shows | 1–2 min |
+| 1 | Cloudflare account | Signs in when a browser tab opens. A brand-new account has no workers.dev subdomain: the wizard asks for one (lowercase letters, digits, hyphens; unused across Cloudflare) and retries a name that's taken | Their own account name. **Check it**: the deploy goes to whatever account this shows. Then "The account's workers.dev subdomain is …" or "Registered ….workers.dev" | 1–3 min |
 | 2 | Connecteam: API key | Creates a key, pastes it (hidden) | — | 1–2 min |
 | 3 | Connecteam: custom publisher | Creates the "Employment Hero Sync (Automated)" publisher, pastes its ID | — | 1–2 min |
 | 4 | Connecteam: alerts channel | Creates "EH Sync Alerts", picks it from the list | — | 1–2 min |

@@ -498,6 +498,12 @@ wr whoami >/dev/null 2>&1 || wr login
 wr whoami | sed 's/^/  /'
 printf '\n'
 confirm "Is the account above the right one?" || { fail "Run 'npx wrangler logout', then run the wizard again."; exit 1; }
+printf '\n'
+# A brand-new account has no workers.dev subdomain, and the deploy can't
+# register one from here: check now, before any secret is stored (#194).
+say "Checking the account's workers.dev subdomain (part of the sync's web address)..."
+npm run --silent workers-subdomain \
+  || { fail "The account needs a workers.dev subdomain before the sync can go live. Register one as above, then run the wizard again."; exit 1; }
 next_up "Connecteam - the API key the sync uses to read your onboarding packs."
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -796,7 +802,15 @@ put_secret CT_WEBHOOK_SECRET "$CT_WEBHOOK_SECRET" "the webhook secret"
 put_secret BASELINE_KEY "$BASELINE_KEY" "the baseline key"
 printf '\n'
 say "Deploying (this takes about a minute)..."
-wr_quiet deploy --config wrangler.deploy.json || { fail "The deploy failed:"; show_wr_tail; exit 1; }
+if ! wr_quiet deploy --config wrangler.deploy.json; then
+  fail "The deploy failed:"
+  show_wr_tail
+  # Wrangler's own link for this one 404s (#194).
+  if [[ "$WR_OUT" == *"workers.dev subdomain"* ]]; then
+    note "The account has no workers.dev subdomain: run 'npm run workers-subdomain' to register one, then run the wizard again."
+  fi
+  exit 1
+fi
 WORKER_URL=$(printf '%s' "$WR_OUT" | grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' | head -1 || true)
 if [[ -n "$WORKER_URL" ]]; then
   ok "Deployed: $WORKER_URL"
