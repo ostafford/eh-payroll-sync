@@ -821,7 +821,13 @@ edited their profile around then to check EH, and fix it there by hand.
 `git pull` → `npm ci` → `npm test` → `deploy:config --check-live`, which also
 checks the field map (see §5,
 "Where the deployment's values live") → `wrangler d1 migrations apply --remote`
-→ `wrangler deploy` → `/health` check. Fails loudly on any step; the check
+→ `wrangler deploy` → `/health` check.
+
+A deployment from before linking has no `BASELINE_KEY` on the live Worker.
+The check then puts one: the one in `.dev.vars` if it's there, otherwise a new
+one it adds to `.dev.vars` first. Back up `.dev.vars` afterwards. It never
+replaces a key the Worker already has, since a new key re-baselines every
+Linked employee ("Rotating keys"). Fails loudly on any step; the check
 stops it before anything on Cloudflare changes. Run by the client's
 IT, or by the integrator on a support call. A non-technical owner should not run
 this unaided.

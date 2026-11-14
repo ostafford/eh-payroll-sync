@@ -4,8 +4,9 @@
  *
  * A tuned map holds settings discover never produces (pay-run defaults, the
  * award field, any hand edits), so it is only replaced when it belongs to
- * another account - e.g. the demo map shipped in a fresh clone.
+ * another account, or is the placeholder `npm install` copies in (#172).
  */
+import { PLACEHOLDER_CLIENT } from "./validate-field-map.js";
 
 export type FieldMapWrite =
   | { action: "write" }
@@ -19,6 +20,8 @@ const accountOf = (m: any) => ({
 
 export function chooseFieldMapWrite(existing: unknown, draft: unknown): FieldMapWrite {
   if (existing === undefined) return { action: "write" };
+  // The placeholder is nobody's tuning, even on the account it was built from (the demo one).
+  if ((existing as { client?: unknown } | null)?.client === PLACEHOLDER_CLIENT) return { action: "write" };
   const was = accountOf(existing);
   const now = accountOf(draft);
   // Can't tell whose map it is - keep it rather than risk losing tuning.

@@ -9,6 +9,7 @@ import {
   compareWithLive,
   missingSecrets,
   parseDevVars,
+  planBaselineKey,
   renderDeployConfig,
   stripJsonc,
   type LiveBinding,
@@ -120,6 +121,27 @@ describe("missingSecrets", () => {
   });
 });
 
+describe("planBaselineKey (update.sh, #172)", () => {
+  const fresh = () => "new-key";
+
+  it("puts nothing when the live Worker already has a key, whatever .dev.vars holds", () => {
+    expect(planBaselineKey([], { BASELINE_KEY: "other" }, fresh)).toEqual({ action: "none" });
+    expect(planBaselineKey(["CT_API_KEY"], {}, fresh)).toEqual({ action: "none" });
+  });
+
+  it("puts the key .dev.vars keeps, so a backed-up key isn't replaced", () => {
+    expect(planBaselineKey(["BASELINE_KEY"], { BASELINE_KEY: " kept-key " }, fresh)).toEqual({
+      action: "put",
+      key: "kept-key",
+      keepInDevVars: false,
+    });
+  });
+
+  it("makes a new key, to keep in .dev.vars, when there's none anywhere", () => {
+    expect(planBaselineKey(["BASELINE_KEY"], { BASELINE_KEY: "" }, fresh)).toEqual({ action: "put", key: "new-key", keepInDevVars: true });
+  });
+});
+
 describe("the secrets check is wired into every deploy path", () => {
   const script = read("scripts/deploy-config.ts");
   const wizard = read("scripts/setup-wizard.sh");
@@ -132,6 +154,16 @@ describe("the secrets check is wired into every deploy path", () => {
   it("npm run deploy and update.sh keep the check on", () => {
     expect(JSON.parse(read("package.json")).scripts.deploy).not.toContain("--allow-missing-secrets");
     expect(read("scripts/update.sh")).not.toContain("--allow-missing-secrets");
+  });
+
+  it("update.sh puts a missing BASELINE_KEY, keeping it in .dev.vars before the put, and only after the database check", () => {
+    expect(read("scripts/update.sh")).toContain("deploy:config -- --check-live --put-baseline-key");
+    const dbCheck = script.indexOf("Matches the live Worker's database");
+    const keep = script.indexOf('appendFileSync(".dev.vars"');
+    const put = script.indexOf('wrangler(["secret", "put", "BASELINE_KEY"]');
+    expect(dbCheck).toBeGreaterThan(-1);
+    expect(keep).toBeGreaterThan(dbCheck);
+    expect(put).toBeGreaterThan(keep);
   });
 
   it("the wizard skips the check only because it puts every required secret before deploying", () => {

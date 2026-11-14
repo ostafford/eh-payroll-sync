@@ -23,9 +23,11 @@ npm test
 
 # The deploy config comes from wrangler.jsonc + .dev.vars, checked against the
 # Cloudflare account and the live Worker before anything changes. Never
-# deploy wrangler.jsonc itself: it is the blank template.
+# deploy wrangler.jsonc itself: it is the blank template. A Worker from before
+# linking has no BASELINE_KEY: this puts one (kept in .dev.vars), and never
+# replaces one it has (#172).
 echo "▸ building the deploy config and checking it against the live Worker"
-npm run --silent deploy:config -- --check-live
+npm run --silent deploy:config -- --check-live --put-baseline-key
 
 echo "▸ applying new D1 migrations (remote)"
 npx --yes wrangler d1 migrations apply eh-payroll-sync --remote --config wrangler.deploy.json
