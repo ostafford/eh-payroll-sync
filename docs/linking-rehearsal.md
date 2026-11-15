@@ -23,9 +23,30 @@ beyond `externalId` changed.
 
 - [ ] The rehearsal deployment is on the last commit before linking
       (`d3082b9`, 2026-11-05), so the update in scenario 1 is the real one.
+      Or, on the demo deployment (`self`, below), it's on its last deployed
+      build and isn't updated before scenario 1.
 - [ ] Every fixture below exists, and every approval is still held (not approved)
       except F7's.
 - [ ] Nobody else is using the rehearsal accounts during the run.
+
+### Running it on the demo deployment instead
+
+The demo deployment (`self`, on the demo Connecteam and EH accounts) can stand
+in for the Rehearsal deployment. It isn't a client, and a second Worker on the
+same Cloudflare account would collide with it: the Worker, database and queue
+names are fixed in `wrangler.jsonc`. What changes:
+
+- **Starting point.** `self` already has the linking migrations and a
+  `BASELINE_KEY`, so it can't go back to `d3082b9`. Scenario 1 updates it from
+  its last deployed build to `main`. That's still a real `update.sh` run on a
+  live deployment, just not from before linking.
+- **Scenario 1's key check.** `update.sh` finds `BASELINE_KEY` already set and
+  doesn't put a new one. Scenario 11 still covers a new key.
+- **Part B.** Set `identity.externalIdFrom` in `self`'s own
+  `clients/self/field-map.json`. Employees who already synced keep their stored
+  key (ADR-0011), so nobody is re-keyed. Put it back afterwards if `self`
+  shouldn't keep it.
+- **Run log.** Note "demo deployment" and the build it started from.
 
 ## Fixtures
 
@@ -51,8 +72,8 @@ Each scenario's expected result is what passes. Anything else fails it.
 1. **Rollout.** Pause the queue, approve F7, then follow the RUNBOOK's rollout
    steps: `./scripts/update.sh` → `./scripts/setup-wizard.sh --stage link`.
    Save the Link list, then resume the queue.
-   - [ ] `update.sh` says it put `BASELINE_KEY` (a new one, kept in `.dev.vars`)
-         and ends with `✓ update complete`.
+   - [ ] `update.sh` says it put `BASELINE_KEY` (a new one, kept in `.dev.vars`;
+         on the demo deployment it's already set) and ends with `✓ update complete`.
    - [ ] F1 (and F1b–d) are suggested; F2 needs a choice; F6 isn't listed;
          F8 shows "Can't link: already linked to someone else".
    - [ ] F7 is linked within a minute or two of resuming, with no profile edit.
