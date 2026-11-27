@@ -32,7 +32,7 @@ const arg = (name: string, dflt: string) => {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : dflt;
 };
-const color = !process.env.NO_COLOR && process.stdout.isTTY === true;
+const color = !process.env.NO_COLOR && (process.stdout.isTTY === true || !!process.env.FORCE_COLOR);
 const c = (code: string) => (s: string) => (color ? `\u001b[${code}m${s}\u001b[0m` : s);
 const p = { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1"), ok: c("32"), bad: c("31"), inv: c("7") };
 const mark = { ok: p.ok(color ? "✓" : "[ok]"), warn: p.change(color ? "⚠" : "[!]"), bad: p.bad(color ? "✗" : "[x]"), none: p.dim(color ? "–" : "[-]") };
@@ -44,12 +44,25 @@ const ptr = (on: boolean) => (on ? (color ? p.ct("▶") : ">") : " ");
 const radio = (on: boolean) => (on ? (color ? p.ct("●") : "(x)") : color ? p.dim("○") : "( )");
 const COLS = () => Math.min(120, process.stdout.columns || 110);
 
+/**
+ * Round 4 (the developer's ask): the selected row is a full-width highlight
+ * bar, in the list and in the Edit pop-up, so it can't get lost on a light
+ * terminal. --highlight soft (default: black on light blue) or invert
+ * (the terminal's own colours swapped). The ▶ stays as a second cue.
+ */
+const HL_STYLE = arg("highlight", "soft") === "invert" ? "1;7" : "1;30;106";
+/** A line drawn as a highlight bar `w` wide; its own colours give way to the bar's. */
+const hl = (s: string, w: number) => (color ? `\u001b[${HL_STYLE}m${pad(strip(s), w)}\u001b[0m` : s);
+/** Marks a body line for box() to draw as a highlight bar across the box. */
+const HL = "\u0001";
+const marked = (on: boolean, ls: string[]) => (on ? ls.map((l) => HL + l) : ls);
+
 // ── boxes ───────────────────────────────────────────────────────────────────
 const B = color ? { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│", ml: "├", mr: "┤" } : { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|", ml: "+", mr: "+" };
 /** A bordered box: a title, body lines, and an optional footer under a rule. "---" in the body draws a rule. */
 function box(title: string, body: string[], footer: string[] = [], minW = 0): string[] {
-  const inner = Math.max(minW, vis(title) + 4, ...[...body, ...footer].map((l) => vis(l) + 4));
-  const row = (l: string) => `${B.v}  ${pad(l, inner - 4)}  ${B.v}`;
+  const inner = Math.max(minW, vis(title) + 4, ...[...body, ...footer].map((l) => vis(l.replace(HL, "")) + 4));
+  const row = (l: string) => (l.startsWith(HL) ? `${B.v} ${hl(` ${l.slice(1)}`, inner - 2)} ${B.v}` : `${B.v}  ${pad(l, inner - 4)}  ${B.v}`);
   const rule = `${B.ml}${B.h.repeat(inner)}${B.mr}`;
   const t = title ? ` ${p.bold(title)} ` : "";
   return [
@@ -170,7 +183,10 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
   else if (!x.keyAgrees) idBody.push(p.bad("They don't match, and it can't be replaced:"), p.dim("no email, TFN or name + date of birth match."), p.dim("They'll be held at approval. Fix the EH record by hand."));
   else {
     idBody.push(p.dim("They don't match. Pick one:"), "");
-    const opt = (k: number, chosen: boolean, title: string, why: string[]) => [`${ptr(on(k))} ${radio(chosen)}  ${on(k) ? p.bold(title) : title}`, ...why.map((w) => `        ${p.dim(w)}`), ""];
+    const opt = (k: number, chosen: boolean, title: string, why: string[]) => [
+      ...marked(on(k), [`${ptr(on(k))} ${radio(chosen)}  ${on(k) ? p.bold(title) : title}`, ...why.map((w) => `        ${p.dim(w)}`)]),
+      "",
+    ];
     idBody.push(
       ...opt(0, !pu.rep, `Keep EH's External ID (${x.extId})`, ["Nothing changes in EH. They're held at approval."]),
       ...opt(1, pu.rep, `Replace it with the Connecteam User ID (${x.ctUserId})`, [`Overwritten at approval, only if EH still holds ${x.extId}.`]),
@@ -187,10 +203,12 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
       const k = its.findIndex((it) => it.t === "detail" && it.d === d);
       const ct = pu.draft.has(d);
       detBody.push(
-        `${ptr(on(k))} ${on(k) ? p.bold(d) : d}`,
-        `      ${p.dim(pad("Connecteam field", 18))}${p.ct(d)}`,
-        `      ${p.dim(pad("EH field", 18))}${p.eh(EH_FIELD[d] ?? d)}`,
-        `      ${radio(!ct)} ${!ct ? p.bold("Keep EH's") : "Keep EH's"}        ${radio(ct)} ${ct ? p.bold("Use Connecteam's") : "Use Connecteam's"}`,
+        ...marked(on(k), [
+          `${ptr(on(k))} ${on(k) ? p.bold(d) : d}`,
+          `      ${p.dim(pad("Connecteam field", 18))}${p.ct(d)}`,
+          `      ${p.dim(pad("EH field", 18))}${p.eh(EH_FIELD[d] ?? d)}`,
+          `      ${radio(!ct)} ${!ct ? p.bold("Keep EH's") : "Keep EH's"}        ${radio(ct)} ${ct ? p.bold("Use Connecteam's") : "Use Connecteam's"}`,
+        ]),
         "",
       );
     });
@@ -296,18 +314,19 @@ const stateLine = () =>
 
 // ── the list every variant starts from (today's screen, cut down) ───────────
 const listRows = (cursor: number, status: (i: number) => string): string[] => [
-  p.bold(`    #  ${" ".repeat(color ? 1 : 4)} ${pad("Connecteam user", 16)} ${pad("Employment Hero match", 24)} Status`),
+  p.bold(`     #  ${" ".repeat(color ? 1 : 4)} ${pad("Connecteam user", 16)} ${pad("Employment Hero match", 24)} Status`),
   ...pairs.map((x, i) => {
     const m = !linkable(x) ? mark.none : needsChoice(x) ? mark.warn : mark.ok;
     const name = pad(p.ct(x.ct), 16);
-    return `  ${ptr(i === cursor)} ${i + 1}  ${pad(m, color ? 1 : 4)} ${i === cursor ? p.bold(name) : name} ${pad(x.eh ? `${p.eh(x.eh)} ${p.dim(x.ehId)}` : p.dim("(no match)"), 24)} ${status(i)}`;
+    const line = `${ptr(i === cursor)} ${i + 1}  ${pad(m, color ? 1 : 4)} ${i === cursor ? p.bold(name) : name} ${pad(x.eh ? `${p.eh(x.eh)} ${p.dim(x.ehId)}` : p.dim("(no match)"), 24)} ${status(i)}`;
+    return i === cursor ? `  ${hl(` ${line}`, COLS() - 4)}` : `   ${line}`;
   }),
 ];
 const header = (variant: string, title: string) => [`  ${p.bold("Link Pre-existing employees")}     ${p.dim(`PROTOTYPE variant ${variant}: ${title}`)}`, ""];
 /** The two short lines for one person; `at` marks the line under the cursor. */
 const twoLines = (i: number, at: number | null, hints: boolean): string[] => [
-  `${ptr(at === 0)} ${pad(p.dim("EH External ID"), 18)} ${pad(idShort(i), 34)} ${hints && canEdit(i) ? p.dim("e to edit both") : ""}`,
-  `${ptr(at === 1)} ${pad(p.dim("Details"), 18)} ${pad(detailsShort(i), 34)}`,
+  `${at === 0 ? HL : ""}${ptr(at === 0)} ${pad(p.dim("EH External ID"), 18)} ${pad(idShort(i), 34)} ${hints && canEdit(i) ? p.dim("e to edit both") : ""}`,
+  `${at === 1 ? HL : ""}${ptr(at === 1)} ${pad(p.dim("Details"), 18)} ${pad(detailsShort(i), 34)}`,
 ];
 const boxed = (title: string, body: string[]) => box(title, body, [], COLS() - 8).map((l) => `  ${l}`);
 
