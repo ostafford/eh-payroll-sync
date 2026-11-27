@@ -331,7 +331,7 @@ const listRows = (cursor: number, status: (i: number) => string): string[] => [
 const header = (variant: string, title: string) => [`  ${p.bold("Link Pre-existing employees")}     ${p.dim(`PROTOTYPE variant ${variant}: ${title}`)}`, ""];
 /** The two short lines for one person; `at` marks the line under the cursor. */
 const twoLines = (i: number, at: number | null, hints: boolean): string[] => [
-  `${at === 0 ? HL : ""}${ptr(at === 0)} ${pad(p.dim("EH External ID"), 18)} ${pad(idShort(i), 34)} ${hints && canEdit(i) ? p.dim("e to edit both") : ""}`,
+  `${at === 0 ? HL : ""}${ptr(at === 0)} ${pad(p.dim("EH External ID"), 18)} ${pad(idShort(i), 34)} ${hints && canEdit(i) ? p.dim("Enter or e to edit both") : ""}`,
   `${at === 1 ? HL : ""}${ptr(at === 1)} ${pad(p.dim("Details"), 18)} ${pad(detailsShort(i), 34)}`,
 ];
 const boxed = (title: string, body: string[]) => box(title, body, [], COLS() - 8).map((l) => `  ${l}`);
@@ -360,7 +360,7 @@ function variantA(): Variant {
     render() {
       const x = pairs[cursor]!;
       const ks: [string, string][] = [["↑↓", "move"]];
-      if (canEdit(cursor)) ks.push(["e", "edit EH External ID and details"]);
+      if (canEdit(cursor)) ks.push(["Enter / e", "edit EH External ID and details"]);
       ks.push(["c", "confirm"], ["v", "next variant"], ["q", "quit"]);
       return [
         ...header("A", this.name),
@@ -375,7 +375,7 @@ function variantA(): Variant {
     press(str, key) {
       if (key.name === "up") cursor = Math.max(0, cursor - 1);
       else if (key.name === "down") cursor = Math.min(pairs.length - 1, cursor + 1);
-      else if (str === "e") openEdit(cursor);
+      else if (str === "e" || key.name === "return") openEdit(cursor);
       else if (str === "c") popup = { kind: "save" };
     },
   };
