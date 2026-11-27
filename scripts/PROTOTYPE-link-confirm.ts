@@ -135,65 +135,90 @@ const flip = (i: number, d: string, to?: boolean) => {
 const sentFromCt = (i: number) => pairs[i]!.diffs.filter((d) => usesCt(i, d));
 
 // ── pop-ups (shared by every variant) ───────────────────────────────────────
-type Popup =
-  | { kind: "id"; i: number; sel: 0 | 1 }
-  | { kind: "details"; i: number; at: number; draft: Set<string> }
-  | { kind: "save" };
+/**
+ * One Edit pop-up per person (round 3: the developer's ask, one place to edit,
+ * on e), with two bordered sections: EH External ID, then Details. ↑↓ walks
+ * every option in both; nothing is kept until Enter.
+ */
+type Item = { t: "id"; replace: boolean } | { t: "detail"; d: string };
+type Popup = { kind: "edit"; i: number; at: number; rep: boolean; draft: Set<string> } | { kind: "save" };
 let popup: Popup | null = null;
 let saved = false;
 
-const openId = (i: number) => (popup = { kind: "id", i, sel: replace.has(i) ? 1 : 0 });
-const openDetails = (i: number) => (popup = { kind: "details", i, at: 0, draft: new Set(useCt.get(i) ?? []) });
+const canReplace = (x: Pair) => idDiffers(x) && x.keyAgrees;
+const items = (i: number): Item[] => {
+  const x = pairs[i]!;
+  return [...(canReplace(x) ? [{ t: "id", replace: false } as Item, { t: "id", replace: true } as Item] : []), ...x.diffs.map((d) => ({ t: "detail", d }) as Item)];
+};
+const canEdit = (i: number) => items(i).length > 0;
+const openEdit = (i: number) => {
+  if (canEdit(i)) popup = { kind: "edit", i, at: 0, rep: replace.has(i), draft: new Set(useCt.get(i) ?? []) };
+};
 const keyHint = (...ks: [string, string][]) => ks.map(([k, w]) => `${p.bold(k)} ${p.dim(w)}`).join("     ");
 
-function renderPopup(pu: Popup): string[] {
-  if (pu.kind === "id") {
-    const x = pairs[pu.i]!;
-    const lbl = (s: string) => p.dim(pad(s, 22));
-    const body = [
-      `${lbl("Connecteam user")}${p.ct(x.ct)}`,
-      `${lbl("Employment Hero")}${p.eh(x.eh!)}  ${p.dim(`(EH Employee ID ${x.ehId})`)}`,
-      "---",
-      `${lbl("EH External ID")}${p.eh(x.extId!)}${x.extId === x.ehId ? p.change("   ⚠ this is their EH Employee ID") : ""}`,
-      `${lbl("Connecteam User ID")}${p.ct(x.ctUserId)}`,
-      "",
-      p.dim("They don't match, so this link can't be made as it stands."),
-      "---",
-    ];
-    if (!x.keyAgrees) {
-      body.push(p.bad("Can't replace: no email, TFN or name + date of birth match."), p.dim("They'll be held at approval. Fix the EH record by hand."));
-      return box(`EH External ID · ${x.ct}`, body, [keyHint(["Esc", "close"])]);
-    }
-    const opt = (n: 0 | 1, title: string, why: string[]) => [
-      `${ptr(pu.sel === n)} ${radio(pu.sel === n)}  ${pu.sel === n ? p.bold(title) : title}`,
-      ...why.map((w) => `       ${p.dim(w)}`),
-      "",
-    ];
-    body.push(
-      "",
-      ...opt(0, `Keep EH's External ID (${x.extId})`, ["Nothing changes in EH.", "They're held at approval and an alert is posted."]),
-      ...opt(1, `Replace it with the Connecteam User ID (${x.ctUserId})`, ["EH's External ID is overwritten at approval,", `only if EH still holds ${x.extId} then.`]),
+/** Both sections share one width, so they line up inside the pop-up. */
+const SECTION_W = 60;
+function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
+  const x = pairs[pu.i]!;
+  const its = items(pu.i);
+  const on = (k: number) => k === pu.at;
+  const lbl = (s: string) => p.dim(pad(s, 22));
+
+  // EH External ID section
+  const idBody: string[] = [`${lbl("EH External ID")}${x.extId === null ? p.dim("(blank)") : p.eh(x.extId)}${x.extId !== null && x.extId === x.ehId ? p.change("   ⚠ this is their EH Employee ID") : ""}`, `${lbl("Connecteam User ID")}${p.ct(x.ctUserId)}`, ""];
+  if (!idDiffers(x)) idBody.push(p.ok(x.extId === null ? "✓ Blank in EH: it'll be set to their Connecteam User ID." : "✓ They match. Nothing to choose."));
+  else if (!x.keyAgrees) idBody.push(p.bad("They don't match, and it can't be replaced:"), p.dim("no email, TFN or name + date of birth match."), p.dim("They'll be held at approval. Fix the EH record by hand."));
+  else {
+    idBody.push(p.dim("They don't match. Pick one:"), "");
+    const opt = (k: number, chosen: boolean, title: string, why: string[]) => [`${ptr(on(k))} ${radio(chosen)}  ${on(k) ? p.bold(title) : title}`, ...why.map((w) => `        ${p.dim(w)}`), ""];
+    idBody.push(
+      ...opt(0, !pu.rep, `Keep EH's External ID (${x.extId})`, ["Nothing changes in EH. They're held at approval."]),
+      ...opt(1, pu.rep, `Replace it with the Connecteam User ID (${x.ctUserId})`, [`Overwritten at approval, only if EH still holds ${x.extId}.`]),
     );
-    return box(`EH External ID · ${x.ct}`, body, [keyHint(["↑↓", "choose"], ["Enter", "confirm"], ["Esc", "cancel"])]);
+    idBody.pop();
   }
-  if (pu.kind === "details") {
-    const x = pairs[pu.i]!;
-    const body = [p.dim("These details differ between Connecteam and Employment Hero."), p.dim("Keep EH's is picked to start. Values aren't shown."), "---", ""];
-    x.diffs.forEach((d, k) => {
-      const on = k === pu.at;
+
+  // Details section
+  const detBody: string[] = [];
+  if (!x.diffs.length) detBody.push(p.ok("✓ All the same in both. Nothing to choose."));
+  else {
+    detBody.push(p.dim("These differ between Connecteam and EH. Values aren't shown."), "");
+    x.diffs.forEach((d) => {
+      const k = its.findIndex((it) => it.t === "detail" && it.d === d);
       const ct = pu.draft.has(d);
-      body.push(
-        `${ptr(on)} ${on ? p.bold(d) : d}`,
-        `     ${p.dim(pad("Connecteam field", 18))}${p.ct(d)}`,
-        `     ${p.dim(pad("EH field", 18))}${p.eh(EH_FIELD[d] ?? d)}`,
-        `     ${radio(!ct)} ${!ct ? p.bold("Keep EH's") : "Keep EH's"}        ${radio(ct)} ${ct ? p.bold("Use Connecteam's") : "Use Connecteam's"}`,
+      detBody.push(
+        `${ptr(on(k))} ${on(k) ? p.bold(d) : d}`,
+        `      ${p.dim(pad("Connecteam field", 18))}${p.ct(d)}`,
+        `      ${p.dim(pad("EH field", 18))}${p.eh(EH_FIELD[d] ?? d)}`,
+        `      ${radio(!ct)} ${!ct ? p.bold("Keep EH's") : "Keep EH's"}        ${radio(ct)} ${ct ? p.bold("Use Connecteam's") : "Use Connecteam's"}`,
         "",
       );
     });
-    const sent = x.diffs.filter((d) => pu.draft.has(d));
-    body.push("---", p.dim(`Link notice will say: ${sent.length ? `Sent from Connecteam: ${sent.join(", ")}` : "(nothing sent from Connecteam)"}`));
-    return box(`Details that differ · ${x.ct}`, body, [keyHint(["↑↓", "field"], ["←→", "keep / use"], ["Enter", "done"], ["Esc", "cancel"])]);
+    detBody.pop();
   }
+
+  // Both sections one width, so they line up.
+  const secW = Math.max(SECTION_W, ...[...idBody, ...detBody].map((l) => vis(l) + 4));
+  const sent = x.diffs.filter((d) => pu.draft.has(d));
+  const notice = [...(pu.rep ? ["EH External ID replaced"] : []), ...(sent.length ? [`Sent from Connecteam: ${sent.join(", ")}`] : [])].join(". ");
+  return box(
+    `Edit · ${x.ct}`,
+    [
+      `${lbl("Connecteam user")}${p.ct(x.ct)}  ${p.dim(x.email)}`,
+      `${lbl("Employment Hero")}${p.eh(x.eh!)}  ${p.dim(`EH Employee ID ${x.ehId}`)}`,
+      "",
+      ...box("1  EH External ID", idBody, [], secW),
+      "",
+      ...box(`2  Details${x.diffs.length ? ` (${x.diffs.length === 1 ? "1 differs" : `${x.diffs.length} differ`})` : ""}`, detBody, [], secW),
+      "",
+      p.dim(`Link notice will say: ${notice || "(just linked)"}`),
+    ],
+    [keyHint(["↑↓", "move"], ["←→ / Space", "choose"], ["Enter", "save"], ["Esc", "cancel"])],
+  );
+}
+
+function renderPopup(pu: Popup): string[] {
+  if (pu.kind === "edit") return renderEdit(pu);
   const links = pairs.filter(linkable).length;
   const held = pairs.filter((x, i) => idDiffers(x) && !replace.has(i)).length;
   const fromCt = new Map<string, number>();
@@ -225,28 +250,23 @@ function popupKey(str: string | undefined, key: { name?: string }): void {
     return;
   }
   if (key.name === "escape") return void (popup = null);
-  if (pu.kind === "id") {
-    if (!pairs[pu.i]!.keyAgrees) return;
-    if (key.name === "up" || key.name === "down") pu.sel = pu.sel === 0 ? 1 : 0;
-    else if (key.name === "return") {
-      if (pu.sel === 1) replace.add(pu.i);
-      else replace.delete(pu.i);
-      popup = null;
-    }
-    return;
-  }
-  const ds = pairs[pu.i]!.diffs;
-  const d = ds[pu.at]!;
+  const its = items(pu.i);
+  const it = its[pu.at]!;
   if (key.name === "up") pu.at = Math.max(0, pu.at - 1);
-  else if (key.name === "down") pu.at = Math.min(ds.length - 1, pu.at + 1);
-  else if (key.name === "left") pu.draft.delete(d);
-  else if (key.name === "right") pu.draft.add(d);
-  else if (key.name === "space") {
-    if (pu.draft.has(d)) pu.draft.delete(d);
-    else pu.draft.add(d);
-  } else if (key.name === "return") {
+  else if (key.name === "down") pu.at = Math.min(its.length - 1, pu.at + 1);
+  else if (key.name === "return") {
+    if (pu.rep) replace.add(pu.i);
+    else replace.delete(pu.i);
     useCt.set(pu.i, pu.draft);
     popup = null;
+  } else if (it.t === "id" && (key.name === "space" || key.name === "left" || key.name === "right")) pu.rep = it.replace;
+  else if (it.t === "detail") {
+    if (key.name === "left") pu.draft.delete(it.d);
+    else if (key.name === "right") pu.draft.add(it.d);
+    else if (key.name === "space") {
+      if (pu.draft.has(it.d)) pu.draft.delete(it.d);
+      else pu.draft.add(it.d);
+    }
   }
 }
 
@@ -286,8 +306,8 @@ const listRows = (cursor: number, status: (i: number) => string): string[] => [
 const header = (variant: string, title: string) => [`  ${p.bold("Link Pre-existing employees")}     ${p.dim(`PROTOTYPE variant ${variant}: ${title}`)}`, ""];
 /** The two short lines for one person; `at` marks the line under the cursor. */
 const twoLines = (i: number, at: number | null, hints: boolean): string[] => [
-  `${ptr(at === 0)} ${pad(p.dim("EH External ID"), 18)} ${pad(idShort(i), 34)} ${hints && idDiffers(pairs[i]!) ? p.dim("r to choose") : ""}`,
-  `${ptr(at === 1)} ${pad(p.dim("Details"), 18)} ${pad(detailsShort(i), 34)} ${hints && pairs[i]!.diffs.length ? p.dim("d to choose") : ""}`,
+  `${ptr(at === 0)} ${pad(p.dim("EH External ID"), 18)} ${pad(idShort(i), 34)} ${hints && canEdit(i) ? p.dim("e to edit both") : ""}`,
+  `${ptr(at === 1)} ${pad(p.dim("Details"), 18)} ${pad(detailsShort(i), 34)}`,
 ];
 const boxed = (title: string, body: string[]) => box(title, body, [], COLS() - 8).map((l) => `  ${l}`);
 
@@ -315,8 +335,7 @@ function variantA(): Variant {
     render() {
       const x = pairs[cursor]!;
       const ks: [string, string][] = [["↑↓", "move"]];
-      if (idDiffers(x)) ks.push(["r", "EH External ID"]);
-      if (x.diffs.length) ks.push(["d", "details"]);
+      if (canEdit(cursor)) ks.push(["e", "edit EH External ID and details"]);
       ks.push(["c", "confirm"], ["v", "next variant"], ["q", "quit"]);
       return [
         ...header("A", this.name),
@@ -329,11 +348,9 @@ function variantA(): Variant {
       ];
     },
     press(str, key) {
-      const x = pairs[cursor]!;
       if (key.name === "up") cursor = Math.max(0, cursor - 1);
       else if (key.name === "down") cursor = Math.min(pairs.length - 1, cursor + 1);
-      else if (str === "r" && idDiffers(x)) openId(cursor);
-      else if (str === "d" && x.diffs.length) openDetails(cursor);
+      else if (str === "e") openEdit(cursor);
       else if (str === "c") popup = { kind: "save" };
     },
   };
@@ -397,8 +414,7 @@ function variantB(): Variant {
       if (key.name === "up" && idDiffers(pairs[i]!)) line = 0;
       else if (key.name === "down" && pairs[i]!.diffs.length) line = 1;
       else if (key.name === "return") {
-        if (line === 0) openId(i);
-        else openDetails(i);
+        openEdit(i);
       } else if (str === "n") {
         if (card + 1 < q.length) [card, line] = [card + 1, firstLine(q[card + 1]!)];
         else popup = { kind: "save" };
@@ -486,7 +502,7 @@ function variantC(): Variant {
       else if (key.name === "right") col = Math.min(cs.length - 1, col + 1);
       else if (key.name === "space") {
         if (h === ID) {
-          if (idDiffers(pairs[i]!)) openId(i);
+          openEdit(i);
         } else if (pairs[i]!.diffs.includes(h)) flip(i, h);
       } else if (str === "a" && h !== ID) {
         const holders = rs.filter((j) => pairs[j]!.diffs.includes(h));
@@ -514,7 +530,7 @@ if (!process.stdin.isTTY) {
   const a = variantA();
   for (let k = 0; k < 4; k++) a.press(undefined, { name: "down" });
   console.log(a.render().join("\n") + "\n");
-  for (const pu of [() => openId(4), () => openDetails(4), () => (popup = { kind: "save" })]) {
+  for (const pu of [() => openEdit(4), () => openEdit(1), () => (popup = { kind: "save" })]) {
     pu();
     console.log(overlay(a.render(), renderPopup(popup!)).join("\n") + "\n");
   }
