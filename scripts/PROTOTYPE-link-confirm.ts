@@ -47,12 +47,16 @@ const COLS = () => Math.min(120, process.stdout.columns || 110);
 /**
  * Round 4 (the developer's ask): the selected row is a full-width highlight
  * bar, in the list and in the Edit pop-up, so it can't get lost on a light
- * terminal. --highlight soft (default: black on light blue) or invert
- * (the terminal's own colours swapped). The ▶ stays as a second cue.
+ * terminal. Round 5: the bar is a fixed black with bright white text (not the
+ * terminal's colours swapped), and the indicators inside it keep their
+ * meaning in bright colours: ▶ and ● cyan (where you are, what's picked),
+ * ✓ green, ⚠ yellow, ✗ red, ○ grey.
  */
-const HL_STYLE = arg("highlight", "soft") === "invert" ? "1;7" : "1;30;106";
-/** A line drawn as a highlight bar `w` wide; its own colours give way to the bar's. */
-const hl = (s: string, w: number) => (color ? `\u001b[${HL_STYLE}m${pad(strip(s), w)}\u001b[0m` : s);
+const BAR = "\u001b[1;97;40m";
+const BAR_MARKS: Record<string, string> = { "▶": "96", "●": "96", "○": "37", "✓": "92", "⚠": "93", "✗": "91" };
+/** A line drawn as a highlight bar `w` wide, its indicators recoloured to read on it. */
+const hl = (s: string, w: number) =>
+  color ? `${BAR}${pad(strip(s), w).replace(/[▶●○✓⚠✗]/g, (m) => `\u001b[${BAR_MARKS[m]}m${m}\u001b[97m`)}\u001b[0m` : pad(s, w);
 /** Marks a body line for box() to draw as a highlight bar across the box. */
 const HL = "\u0001";
 const marked = (on: boolean, ls: string[]) => (on ? ls.map((l) => HL + l) : ls);
@@ -149,23 +153,29 @@ const sentFromCt = (i: number) => pairs[i]!.diffs.filter((d) => usesCt(i, d));
 
 // ── pop-ups (shared by every variant) ───────────────────────────────────────
 /**
- * One Edit pop-up per person (round 3: the developer's ask, one place to edit,
- * on e), with two bordered sections: EH External ID, then Details. ↑↓ walks
- * every option in both; nothing is kept until Enter.
+ * One Edit pop-up per person (round 3: one place to edit, on e), with two
+ * bordered sections: EH External ID, then Details.
+ *
+ * Round 5 (the developer's ask): every option is its own row. ↑↓ moves, Enter
+ * picks the option under the bar, Esc or Backspace goes back with the picks
+ * kept. No save step here: nothing leaves the screen until "Save these links?".
  */
-type Item = { t: "id"; replace: boolean } | { t: "detail"; d: string };
-type Popup = { kind: "edit"; i: number; at: number; rep: boolean; draft: Set<string> } | { kind: "save" };
+type Item = { t: "id"; replace: boolean } | { t: "detail"; d: string; use: boolean };
+type Popup = { kind: "edit"; i: number; at: number } | { kind: "save" };
 let popup: Popup | null = null;
 let saved = false;
 
 const canReplace = (x: Pair) => idDiffers(x) && x.keyAgrees;
 const items = (i: number): Item[] => {
   const x = pairs[i]!;
-  return [...(canReplace(x) ? [{ t: "id", replace: false } as Item, { t: "id", replace: true } as Item] : []), ...x.diffs.map((d) => ({ t: "detail", d }) as Item)];
+  return [
+    ...(canReplace(x) ? [{ t: "id", replace: false } as Item, { t: "id", replace: true } as Item] : []),
+    ...x.diffs.flatMap((d) => [{ t: "detail", d, use: false } as Item, { t: "detail", d, use: true } as Item]),
+  ];
 };
 const canEdit = (i: number) => items(i).length > 0;
 const openEdit = (i: number) => {
-  if (canEdit(i)) popup = { kind: "edit", i, at: 0, rep: replace.has(i), draft: new Set(useCt.get(i) ?? []) };
+  if (canEdit(i)) popup = { kind: "edit", i, at: 0 };
 };
 const keyHint = (...ks: [string, string][]) => ks.map(([k, w]) => `${p.bold(k)} ${p.dim(w)}`).join("     ");
 
@@ -176,22 +186,27 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
   const its = items(pu.i);
   const on = (k: number) => k === pu.at;
   const lbl = (s: string) => p.dim(pad(s, 22));
+  /** One option row (plus any explanation lines), under the bar when selected. */
+  const option = (k: number, chosen: boolean, title: string, why: string[] = [], indent = "") =>
+    marked(on(k), [`${indent}${ptr(on(k))} ${radio(chosen)}  ${chosen ? p.bold(title) : title}`, ...why.map((w) => `${indent}        ${p.dim(w)}`)]);
 
   // EH External ID section
-  const idBody: string[] = [`${lbl("EH External ID")}${x.extId === null ? p.dim("(blank)") : p.eh(x.extId)}${x.extId !== null && x.extId === x.ehId ? p.change("   ⚠ this is their EH Employee ID") : ""}`, `${lbl("Connecteam User ID")}${p.ct(x.ctUserId)}`, ""];
+  const idBody: string[] = [
+    `${lbl("EH External ID")}${x.extId === null ? p.dim("(blank)") : p.eh(x.extId)}${x.extId !== null && x.extId === x.ehId ? p.change("   ⚠ this is their EH Employee ID") : ""}`,
+    `${lbl("Connecteam User ID")}${p.ct(x.ctUserId)}`,
+    "",
+  ];
   if (!idDiffers(x)) idBody.push(p.ok(x.extId === null ? "✓ Blank in EH: it'll be set to their Connecteam User ID." : "✓ They match. Nothing to choose."));
-  else if (!x.keyAgrees) idBody.push(p.bad("They don't match, and it can't be replaced:"), p.dim("no email, TFN or name + date of birth match."), p.dim("They'll be held at approval. Fix the EH record by hand."));
+  else if (!x.keyAgrees) idBody.push(p.bad("✗ They don't match, and it can't be replaced:"), p.dim("  no email, TFN or name + date of birth match."), p.dim("  They'll be held at approval. Fix the EH record by hand."));
   else {
-    idBody.push(p.dim("They don't match. Pick one:"), "");
-    const opt = (k: number, chosen: boolean, title: string, why: string[]) => [
-      ...marked(on(k), [`${ptr(on(k))} ${radio(chosen)}  ${on(k) ? p.bold(title) : title}`, ...why.map((w) => `        ${p.dim(w)}`)]),
-      "",
-    ];
+    const rep = replace.has(pu.i);
     idBody.push(
-      ...opt(0, !pu.rep, `Keep EH's External ID (${x.extId})`, ["Nothing changes in EH. They're held at approval."]),
-      ...opt(1, pu.rep, `Replace it with the Connecteam User ID (${x.ctUserId})`, [`Overwritten at approval, only if EH still holds ${x.extId}.`]),
+      p.dim("They don't match. Pick one:"),
+      "",
+      ...option(0, !rep, `Keep EH's External ID (${x.extId})`, ["Nothing changes in EH. They're held at approval."]),
+      "",
+      ...option(1, rep, `Replace it with the Connecteam User ID (${x.ctUserId})`, [`Overwritten at approval, only if EH still holds ${x.extId}.`]),
     );
-    idBody.pop();
   }
 
   // Details section
@@ -200,15 +215,14 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
   else {
     detBody.push(p.dim("These differ between Connecteam and EH. Values aren't shown."), "");
     x.diffs.forEach((d) => {
-      const k = its.findIndex((it) => it.t === "detail" && it.d === d);
-      const ct = pu.draft.has(d);
+      const k = its.findIndex((it) => it.t === "detail" && it.d === d && !it.use);
+      const ct = usesCt(pu.i, d);
       detBody.push(
-        ...marked(on(k), [
-          `${ptr(on(k))} ${on(k) ? p.bold(d) : d}`,
-          `      ${p.dim(pad("Connecteam field", 18))}${p.ct(d)}`,
-          `      ${p.dim(pad("EH field", 18))}${p.eh(EH_FIELD[d] ?? d)}`,
-          `      ${radio(!ct)} ${!ct ? p.bold("Keep EH's") : "Keep EH's"}        ${radio(ct)} ${ct ? p.bold("Use Connecteam's") : "Use Connecteam's"}`,
-        ]),
+        p.bold(d),
+        `    ${p.dim(pad("Connecteam field", 18))}${p.ct(d)}`,
+        `    ${p.dim(pad("EH field", 18))}${p.eh(EH_FIELD[d] ?? d)}`,
+        ...option(k, !ct, "Keep EH's", [], "  "),
+        ...option(k + 1, ct, "Use Connecteam's", [], "  "),
         "",
       );
     });
@@ -216,9 +230,9 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
   }
 
   // Both sections one width, so they line up.
-  const secW = Math.max(SECTION_W, ...[...idBody, ...detBody].map((l) => vis(l) + 4));
-  const sent = x.diffs.filter((d) => pu.draft.has(d));
-  const notice = [...(pu.rep ? ["EH External ID replaced"] : []), ...(sent.length ? [`Sent from Connecteam: ${sent.join(", ")}`] : [])].join(". ");
+  const secW = Math.max(SECTION_W, ...[...idBody, ...detBody].map((l) => vis(l.replace(HL, "")) + 4));
+  const sent = sentFromCt(pu.i);
+  const notice = [...(replace.has(pu.i) ? ["EH External ID replaced"] : []), ...(sent.length ? [`Sent from Connecteam: ${sent.join(", ")}`] : [])].join(". ");
   return box(
     `Edit · ${x.ct}`,
     [
@@ -231,7 +245,7 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
       "",
       p.dim(`Link notice will say: ${notice || "(just linked)"}`),
     ],
-    [keyHint(["↑↓", "move"], ["←→ / Space", "choose"], ["Enter", "save"], ["Esc", "cancel"])],
+    [keyHint(["↑↓", "move"], ["Enter", "pick"], ["Esc / Backspace", "done, back to the list"])],
   );
 }
 
@@ -267,24 +281,16 @@ function popupKey(str: string | undefined, key: { name?: string }): void {
     else if (str === "n" || key.name === "escape") popup = null;
     return;
   }
-  if (key.name === "escape") return void (popup = null);
+  if (key.name === "escape" || key.name === "backspace") return void (popup = null);
   const its = items(pu.i);
   const it = its[pu.at]!;
   if (key.name === "up") pu.at = Math.max(0, pu.at - 1);
   else if (key.name === "down") pu.at = Math.min(its.length - 1, pu.at + 1);
   else if (key.name === "return") {
-    if (pu.rep) replace.add(pu.i);
-    else replace.delete(pu.i);
-    useCt.set(pu.i, pu.draft);
-    popup = null;
-  } else if (it.t === "id" && (key.name === "space" || key.name === "left" || key.name === "right")) pu.rep = it.replace;
-  else if (it.t === "detail") {
-    if (key.name === "left") pu.draft.delete(it.d);
-    else if (key.name === "right") pu.draft.add(it.d);
-    else if (key.name === "space") {
-      if (pu.draft.has(it.d)) pu.draft.delete(it.d);
-      else pu.draft.add(it.d);
-    }
+    if (it.t === "id") {
+      if (it.replace) replace.add(pu.i);
+      else replace.delete(pu.i);
+    } else flip(pu.i, it.d, it.use);
   }
 }
 
@@ -549,7 +555,12 @@ if (!process.stdin.isTTY) {
   const a = variantA();
   for (let k = 0; k < 4; k++) a.press(undefined, { name: "down" });
   console.log(a.render().join("\n") + "\n");
-  for (const pu of [() => openEdit(4), () => openEdit(1), () => (popup = { kind: "save" })]) {
+  // Emery's Edit pop-up after ↓↓↓ Enter: Street Address → Use Connecteam's, the bar on it.
+  const drive = () => {
+    openEdit(4);
+    for (const k of ["down", "down", "down", "return"]) popupKey(undefined, { name: k });
+  };
+  for (const pu of [() => openEdit(4), drive, () => (popup = { kind: "save" })]) {
     pu();
     console.log(overlay(a.render(), renderPopup(popup!)).join("\n") + "\n");
   }
