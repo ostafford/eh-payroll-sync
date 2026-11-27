@@ -113,6 +113,8 @@ interface Pair {
   diffs: string[];
   /** A Pre-create check key agrees (email, TFN, or name + DOB). */
   keyAgrees: boolean;
+  /** Why no check key agrees, per check (only for a pair that can't be replaced). */
+  checks?: { email: string; tfn: string; nameDob: string };
   how: string;
 }
 const pairs: Pair[] = [
@@ -121,7 +123,7 @@ const pairs: Pair[] = [
   { ct: "Casey Duarte", email: "casey.d@example.com", ctUserId: "9081203", eh: "Casey Duarte", ehId: "300103", extId: null, diffs: ["Postcode", "Phone number"], keyAgrees: true, how: "matched by email" },
   { ct: "Devon Marsh", email: "devon.m@example.com", ctUserId: "9081204", eh: "Devon Marsh", ehId: "300104", extId: "9081204", diffs: [], keyAgrees: true, how: "matched by email" },
   { ct: "Emery Novak", email: "emery.n@example.com", ctUserId: "9081205", eh: "Emery Novak", ehId: "300105", extId: "300105", diffs: ["Street Address", "Suburb", "Emergency Contact Number"], keyAgrees: true, how: "matched by email" },
-  { ct: "Finley Rowe", email: "finley.r@example.com", ctUserId: "9081206", eh: "Finn Rowe", ehId: "300106", extId: "PR-0042", diffs: ["Phone number"], keyAgrees: false, how: "you picked (name differs)" },
+  { ct: "Finley Rowe", email: "finley.r@example.com", ctUserId: "9081206", eh: "Finn Rowe", ehId: "300106", extId: "PR-0042", diffs: ["Phone number"], keyAgrees: false, how: "you picked (name differs)", checks: { email: "different in Connecteam and EH", tfn: "not in Connecteam", nameDob: "name differs (Finley / Finn)" } },
   { ct: "Harper Quinn", email: "harper.q@example.com", ctUserId: "9081207", eh: "Harper Quinn", ehId: "300107", extId: null, diffs: ["Postcode", "Account Number"], keyAgrees: true, how: "matched by email" },
   { ct: "Jordan Ash", email: "jordan.a@example.net", ctUserId: "9081208", eh: null, ehId: "", extId: null, diffs: [], keyAgrees: false, how: "new hire" },
 ];
@@ -140,6 +142,10 @@ const needsChoice = (x: Pair) => idDiffers(x) || x.diffs.length > 0;
 
 // ── shared state: survives a variant switch ─────────────────────────────────
 const replace = new Set<number>();
+/** Round 6: what to do with a pair whose External ID differs and can't be replaced. Absent = held. */
+type Blocked = "held" | "unlink" | "repick";
+const blocked = new Map<number, Blocked>();
+const blockedOf = (i: number): Blocked => blocked.get(i) ?? "held";
 /** Details marked Use Connecteam's, by pair. Absent = Keep EH's (pre-selected). */
 const useCt = new Map<number, Set<string>>();
 const usesCt = (i: number, d: string) => useCt.get(i)?.has(d) ?? false;
@@ -160,7 +166,7 @@ const sentFromCt = (i: number) => pairs[i]!.diffs.filter((d) => usesCt(i, d));
  * picks the option under the bar, Esc or Backspace goes back with the picks
  * kept. No save step here: nothing leaves the screen until "Save these links?".
  */
-type Item = { t: "id"; replace: boolean } | { t: "detail"; d: string; use: boolean };
+type Item = { t: "id"; replace: boolean } | { t: "blocked"; choice: Blocked } | { t: "detail"; d: string; use: boolean };
 type Popup = { kind: "edit"; i: number; at: number } | { kind: "save" };
 let popup: Popup | null = null;
 let saved = false;
@@ -170,6 +176,7 @@ const items = (i: number): Item[] => {
   const x = pairs[i]!;
   return [
     ...(canReplace(x) ? [{ t: "id", replace: false } as Item, { t: "id", replace: true } as Item] : []),
+    ...(idDiffers(x) && !x.keyAgrees ? (["held", "unlink", "repick"] as Blocked[]).map((choice) => ({ t: "blocked", choice }) as Item) : []),
     ...x.diffs.flatMap((d) => [{ t: "detail", d, use: false } as Item, { t: "detail", d, use: true } as Item]),
   ];
 };
@@ -197,7 +204,32 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
     "",
   ];
   if (!idDiffers(x)) idBody.push(p.ok(x.extId === null ? "✓ Blank in EH: it'll be set to their Connecteam User ID." : "✓ They match. Nothing to choose."));
-  else if (!x.keyAgrees) idBody.push(p.bad("✗ They don't match, and it can't be replaced:"), p.dim("  no email, TFN or name + date of birth match."), p.dim("  They'll be held at approval. Fix the EH record by hand."));
+  else if (!x.keyAgrees) {
+    const ck = x.checks!;
+    const row = (label: string, why: string) => `    ${p.bad("✗")} ${p.dim(pad(label, 18))}${why}`;
+    const k0 = its.findIndex((it) => it.t === "blocked");
+    const b = blockedOf(pu.i);
+    idBody.push(
+      p.bad("✗ They don't match, and it can't be replaced."),
+      p.dim("  Replacing needs proof it's the same person. None of the checks agree:"),
+      "",
+      row("Email", ck.email),
+      row("TFN", ck.tfn),
+      row("Name + birthday", ck.nameDob),
+      "",
+      p.dim("  To fix: make one of these agree in Connecteam or EH (say, the email),"),
+      p.dim("  or set EH's External ID to their Connecteam User ID yourself,"),
+      p.dim("  then run the link stage again."),
+      "",
+      p.dim("For now:"),
+      "",
+      ...option(k0, b === "held", "Leave them held", ["Held at approval and an alert is posted, until it's fixed."]),
+      "",
+      ...option(k0 + 1, b === "unlink", "Don't link this person", ["Comes off the Link list. Checked again when they're approved."]),
+      "",
+      ...option(k0 + 2, b === "repick", "Pick a different EH employee", ["Back to the list's search for this row."]),
+    );
+  }
   else {
     const rep = replace.has(pu.i);
     idBody.push(
@@ -251,8 +283,10 @@ function renderEdit(pu: Extract<Popup, { kind: "edit" }>): string[] {
 
 function renderPopup(pu: Popup): string[] {
   if (pu.kind === "edit") return renderEdit(pu);
-  const links = pairs.filter(linkable).length;
-  const held = pairs.filter((x, i) => idDiffers(x) && !replace.has(i)).length;
+  const off = (i: number) => idDiffers(pairs[i]!) && !pairs[i]!.keyAgrees && blockedOf(i) !== "held";
+  const links = pairs.filter((x, i) => linkable(x) && !off(i)).length;
+  const wont = pairs.filter((_, i) => off(i)).length;
+  const held = pairs.filter((x, i) => idDiffers(x) && !replace.has(i) && !off(i)).length;
   const fromCt = new Map<string, number>();
   pairs.forEach((_, i) => sentFromCt(i).forEach((d) => fromCt.set(d, (fromCt.get(d) ?? 0) + 1)));
   const kept = pairs.reduce((n, x, i) => n + x.diffs.length - sentFromCt(i).length, 0);
@@ -261,7 +295,8 @@ function renderPopup(pu: Popup): string[] {
     "Save these links?",
     [
       `${lbl("To link")}${p.ok(String(links))}`,
-      `${lbl("New hires")}${pairs.length - links}`,
+      `${lbl("New hires")}${pairs.filter((x) => !linkable(x)).length}`,
+      ...(wont ? [`${lbl("Won't link / to re-pick")}${p.change(String(wont))}`] : []),
       "---",
       `${lbl("EH External ID replaced")}${replace.size ? p.change(String(replace.size)) : "0"}`,
       `${lbl("Held at approval")}${held ? p.bad(`${held}  (EH External ID doesn't match)`) : "0"}`,
@@ -290,6 +325,10 @@ function popupKey(str: string | undefined, key: { name?: string }): void {
     if (it.t === "id") {
       if (it.replace) replace.add(pu.i);
       else replace.delete(pu.i);
+    } else if (it.t === "blocked") {
+      blocked.set(pu.i, it.choice);
+      // In the real list this opens the EH search on the row (the / key today).
+      if (it.choice === "repick") popup = null;
     } else flip(pu.i, it.d, it.use);
   }
 }
@@ -301,7 +340,7 @@ const idShort = (i: number): string => {
   if (x.extId === null) return p.dim("blank in EH, will be set");
   if (x.extId === x.ctUserId) return p.ok("matches");
   if (replace.has(i)) return p.change("will be replaced");
-  if (!x.keyAgrees) return p.bad("doesn't match, can't replace");
+  if (!x.keyAgrees) return blockedOf(i) === "unlink" ? p.change("won't link") : blockedOf(i) === "repick" ? p.change("pick a different EH employee") : p.bad("doesn't match, can't replace · held");
   return p.bad("doesn't match");
 };
 const detailsShort = (i: number): string => {
@@ -312,7 +351,7 @@ const detailsShort = (i: number): string => {
 };
 const stateLine = () =>
   p.dim(
-    `  [state] replace={${[...replace].map((i) => i + 1).join(",")}} useCt={${[...useCt]
+    `  [state] replace={${[...replace].map((i) => i + 1).join(",")}} blocked={${[...blocked].map(([i, b]) => `${i + 1}:${b}`).join(",")}} useCt={${[...useCt]
       .filter(([, s]) => s.size)
       .map(([i, s]) => `${i + 1}:${[...s].join("+")}`)
       .join(" ")}}`,
@@ -465,7 +504,7 @@ function variantC(): Variant {
     const x = pairs[i]!;
     if (name === ID) {
       if (!idDiffers(x)) return p.dim("·");
-      if (!x.keyAgrees) return p.bad("can't replace");
+      if (!x.keyAgrees) return blockedOf(i) === "held" ? p.bad("held") : p.change(blockedOf(i) === "unlink" ? "won't link" : "re-pick");
       return replace.has(i) ? p.change("replace") : p.bad("doesn't match");
     }
     if (!x.diffs.includes(name)) return p.dim("·");
@@ -560,7 +599,7 @@ if (!process.stdin.isTTY) {
     openEdit(4);
     for (const k of ["down", "down", "down", "return"]) popupKey(undefined, { name: k });
   };
-  for (const pu of [() => openEdit(4), drive, () => (popup = { kind: "save" })]) {
+  for (const pu of [() => openEdit(4), drive, () => openEdit(5), () => (popup = { kind: "save" })]) {
     pu();
     console.log(overlay(a.render(), renderPopup(popup!)).join("\n") + "\n");
   }
