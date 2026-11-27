@@ -3,28 +3,28 @@
  *
  * Question: what does the link stage's confirm screen look like now that a
  * confirmed pair can carry two extra choices?
- *   - "Link and replace External ID" (#217), confirmed in a prompt naming both values;
+ *   - "Link and replace External ID" (#217), confirmed naming both values;
  *   - per-detail Keep EH's (pre-selected) / Use Connecteam's, names only (#220).
  *
- * Three structurally different variants, all on FAKE data (no API call,
- * nothing written anywhere):
+ * Round 2 (the developer's feedback): every choice opens in a bordered pop-up,
+ * one option per line, with the screen behind it dimmed; the key legend sits
+ * in its own box; fields are named Connecteam field → EH field; IDs are always
+ * "EH External ID" / "Connecteam User ID".
  *
- *   A  In the row panel: the choices live on the existing full-screen list.
- *      The selected pair's panel grows an "External ID" line and a "Details
- *      that differ" list; r replaces, d steps into the details. The Status
- *      column says what's set. c is the same Save prompt as today, with counts.
- *   B  A settle step after c: the list is unchanged; c opens "N pairs need a
- *      choice before saving" and walks them one card at a time (Pair 2 of 4).
- *      ←→ picks EH's / Connecteam's for the selected detail.
- *   C  A grid after c: one table, a row per pair needing a choice, a column
- *      per detail name (plus External ID). Space flips a cell, a flips the
- *      whole column - "use Connecteam's Postcode for everyone".
+ * The three variants differ only in WHEN and WHERE the choices are made:
+ *   A  As you go: on today's list, the selected person's panel shows two short
+ *      lines (EH External ID, Details); r or d opens the pop-up.
+ *   B  After c, one person at a time: c lists who needs a choice, then one
+ *      screen per person; Enter on a line opens its pop-up.
+ *   C  After c, everyone in one table: a row per person, a column per field;
+ *      Space flips a detail cell, a flips the whole column, Space on an
+ *      External ID cell opens its pop-up.
  *
  *   npm run prototype:link-confirm -- --variant B
  *   NO_COLOR=1 npm run prototype:link-confirm -- --variant C
  *
- * v switches variant (same data, choices kept). q quits. Not in a terminal,
- * it prints each variant's opening screen.
+ * v switches variant (same data, choices kept). q quits. All FAKE data: no API
+ * call, nothing written. Not in a terminal, it prints sample screens.
  */
 import { emitKeypressEvents } from "node:readline";
 
@@ -37,9 +37,51 @@ const c = (code: string) => (s: string) => (color ? `\u001b[${code}m${s}\u001b[0
 const p = { eh: c("35"), ct: c("36"), change: c("33"), dim: c("2"), bold: c("1"), ok: c("32"), bad: c("31"), inv: c("7") };
 const mark = { ok: p.ok(color ? "✓" : "[ok]"), warn: p.change(color ? "⚠" : "[!]"), bad: p.bad(color ? "✗" : "[x]"), none: p.dim(color ? "–" : "[-]") };
 const ANSI = /\u001b\[[0-9;]*m/g;
-const vis = (s: string) => s.replace(ANSI, "").length;
+const strip = (s: string) => s.replace(ANSI, "");
+const vis = (s: string) => strip(s).length;
 const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - vis(s)));
 const ptr = (on: boolean) => (on ? (color ? p.ct("▶") : ">") : " ");
+const radio = (on: boolean) => (on ? (color ? p.ct("●") : "(x)") : color ? p.dim("○") : "( )");
+const COLS = () => Math.min(120, process.stdout.columns || 110);
+
+// ── boxes ───────────────────────────────────────────────────────────────────
+const B = color ? { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│", ml: "├", mr: "┤" } : { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|", ml: "+", mr: "+" };
+/** A bordered box: a title, body lines, and an optional footer under a rule. "---" in the body draws a rule. */
+function box(title: string, body: string[], footer: string[] = [], minW = 0): string[] {
+  const inner = Math.max(minW, vis(title) + 4, ...[...body, ...footer].map((l) => vis(l) + 4));
+  const row = (l: string) => `${B.v}  ${pad(l, inner - 4)}  ${B.v}`;
+  const rule = `${B.ml}${B.h.repeat(inner)}${B.mr}`;
+  const t = title ? ` ${p.bold(title)} ` : "";
+  return [
+    `${B.tl}${B.h}${t}${B.h.repeat(Math.max(0, inner - 1 - vis(t)))}${B.tr}`,
+    ...body.map((l) => (l === "---" ? rule : row(l))),
+    ...(footer.length ? [rule, ...footer.map(row)] : []),
+    `${B.bl}${B.h.repeat(inner)}${B.br}`,
+  ];
+}
+/** The key legend, boxed, wrapped to the terminal. */
+function legend(ks: [string, string][]): string[] {
+  const items = ks.map(([k, w]) => `${p.bold(k)} ${p.dim(w)}`);
+  const lines: string[] = [];
+  let cur = "";
+  for (const it of items) {
+    if (cur && vis(cur) + 5 + vis(it) > COLS() - 12) {
+      lines.push(cur);
+      cur = it;
+    } else cur = cur ? `${cur}     ${it}` : it;
+  }
+  if (cur) lines.push(cur);
+  return box("Keys", lines, [], COLS() - 8).map((l) => `  ${l}`);
+}
+/** Lays a pop-up over the screen, centred, with everything behind it dimmed. */
+function overlay(screen: string[], pop: string[]): string[] {
+  const out = screen.map((l) => p.dim(strip(l)));
+  const top = Math.max(2, Math.floor((out.length - pop.length) / 2));
+  while (out.length < top + pop.length) out.push("");
+  const left = " ".repeat(Math.max(2, Math.floor((COLS() - vis(pop[0]!)) / 2)));
+  pop.forEach((l, k) => (out[top + k] = left + l));
+  return out;
+}
 
 // ── fake data ───────────────────────────────────────────────────────────────
 interface Pair {
@@ -50,7 +92,7 @@ interface Pair {
   ehId: string;
   /** EH's External ID now: null blank, equal to ctUserId when it already matches. */
   extId: string | null;
-  /** Details that differ between Connecteam and EH, names only. */
+  /** Details that differ between Connecteam and EH, by Connecteam field name. */
   diffs: string[];
   /** A Pre-create check key agrees (email, TFN, or name + DOB). */
   keyAgrees: boolean;
@@ -66,7 +108,7 @@ const pairs: Pair[] = [
   { ct: "Harper Quinn", email: "harper.q@example.com", ctUserId: "9081207", eh: "Harper Quinn", ehId: "300107", extId: null, diffs: ["Postcode", "Account Number"], keyAgrees: true, how: "matched by email" },
   { ct: "Jordan Ash", email: "jordan.a@example.net", ctUserId: "9081208", eh: null, ehId: "", extId: null, diffs: [], keyAgrees: false, how: "new hire" },
 ];
-/** Each detail by its Connecteam field name (the setup's field names, scripts/lib/field-spec.ts), with the EH field it fills. */
+/** Each detail by its Connecteam field name (the setup's names, scripts/lib/field-spec.ts), with the EH field it fills. */
 const EH_FIELD: Record<string, string> = {
   Postcode: "residentialPostCode",
   "Phone number": "mobilePhone",
@@ -75,8 +117,6 @@ const EH_FIELD: Record<string, string> = {
   "Emergency Contact Number": "emergencyContact1_ContactNumber",
   "Account Number": "bankAccount1_AccountNumber",
 };
-/** "Postcode (Connecteam) → residentialPostCode (EH)", padded to line up. */
-const fieldPair = (d: string) => `${pad(p.ct(d), 26)} ${p.dim("→")} ${pad(p.eh(EH_FIELD[d] ?? d), 33)}`;
 const linkable = (x: Pair) => x.eh !== null;
 const idDiffers = (x: Pair) => linkable(x) && x.extId !== null && x.extId !== x.ctUserId;
 const needsChoice = (x: Pair) => idDiffers(x) || x.diffs.length > 0;
@@ -92,58 +132,139 @@ const flip = (i: number, d: string, to?: boolean) => {
   else s.delete(d);
   useCt.set(i, s);
 };
-/** A replace waiting on y/n, by pair. */
-let asking: number | null = null;
-let saving = false;
-let saved = false;
-
-const askReplace = (i: number) => {
-  if (replace.has(i)) replace.delete(i);
-  else if (pairs[i]!.keyAgrees) asking = i;
-};
-const replacePrompt = (i: number): string[] => {
-  const x = pairs[i]!;
-  return [
-    p.bold(`  Replace ${x.eh}'s External ID in Employment Hero?`),
-    "",
-    `    EH External ID now:    ${p.eh(x.extId!)}${x.extId === x.ehId ? p.dim("   (this is their EH Employee ID, not a Payroll ID)") : ""}`,
-    `    Replace it with:       ${p.ct(x.ctUserId)}${p.dim(`   (${x.ct}'s Connecteam User ID)`)}`,
-    "",
-    p.dim(`    Happens at approval, and only if EH still holds ${x.extId} then.`),
-    "",
-    `  ${p.bold("y")} ${p.dim("replace")}     ${p.bold("n")} ${p.dim("keep EH's - they'll be held at approval")}`,
-  ];
-};
-
-/** What a pair's EH External ID will do, in words, naming both IDs. */
-const idLine = (i: number): string => {
-  const x = pairs[i]!;
-  const ct = `Connecteam User ID ${x.ctUserId}`;
-  if (!linkable(x)) return p.dim(`new hire: EH External ID set to their ${ct}`);
-  if (x.extId === null) return p.dim(`blank in EH: set to their ${ct}`);
-  if (x.extId === x.ctUserId) return p.dim(`already their ${ct}`);
-  const what = x.extId === x.ehId ? `${x.extId} (their EH Employee ID)` : x.extId;
-  if (replace.has(i)) return p.change(`replace ${x.extId} with their ${ct}`);
-  if (!x.keyAgrees) return p.bad(`EH has ${what}: can't replace (no email, TFN or name + DOB match) - held at approval`);
-  return p.change(`EH has ${what}, not their ${ct}: held at approval unless replaced`);
-};
 const sentFromCt = (i: number) => pairs[i]!.diffs.filter((d) => usesCt(i, d));
 
-const summary = (): string[] => {
+// ── pop-ups (shared by every variant) ───────────────────────────────────────
+type Popup =
+  | { kind: "id"; i: number; sel: 0 | 1 }
+  | { kind: "details"; i: number; at: number; draft: Set<string> }
+  | { kind: "save" };
+let popup: Popup | null = null;
+let saved = false;
+
+const openId = (i: number) => (popup = { kind: "id", i, sel: replace.has(i) ? 1 : 0 });
+const openDetails = (i: number) => (popup = { kind: "details", i, at: 0, draft: new Set(useCt.get(i) ?? []) });
+const keyHint = (...ks: [string, string][]) => ks.map(([k, w]) => `${p.bold(k)} ${p.dim(w)}`).join("     ");
+
+function renderPopup(pu: Popup): string[] {
+  if (pu.kind === "id") {
+    const x = pairs[pu.i]!;
+    const lbl = (s: string) => p.dim(pad(s, 22));
+    const body = [
+      `${lbl("Connecteam user")}${p.ct(x.ct)}`,
+      `${lbl("Employment Hero")}${p.eh(x.eh!)}  ${p.dim(`(EH Employee ID ${x.ehId})`)}`,
+      "---",
+      `${lbl("EH External ID")}${p.eh(x.extId!)}${x.extId === x.ehId ? p.change("   ⚠ this is their EH Employee ID") : ""}`,
+      `${lbl("Connecteam User ID")}${p.ct(x.ctUserId)}`,
+      "",
+      p.dim("They don't match, so this link can't be made as it stands."),
+      "---",
+    ];
+    if (!x.keyAgrees) {
+      body.push(p.bad("Can't replace: no email, TFN or name + date of birth match."), p.dim("They'll be held at approval. Fix the EH record by hand."));
+      return box(`EH External ID · ${x.ct}`, body, [keyHint(["Esc", "close"])]);
+    }
+    const opt = (n: 0 | 1, title: string, why: string[]) => [
+      `${ptr(pu.sel === n)} ${radio(pu.sel === n)}  ${pu.sel === n ? p.bold(title) : title}`,
+      ...why.map((w) => `       ${p.dim(w)}`),
+      "",
+    ];
+    body.push(
+      "",
+      ...opt(0, `Keep EH's External ID (${x.extId})`, ["Nothing changes in EH.", "They're held at approval and an alert is posted."]),
+      ...opt(1, `Replace it with the Connecteam User ID (${x.ctUserId})`, ["EH's External ID is overwritten at approval,", `only if EH still holds ${x.extId} then.`]),
+    );
+    return box(`EH External ID · ${x.ct}`, body, [keyHint(["↑↓", "choose"], ["Enter", "confirm"], ["Esc", "cancel"])]);
+  }
+  if (pu.kind === "details") {
+    const x = pairs[pu.i]!;
+    const body = [p.dim("These details differ between Connecteam and Employment Hero."), p.dim("Keep EH's is picked to start. Values aren't shown."), "---", ""];
+    x.diffs.forEach((d, k) => {
+      const on = k === pu.at;
+      const ct = pu.draft.has(d);
+      body.push(
+        `${ptr(on)} ${on ? p.bold(d) : d}`,
+        `     ${p.dim(pad("Connecteam field", 18))}${p.ct(d)}`,
+        `     ${p.dim(pad("EH field", 18))}${p.eh(EH_FIELD[d] ?? d)}`,
+        `     ${radio(!ct)} ${!ct ? p.bold("Keep EH's") : "Keep EH's"}        ${radio(ct)} ${ct ? p.bold("Use Connecteam's") : "Use Connecteam's"}`,
+        "",
+      );
+    });
+    const sent = x.diffs.filter((d) => pu.draft.has(d));
+    body.push("---", p.dim(`Link notice will say: ${sent.length ? `Sent from Connecteam: ${sent.join(", ")}` : "(nothing sent from Connecteam)"}`));
+    return box(`Details that differ · ${x.ct}`, body, [keyHint(["↑↓", "field"], ["←→", "keep / use"], ["Enter", "done"], ["Esc", "cancel"])]);
+  }
   const links = pairs.filter(linkable).length;
-  const reps = replace.size;
   const held = pairs.filter((x, i) => idDiffers(x) && !replace.has(i)).length;
   const fromCt = new Map<string, number>();
   pairs.forEach((_, i) => sentFromCt(i).forEach((d) => fromCt.set(d, (fromCt.get(d) ?? 0) + 1)));
-  const details = [...fromCt].map(([d, n]) => (n > 1 ? `${d} ×${n}` : d)).join(", ");
   const kept = pairs.reduce((n, x, i) => n + x.diffs.length - sentFromCt(i).length, 0);
-  return [
-    p.bold("  Save these links?"),
-    `  ${p.ok(`${links} to link`)} · ${pairs.length - links} new hire`,
-    `  ${reps ? p.change(`${reps} External ID replaced`) : p.dim("no External ID replaced")}${held ? ` · ${p.bad(`${held} held at approval: External ID differs`)}` : ""}`,
-    `  ${fromCt.size ? p.change(`Sent from Connecteam at link: ${details}`) : p.dim("No details sent from Connecteam")} · ${p.dim(`${kept} kept as EH's`)}`,
-    `  ${p.bold("y")} ${p.dim("save")}   ${p.bold("n")} ${p.dim("back")}`,
-  ];
+  const lbl = (s: string) => p.dim(pad(s, 30));
+  return box(
+    "Save these links?",
+    [
+      `${lbl("To link")}${p.ok(String(links))}`,
+      `${lbl("New hires")}${pairs.length - links}`,
+      "---",
+      `${lbl("EH External ID replaced")}${replace.size ? p.change(String(replace.size)) : "0"}`,
+      `${lbl("Held at approval")}${held ? p.bad(`${held}  (EH External ID doesn't match)`) : "0"}`,
+      "---",
+      `${lbl("Sent from Connecteam at link")}${fromCt.size ? p.change([...fromCt].map(([d, n]) => (n > 1 ? `${d} ×${n}` : d)).join(", ")) : "nothing"}`,
+      `${lbl("Kept as EH's")}${kept} detail${kept === 1 ? "" : "s"}`,
+    ],
+    [keyHint(["y", "save"], ["n", "back"])],
+  );
+}
+
+/** A key while a pop-up is open. */
+function popupKey(str: string | undefined, key: { name?: string }): void {
+  const pu = popup!;
+  if (pu.kind === "save") {
+    if (str === "y") [popup, saved] = [null, true];
+    else if (str === "n" || key.name === "escape") popup = null;
+    return;
+  }
+  if (key.name === "escape") return void (popup = null);
+  if (pu.kind === "id") {
+    if (!pairs[pu.i]!.keyAgrees) return;
+    if (key.name === "up" || key.name === "down") pu.sel = pu.sel === 0 ? 1 : 0;
+    else if (key.name === "return") {
+      if (pu.sel === 1) replace.add(pu.i);
+      else replace.delete(pu.i);
+      popup = null;
+    }
+    return;
+  }
+  const ds = pairs[pu.i]!.diffs;
+  const d = ds[pu.at]!;
+  if (key.name === "up") pu.at = Math.max(0, pu.at - 1);
+  else if (key.name === "down") pu.at = Math.min(ds.length - 1, pu.at + 1);
+  else if (key.name === "left") pu.draft.delete(d);
+  else if (key.name === "right") pu.draft.add(d);
+  else if (key.name === "space") {
+    if (pu.draft.has(d)) pu.draft.delete(d);
+    else pu.draft.add(d);
+  } else if (key.name === "return") {
+    useCt.set(pu.i, pu.draft);
+    popup = null;
+  }
+}
+
+// ── short status words, shared ──────────────────────────────────────────────
+const idShort = (i: number): string => {
+  const x = pairs[i]!;
+  if (!linkable(x)) return p.dim("new hire");
+  if (x.extId === null) return p.dim("blank in EH, will be set");
+  if (x.extId === x.ctUserId) return p.ok("matches");
+  if (replace.has(i)) return p.change("will be replaced");
+  if (!x.keyAgrees) return p.bad("doesn't match, can't replace");
+  return p.bad("doesn't match");
+};
+const detailsShort = (i: number): string => {
+  const x = pairs[i]!;
+  if (!x.diffs.length) return p.dim("all the same");
+  const n = sentFromCt(i).length;
+  return p.change(n ? `${x.diffs.length} differ · ${n} from Connecteam` : `${x.diffs.length} differ · all EH's kept`);
 };
 const stateLine = () =>
   p.dim(
@@ -152,176 +273,109 @@ const stateLine = () =>
       .map(([i, s]) => `${i + 1}:${[...s].join("+")}`)
       .join(" ")}}`,
   );
-const keys = (...ks: [string, string][]) => `\n  ${ks.map(([k, w]) => `${p.bold(k)} ${p.dim(w)}`).join("     ")}\n`;
 
 // ── the list every variant starts from (today's screen, cut down) ───────────
 const listRows = (cursor: number, status: (i: number) => string): string[] => [
-  p.bold(`  #  ${pad("Connecteam user", 16)} ${pad("Employment Hero match", 24)} Status`),
+  p.bold(`    #  ${" ".repeat(color ? 1 : 4)} ${pad("Connecteam user", 16)} ${pad("Employment Hero match", 24)} Status`),
   ...pairs.map((x, i) => {
     const m = !linkable(x) ? mark.none : needsChoice(x) ? mark.warn : mark.ok;
     const name = pad(p.ct(x.ct), 16);
-    return `${ptr(i === cursor)} ${i + 1} ${pad(m, color ? 1 : 4)} ${i === cursor ? p.bold(name) : name} ${pad(x.eh ? `${p.eh(x.eh)} ${p.dim(x.ehId)}` : p.dim("(no match)"), 24)} ${status(i)}`;
+    return `  ${ptr(i === cursor)} ${i + 1}  ${pad(m, color ? 1 : 4)} ${i === cursor ? p.bold(name) : name} ${pad(x.eh ? `${p.eh(x.eh)} ${p.dim(x.ehId)}` : p.dim("(no match)"), 24)} ${status(i)}`;
   }),
 ];
-const header = (variant: string, title: string) => [
-  `${p.bold("Link Pre-existing employees")}   ${p.dim(`PROTOTYPE variant ${variant}: ${title}`)}`,
-  p.dim("─".repeat(Math.min(100, process.stdout.columns || 100) - 1)),
+const header = (variant: string, title: string) => [`  ${p.bold("Link Pre-existing employees")}     ${p.dim(`PROTOTYPE variant ${variant}: ${title}`)}`, ""];
+/** The two short lines for one person; `at` marks the line under the cursor. */
+const twoLines = (i: number, at: number | null, hints: boolean): string[] => [
+  `${ptr(at === 0)} ${pad(p.dim("EH External ID"), 18)} ${pad(idShort(i), 34)} ${hints && idDiffers(pairs[i]!) ? p.dim("r to choose") : ""}`,
+  `${ptr(at === 1)} ${pad(p.dim("Details"), 18)} ${pad(detailsShort(i), 34)} ${hints && pairs[i]!.diffs.length ? p.dim("d to choose") : ""}`,
 ];
+const boxed = (title: string, body: string[]) => box(title, body, [], COLS() - 8).map((l) => `  ${l}`);
 
 interface Variant {
   name: string;
   render(): string[];
   press(str: string | undefined, key: { name?: string }): void;
 }
+/** Today's list before c, for B and C. */
+const plainList = (variant: string, name: string, cursor: number, note: string) => [
+  ...header(variant, name),
+  ...listRows(cursor, (i) => p.dim(pairs[i]!.how)),
+  "",
+  p.dim(`    ${note}`),
+  "",
+  ...legend([["↑↓", "move"], ["c", "confirm"], ["v", "next variant"], ["q", "quit"]]),
+  stateLine(),
+];
 
-// ── A: in the row panel ─────────────────────────────────────────────────────
+// ── A: as you go ────────────────────────────────────────────────────────────
 function variantA(): Variant {
   let cursor = 0;
-  let inDetails = false;
-  let dc = 0;
-  const status = (i: number) => {
-    const x = pairs[i]!;
-    if (!linkable(x)) return p.dim("new hire");
-    const bits = [p.dim(x.how)];
-    if (idDiffers(x)) bits.push(replace.has(i) ? p.change("replace ID") : p.bad("ID differs"));
-    if (x.diffs.length) {
-      const n = sentFromCt(i).length;
-      bits.push(n ? p.change(`${n}/${x.diffs.length} from CT`) : p.dim(`${x.diffs.length} differ, EH's kept`));
-    }
-    return bits.join(" · ");
-  };
   return {
-    name: "In the row panel",
+    name: "As you go, on the list",
     render() {
       const x = pairs[cursor]!;
-      const panel = [`  ${p.bold(`Row ${cursor + 1}`)}  ${p.ct(x.ct)} → ${x.eh ? p.eh(`${x.eh} EH ${x.ehId}`) : p.dim("new hire")}`];
-      if (linkable(x)) {
-        panel.push(`  ${p.dim("EH External ID")}  ${idLine(cursor)}`);
-        if (x.diffs.length) {
-          panel.push("", `  ${p.dim("Details that differ")} ${inDetails ? "" : p.dim("(d to choose)")}`);
-          x.diffs.forEach((d, k) => {
-            const ct = usesCt(cursor, d);
-            const cell = `${ct ? "( )" : p.eh("(•)")} Keep EH's   ${ct ? p.ct("(•)") : "( )"} Use Connecteam's`;
-            panel.push(`  ${ptr(inDetails && k === dc)} ${fieldPair(d)}  ${cell}`);
-          });
-          const sent = sentFromCt(cursor);
-          if (sent.length) panel.push(p.dim(`    Link notice will say: Sent from Connecteam: ${sent.join(", ")}`));
-        } else panel.push(`  ${p.dim("Details")}  ${p.dim("all the same in both")}`);
-      }
-      const legend = saving
-        ? []
-        : asking !== null
-          ? []
-          : inDetails
-            ? [keys(["↑↓", "detail"], ["Space", "keep EH's / use Connecteam's"], ["Esc", "back to the list"])]
-            : [
-                keys(
-                  ["↑↓", "move"],
-                  ...(idDiffers(x) && x.keyAgrees ? [["r", replace.has(cursor) ? "keep EH's External ID" : "link and replace External ID"] as [string, string]] : []),
-                  ...(x.diffs.length ? [["d", "choose details"] as [string, string]] : []),
-                  ["c", "confirm"],
-                  ["v", "next variant"],
-                ),
-              ];
+      const ks: [string, string][] = [["↑↓", "move"]];
+      if (idDiffers(x)) ks.push(["r", "EH External ID"]);
+      if (x.diffs.length) ks.push(["d", "details"]);
+      ks.push(["c", "confirm"], ["v", "next variant"], ["q", "quit"]);
       return [
         ...header("A", this.name),
-        ...listRows(cursor, status),
-        p.dim("─".repeat(60)),
-        ...(saving ? summary() : asking !== null ? replacePrompt(asking) : panel),
-        ...legend,
+        ...listRows(cursor, (i) => (linkable(pairs[i]!) ? `${idShort(i)}${pairs[i]!.diffs.length ? p.dim(" · ") + detailsShort(i) : ""}` : p.dim("new hire"))),
+        "",
+        ...boxed(`Row ${cursor + 1} · ${x.ct} → ${x.eh ?? "new hire"}`, linkable(x) ? twoLines(cursor, null, true) : [p.dim("No Employment Hero match: syncs as a new hire.")]),
+        "",
+        ...legend(ks),
         stateLine(),
       ];
     },
     press(str, key) {
       const x = pairs[cursor]!;
-      if (inDetails) {
-        if (key.name === "escape") inDetails = false;
-        else if (key.name === "up") dc = Math.max(0, dc - 1);
-        else if (key.name === "down") dc = Math.min(x.diffs.length - 1, dc + 1);
-        else if (key.name === "space" || key.name === "left" || key.name === "right") flip(cursor, x.diffs[dc]!);
-        return;
-      }
       if (key.name === "up") cursor = Math.max(0, cursor - 1);
       else if (key.name === "down") cursor = Math.min(pairs.length - 1, cursor + 1);
-      else if (str === "r" && idDiffers(x)) askReplace(cursor);
-      else if (str === "d" && x.diffs.length) [inDetails, dc] = [true, 0];
-      else if (str === "c") saving = true;
+      else if (str === "r" && idDiffers(x)) openId(cursor);
+      else if (str === "d" && x.diffs.length) openDetails(cursor);
+      else if (str === "c") popup = { kind: "save" };
     },
   };
 }
 
-// ── B: a settle step after c, one card per pair ─────────────────────────────
+// ── B: after c, one person at a time ────────────────────────────────────────
 function variantB(): Variant {
   let cursor = 0;
   let stage: "list" | "intro" | "cards" = "list";
   let card = 0;
-  let line = 0;
+  let line: 0 | 1 = 0;
   const queue = () => pairs.flatMap((x, i) => (needsChoice(x) ? [i] : []));
-  /** A card's selectable lines: the External ID (if it differs), then each detail. */
-  const lines = (i: number) => [...(idDiffers(pairs[i]!) ? ["@id"] : []), ...pairs[i]!.diffs];
+  const firstLine = (i: number): 0 | 1 => (idDiffers(pairs[i]!) ? 0 : 1);
   return {
-    name: "Settle step after c",
+    name: "After c, one person at a time",
     render() {
-      if (stage === "list") {
-        return [
-          ...header("B", this.name),
-          ...listRows(cursor, (i) => (linkable(pairs[i]!) ? p.dim(pairs[i]!.how) : p.dim("new hire"))),
-          p.dim("─".repeat(60)),
-          p.dim("  (Today's list, unchanged: the new choices wait until you press c.)"),
-          keys(["↑↓", "move"], ["c", "confirm"], ["v", "next variant"]),
-          stateLine(),
-        ];
-      }
-      if (stage === "intro" || saving) {
-        const q = queue();
-        return [
-          ...header("B", this.name),
-          ...(saving
-            ? summary()
-            : [
-                p.bold(`  ${q.length} of your ${pairs.filter(linkable).length} links need a choice before saving`),
-                ...q.map((i) => {
-                  const x = pairs[i]!;
-                  const why = [...(idDiffers(x) ? ["External ID differs"] : []), ...(x.diffs.length ? [`${x.diffs.length === 1 ? "1 detail differs" : `${x.diffs.length} details differ`}`] : [])];
-                  return `    ${p.ct(x.ct)} → ${p.eh(x.eh!)}   ${p.change(why.join(", "))}`;
-                }),
-                "",
-                p.dim("  Keep EH's is already picked for every detail, so Enter straight through keeps EH as it is."),
-                keys(["Enter", "go through them"], ["s", "skip: keep EH's everywhere, save"], ["Esc", "back to the list"]),
-              ]),
-          stateLine(),
-        ];
-      }
+      if (stage === "list") return plainList("B", this.name, cursor, "Today's list, unchanged: the new choices wait until you press c.");
       const q = queue();
+      if (stage === "intro") {
+        return [
+          ...header("B", this.name),
+          ...boxed(`${q.length} of your ${pairs.filter(linkable).length} links need a choice`, [
+            ...q.flatMap((i) => [`${p.ct(pairs[i]!.ct)} → ${p.eh(pairs[i]!.eh!)}`, `     ${pad(p.dim("EH External ID"), 18)}${idShort(i)}`, `     ${pad(p.dim("Details"), 18)}${detailsShort(i)}`, ""]),
+            p.dim("Keep EH's is already picked everywhere, so going straight through changes nothing."),
+          ]),
+          "",
+          ...legend([["Enter", "go through them"], ["s", "skip: keep EH's everywhere"], ["Esc", "back to the list"]]),
+          stateLine(),
+        ];
+      }
       const i = q[card]!;
       const x = pairs[i]!;
-      const ls = lines(i);
-      const body: string[] = [
-        `  ${p.bold(`Pair ${card + 1} of ${q.length}`)}   ${p.ct(x.ct)} ${p.dim(x.email)}  →  ${p.eh(`${x.eh} EH ${x.ehId}`)}`,
-        "",
-      ];
-      ls.forEach((d, k) => {
-        const on = k === line;
-        if (d === "@id") {
-          const opt = (sel: boolean, s: string) => (sel ? p.inv(` ${s} `) : ` ${s} `);
-          const choice = x.keyAgrees
-            ? `${opt(!replace.has(i), `Keep ${x.extId} (held)`)} ${opt(replace.has(i), `Replace with ${x.ctUserId}`)}`
-            : p.bad(`EH has ${x.extId}: can't replace, no email/TFN/name+DOB match - held`);
-          body.push(`  ${ptr(on)} ${p.bold(pad("EH External ID", 63))} ${choice}`);
-          body.push("");
-        } else {
-          if (k === (ls[0] === "@id" ? 1 : 0)) body.push(`    ${p.dim(pad("Details that differ", 26))}   ${p.dim(pad("(Connecteam field → EH field)", 33))}`);
-          const ct = usesCt(i, d);
-          const opt = (sel: boolean, s: string, col: (s: string) => string) => (sel ? p.inv(col(` ${s} `)) : p.dim(` ${s} `));
-          body.push(`  ${ptr(on)} ${fieldPair(d)}  ${opt(!ct, "Keep EH's", p.eh)} ${opt(ct, "Use Connecteam's", p.ct)}`);
-        }
-      });
-      const sent = sentFromCt(i);
-      body.push("", p.dim(`  Link notice will say: ${[...(replace.has(i) ? ["External ID replaced"] : []), ...(sent.length ? [`Sent from Connecteam: ${sent.join(", ")}`] : [])].join(". ") || "(just linked)"}`));
       return [
         ...header("B", this.name),
-        ...(asking !== null ? replacePrompt(asking) : body),
-        ...(asking !== null ? [] : [keys(["↑↓", "line"], ["←→", "choose"], ["Enter", card + 1 < q.length ? "next pair" : "to save"], ["Backspace", "previous pair"])]),
+        ...boxed(`Person ${card + 1} of ${q.length}`, [
+          `${pad(p.dim("Connecteam user"), 20)}${p.ct(x.ct)}  ${p.dim(x.email)}`,
+          `${pad(p.dim("Employment Hero"), 20)}${p.eh(x.eh!)}  ${p.dim(`EH Employee ID ${x.ehId}`)}`,
+          "---",
+          ...twoLines(i, line, false),
+        ]),
+        "",
+        ...legend([["↑↓", "line"], ["Enter", "open"], ["n", card + 1 < q.length ? "next person" : "to save"], ["b", "previous person"]]),
         stateLine(),
       ];
     },
@@ -332,91 +386,86 @@ function variantB(): Variant {
         else if (str === "c") stage = "intro";
         return;
       }
+      const q = queue();
       if (stage === "intro") {
-        if (key.name === "return") [stage, card, line] = ["cards", 0, 0];
-        else if (str === "s") saving = true;
+        if (key.name === "return") [stage, card, line] = ["cards", 0, firstLine(q[0]!)];
+        else if (str === "s") popup = { kind: "save" };
         else if (key.name === "escape") stage = "list";
         return;
       }
-      const q = queue();
       const i = q[card]!;
-      const ls = lines(i);
-      if (key.name === "up") line = Math.max(0, line - 1);
-      else if (key.name === "down") line = Math.min(ls.length - 1, line + 1);
-      else if (key.name === "left" || key.name === "right" || key.name === "space") {
-        const d = ls[line]!;
-        if (d === "@id") {
-          if ((key.name === "right") !== replace.has(i) || key.name === "space") askReplace(i);
-        } else flip(i, d, key.name === "space" ? undefined : key.name === "right");
-      } else if (key.name === "return") {
-        if (card + 1 < q.length) [card, line] = [card + 1, 0];
-        else saving = true;
-      } else if (key.name === "backspace") {
-        if (card > 0) [card, line] = [card - 1, 0];
+      if (key.name === "up" && idDiffers(pairs[i]!)) line = 0;
+      else if (key.name === "down" && pairs[i]!.diffs.length) line = 1;
+      else if (key.name === "return") {
+        if (line === 0) openId(i);
+        else openDetails(i);
+      } else if (str === "n") {
+        if (card + 1 < q.length) [card, line] = [card + 1, firstLine(q[card + 1]!)];
+        else popup = { kind: "save" };
+      } else if (str === "b") {
+        if (card > 0) [card, line] = [card - 1, firstLine(q[card - 1]!)];
         else stage = "intro";
       }
     },
   };
 }
 
-// ── C: a grid after c ───────────────────────────────────────────────────────
+// ── C: after c, everyone in one table ───────────────────────────────────────
 function variantC(): Variant {
   let stage: "list" | "grid" = "list";
   let cursor = 0;
   let r = 0;
   let col = 0;
+  const ID = "EH External ID";
   const rowsOf = () => pairs.flatMap((x, i) => (needsChoice(x) ? [i] : []));
-  const cols = () => ["External ID", ...[...new Set(pairs.flatMap((x) => x.diffs))]];
-  const W = 14;
+  const cols = () => [ID, ...new Set(pairs.flatMap((x) => x.diffs))];
+  const W = 16;
   const cell = (i: number, name: string): string => {
     const x = pairs[i]!;
-    if (name === "External ID") {
+    if (name === ID) {
       if (!idDiffers(x)) return p.dim("·");
-      if (!x.keyAgrees) return p.bad("held, can't");
-      return replace.has(i) ? p.change("replace") : p.bad("held");
+      if (!x.keyAgrees) return p.bad("can't replace");
+      return replace.has(i) ? p.change("replace") : p.bad("doesn't match");
     }
     if (!x.diffs.includes(name)) return p.dim("·");
     return usesCt(i, name) ? p.ct("Connecteam's") : p.eh("EH's");
   };
   return {
-    name: "Grid after c",
+    name: "After c, everyone in one table",
     render() {
-      if (stage === "list") {
-        return [
-          ...header("C", this.name),
-          ...listRows(cursor, (i) => (linkable(pairs[i]!) ? p.dim(pairs[i]!.how) : p.dim("new hire"))),
-          p.dim("─".repeat(60)),
-          p.dim("  (Today's list, unchanged: the grid opens when you press c.)"),
-          keys(["↑↓", "move"], ["c", "confirm"], ["v", "next variant"]),
-          stateLine(),
-        ];
-      }
+      if (stage === "list") return plainList("C", this.name, cursor, "Today's list, unchanged: the table opens when you press c.");
       const rs = rowsOf();
       const cs = cols();
-      const head = `  ${pad("", 2)}${pad(p.bold("Connecteam → EH"), 26)}${cs.map((h, k) => pad(k === col ? p.bold(p.ct(h.slice(0, W - 1))) : p.bold(h.slice(0, W - 1)), W)).join("")}`;
+      const short = (h: string) => (h.length > W - 2 ? `${h.slice(0, W - 3)}…` : h);
+      const head = `      ${pad(p.bold("Person"), 16)}${cs.map((h, k) => pad(k === col ? p.bold(p.ct(short(h))) : p.bold(short(h)), W)).join("")}`;
       const grid = rs.map((i, k) => {
-        const x = pairs[i]!;
         const cells = cs.map((h, j) => {
-          const v = pad(cell(i, h), W - 1);
-          return (k === r && j === col ? (color ? p.inv(v) : `[${v.replace(ANSI, "").trim()}]`.padEnd(W - 1)) : v) + " ";
+          const v = pad(cell(i, h), W - 2);
+          return (k === r && j === col ? (color ? p.inv(v) : `[${strip(v).trim()}]`.padEnd(W - 2)) : v) + "  ";
         });
-        return `  ${ptr(k === r)} ${pad(`${p.ct(x.ct.split(" ")[0]!)} → ${p.eh(x.eh!)}`, 24)}${cells.join("")}`;
+        return `    ${ptr(k === r)} ${pad(p.ct(pairs[i]!.ct), 16)}${cells.join("")}`;
       });
       const i = rs[r]!;
-      const sent = sentFromCt(i);
-      const foot = [
-        `  ${p.dim("Selected:")} ${p.ct(pairs[i]!.ct)} · ${p.dim("EH External ID")} ${idLine(i)}`,
-        cs[col] === "External ID" ? "" : `  ${p.dim("Column:")} ${fieldPair(cs[col]!)}`,
-        p.dim(`  Link notice will say: ${[...(replace.has(i) ? ["External ID replaced"] : []), ...(sent.length ? [`Sent from Connecteam: ${sent.join(", ")}`] : [])].join(". ") || "(just linked)"}`),
-      ];
+      const h = cs[col]!;
+      const who = `${pad(p.dim("Person"), 20)}${p.ct(pairs[i]!.ct)} → ${p.eh(pairs[i]!.eh!)}`;
+      const sel =
+        h === ID
+          ? [who, `${pad(p.dim("EH External ID"), 20)}${idShort(i)}`]
+          : [who, `${pad(p.dim("Connecteam field"), 20)}${p.ct(h)}`, `${pad(p.dim("EH field"), 20)}${p.eh(EH_FIELD[h] ?? h)}`];
+      const ks: [string, string][] = [["↑↓←→", "move"], ["Space", h === ID ? "open" : "flip"]];
+      if (h !== ID) ks.push(["a", `flip ${h} for everyone`]);
+      ks.push(["Enter", "save"], ["Esc", "back to the list"]);
       return [
         ...header("C", this.name),
-        p.bold(`  Before you save: ${rs.length} pairs differ from EH.`) + p.dim("  · = the same in both, nothing to choose. EH's is picked to start."),
+        `    ${p.bold(`Before you save: ${rs.length} people differ from Employment Hero`)}`,
+        p.dim("    · = the same in both, nothing to choose.  EH's is picked to start."),
         "",
         head,
         ...grid,
         "",
-        ...(saving ? summary() : asking !== null ? replacePrompt(asking) : [...foot, keys(["↑↓←→", "move"], ["Space", "flip"], ...(cs[col] === "External ID" ? [] : [["a", `flip ${cs[col]} for everyone`] as [string, string]]), ["Enter", "save"], ["Esc", "back to the list"])]),
+        ...boxed("Selected", sel),
+        "",
+        ...legend(ks),
         stateLine(),
       ];
     },
@@ -429,20 +478,21 @@ function variantC(): Variant {
       }
       const rs = rowsOf();
       const cs = cols();
+      const i = rs[r]!;
+      const h = cs[col]!;
       if (key.name === "up") r = Math.max(0, r - 1);
       else if (key.name === "down") r = Math.min(rs.length - 1, r + 1);
       else if (key.name === "left") col = Math.max(0, col - 1);
       else if (key.name === "right") col = Math.min(cs.length - 1, col + 1);
       else if (key.name === "space") {
-        const i = rs[r]!;
-        if (cs[col] === "External ID") {
-          if (idDiffers(pairs[i]!)) askReplace(i);
-        } else if (pairs[i]!.diffs.includes(cs[col]!)) flip(i, cs[col]!);
-      } else if (str === "a" && cs[col] !== "External ID") {
-        const holders = rs.filter((i) => pairs[i]!.diffs.includes(cs[col]!));
-        const to = !holders.every((i) => usesCt(i, cs[col]!));
-        holders.forEach((i) => flip(i, cs[col]!, to));
-      } else if (key.name === "return") saving = true;
+        if (h === ID) {
+          if (idDiffers(pairs[i]!)) openId(i);
+        } else if (pairs[i]!.diffs.includes(h)) flip(i, h);
+      } else if (str === "a" && h !== ID) {
+        const holders = rs.filter((j) => pairs[j]!.diffs.includes(h));
+        const to = !holders.every((j) => usesCt(j, h));
+        holders.forEach((j) => flip(j, h, to));
+      } else if (key.name === "return") popup = { kind: "save" };
       else if (key.name === "escape") stage = "list";
     },
   };
@@ -453,26 +503,32 @@ const order = ["A", "B", "C"];
 const make: Record<string, () => Variant> = { A: variantA, B: variantB, C: variantC };
 let which = order.includes(arg("variant", "A").toUpperCase()) ? arg("variant", "A").toUpperCase() : "A";
 let v = make[which]!();
+const frame = () => {
+  if (saved) return [...header(which, v.name), p.ok("    Saved (not really: prototype)."), "", ...legend([["v", "next variant"], ["q", "quit"]]), stateLine()];
+  const base = v.render();
+  return popup ? overlay(base, renderPopup(popup)) : base;
+};
 
 if (!process.stdin.isTTY) {
-  // A on a pair with both choices; B and C on the screen c opens (B's first card too).
-  const steps: Record<string, [string | undefined, { name?: string }][]> = {
-    A: [[undefined, { name: "down" }], [undefined, { name: "down" }], [undefined, { name: "down" }], [undefined, { name: "down" }]],
-    B: [["c", {}], [undefined, { name: "return" }]],
-    C: [["c", {}]],
-  };
-  for (const k of order) {
-    const x = make[k]!();
-    if (k === "B") {
-      x.press("c", {});
-      console.log(x.render().join("\n") + "\n");
-      x.press(undefined, { name: "return" });
-    } else for (const [s, key] of steps[k]!) x.press(s, key);
-    console.log(x.render().join("\n") + "\n");
+  // Sample screens: A on a person with both choices, each pop-up over it, B's person screen, C's table.
+  const a = variantA();
+  for (let k = 0; k < 4; k++) a.press(undefined, { name: "down" });
+  console.log(a.render().join("\n") + "\n");
+  for (const pu of [() => openId(4), () => openDetails(4), () => (popup = { kind: "save" })]) {
+    pu();
+    console.log(overlay(a.render(), renderPopup(popup!)).join("\n") + "\n");
   }
+  popup = null;
+  const b = variantB();
+  b.press("c", {});
+  b.press(undefined, { name: "return" });
+  console.log(b.render().join("\n") + "\n");
+  const cc = variantC();
+  cc.press("c", {});
+  console.log(cc.render().join("\n") + "\n");
   process.exit(0);
 }
-const draw = () => process.stdout.write("\u001b[H\u001b[2J" + (saved ? [...header(which, v.name), p.ok("  Saved (not really: prototype)."), stateLine(), keys(["v", "next variant"], ["q", "quit"])] : v.render()).join("\n"));
+const draw = () => process.stdout.write("\u001b[H\u001b[2J" + frame().join("\n"));
 const quit = () => {
   process.stdout.write("\u001b[?25h\u001b[?1049l");
   console.log(`Prototype closed on variant ${which}.`);
@@ -483,17 +539,13 @@ process.stdout.write("\u001b[?1049h\u001b[?25l");
 emitKeypressEvents(process.stdin);
 process.stdin.setRawMode(true);
 process.stdin.on("keypress", (str: string | undefined, key: { name?: string; ctrl?: boolean } = {}) => {
-  if ((key.ctrl && key.name === "c") || (str === "q" && asking === null)) return quit();
-  if (str === "v" && asking === null) {
+  if (key.ctrl && key.name === "c") return quit();
+  if (popup) popupKey(str, key);
+  else if (str === "q") return quit();
+  else if (str === "v") {
     which = order[(order.indexOf(which) + 1) % order.length]!;
     v = make[which]!();
-    [saving, saved] = [false, false];
-  } else if (asking !== null) {
-    if (str === "y") replace.add(asking);
-    if (str === "y" || str === "n" || key.name === "escape") asking = null;
-  } else if (saving) {
-    if (str === "y") [saving, saved] = [false, true];
-    else if (str === "n" || key.name === "escape") saving = false;
+    saved = false;
   } else if (!saved) v.press(str, key);
   draw();
 });
