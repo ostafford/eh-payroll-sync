@@ -59,13 +59,24 @@ interface Pair {
 const pairs: Pair[] = [
   { ct: "Avery Lin", email: "avery.lin@example.com", ctUserId: "9081201", eh: "Avery Lin", ehId: "300101", extId: null, diffs: [], keyAgrees: true, how: "matched by email" },
   { ct: "Blake Okoro", email: "blake.o@example.com", ctUserId: "9081202", eh: "Blake Okoro", ehId: "300102", extId: "300102", diffs: ["Postcode"], keyAgrees: true, how: "matched by email" },
-  { ct: "Casey Duarte", email: "casey.d@example.com", ctUserId: "9081203", eh: "Casey Duarte", ehId: "300103", extId: null, diffs: ["Postcode", "Mobile phone"], keyAgrees: true, how: "matched by email" },
+  { ct: "Casey Duarte", email: "casey.d@example.com", ctUserId: "9081203", eh: "Casey Duarte", ehId: "300103", extId: null, diffs: ["Postcode", "Phone number"], keyAgrees: true, how: "matched by email" },
   { ct: "Devon Marsh", email: "devon.m@example.com", ctUserId: "9081204", eh: "Devon Marsh", ehId: "300104", extId: "9081204", diffs: [], keyAgrees: true, how: "matched by email" },
-  { ct: "Emery Novak", email: "emery.n@example.com", ctUserId: "9081205", eh: "Emery Novak", ehId: "300105", extId: "300105", diffs: ["Address", "Preferred name", "Emergency contact"], keyAgrees: true, how: "matched by email" },
-  { ct: "Finley Rowe", email: "finley.r@example.com", ctUserId: "9081206", eh: "Finn Rowe", ehId: "300106", extId: "PR-0042", diffs: ["Mobile phone"], keyAgrees: false, how: "you picked (name differs)" },
-  { ct: "Harper Quinn", email: "harper.q@example.com", ctUserId: "9081207", eh: "Harper Quinn", ehId: "300107", extId: null, diffs: ["Postcode", "Bank account"], keyAgrees: true, how: "matched by email" },
+  { ct: "Emery Novak", email: "emery.n@example.com", ctUserId: "9081205", eh: "Emery Novak", ehId: "300105", extId: "300105", diffs: ["Street Address", "Suburb", "Emergency Contact Number"], keyAgrees: true, how: "matched by email" },
+  { ct: "Finley Rowe", email: "finley.r@example.com", ctUserId: "9081206", eh: "Finn Rowe", ehId: "300106", extId: "PR-0042", diffs: ["Phone number"], keyAgrees: false, how: "you picked (name differs)" },
+  { ct: "Harper Quinn", email: "harper.q@example.com", ctUserId: "9081207", eh: "Harper Quinn", ehId: "300107", extId: null, diffs: ["Postcode", "Account Number"], keyAgrees: true, how: "matched by email" },
   { ct: "Jordan Ash", email: "jordan.a@example.net", ctUserId: "9081208", eh: null, ehId: "", extId: null, diffs: [], keyAgrees: false, how: "new hire" },
 ];
+/** Each detail by its Connecteam field name (the setup's field names, scripts/lib/field-spec.ts), with the EH field it fills. */
+const EH_FIELD: Record<string, string> = {
+  Postcode: "residentialPostCode",
+  "Phone number": "mobilePhone",
+  "Street Address": "residentialStreetAddress",
+  Suburb: "residentialSuburb",
+  "Emergency Contact Number": "emergencyContact1_ContactNumber",
+  "Account Number": "bankAccount1_AccountNumber",
+};
+/** "Postcode (Connecteam) → residentialPostCode (EH)", padded to line up. */
+const fieldPair = (d: string) => `${pad(p.ct(d), 26)} ${p.dim("→")} ${pad(p.eh(EH_FIELD[d] ?? d), 33)}`;
 const linkable = (x: Pair) => x.eh !== null;
 const idDiffers = (x: Pair) => linkable(x) && x.extId !== null && x.extId !== x.ctUserId;
 const needsChoice = (x: Pair) => idDiffers(x) || x.diffs.length > 0;
@@ -94,22 +105,27 @@ const replacePrompt = (i: number): string[] => {
   const x = pairs[i]!;
   return [
     p.bold(`  Replace ${x.eh}'s External ID in Employment Hero?`),
-    `    EH's External ID now:   ${p.eh(x.extId!)}`,
-    `    Replace it with:        ${p.ct(x.ctUserId)}  ${p.dim(`(${x.ct}'s CT User ID)`)}`,
-    p.dim(`    At approval, only if EH still holds ${x.extId} then. Whatever else uses ${x.extId} in EH stops matching.`),
-    `  ${p.bold("y")} ${p.dim("replace")}   ${p.bold("n")} ${p.dim("keep EH's - they'll be held at approval")}`,
+    "",
+    `    EH External ID now:    ${p.eh(x.extId!)}${x.extId === x.ehId ? p.dim("   (this is their EH Employee ID, not a Payroll ID)") : ""}`,
+    `    Replace it with:       ${p.ct(x.ctUserId)}${p.dim(`   (${x.ct}'s Connecteam User ID)`)}`,
+    "",
+    p.dim(`    Happens at approval, and only if EH still holds ${x.extId} then.`),
+    "",
+    `  ${p.bold("y")} ${p.dim("replace")}     ${p.bold("n")} ${p.dim("keep EH's - they'll be held at approval")}`,
   ];
 };
 
-/** What a pair's External ID will do, in words. */
+/** What a pair's EH External ID will do, in words, naming both IDs. */
 const idLine = (i: number): string => {
   const x = pairs[i]!;
-  if (!linkable(x)) return p.dim("new hire: gets their CT User ID");
-  if (x.extId === null) return p.dim(`blank in EH: set to ${x.ctUserId}`);
-  if (x.extId === x.ctUserId) return p.dim("already their CT User ID");
-  if (replace.has(i)) return p.change(`replace ${x.extId} → ${x.ctUserId}`);
-  if (!x.keyAgrees) return p.bad(`EH has ${x.extId}: can't replace (no email, TFN or name + DOB match) - held at approval`);
-  return p.change(`EH has ${x.extId}, not ${x.ctUserId}: held at approval unless replaced`);
+  const ct = `Connecteam User ID ${x.ctUserId}`;
+  if (!linkable(x)) return p.dim(`new hire: EH External ID set to their ${ct}`);
+  if (x.extId === null) return p.dim(`blank in EH: set to their ${ct}`);
+  if (x.extId === x.ctUserId) return p.dim(`already their ${ct}`);
+  const what = x.extId === x.ehId ? `${x.extId} (their EH Employee ID)` : x.extId;
+  if (replace.has(i)) return p.change(`replace ${x.extId} with their ${ct}`);
+  if (!x.keyAgrees) return p.bad(`EH has ${what}: can't replace (no email, TFN or name + DOB match) - held at approval`);
+  return p.change(`EH has ${what}, not their ${ct}: held at approval unless replaced`);
 };
 const sentFromCt = (i: number) => pairs[i]!.diffs.filter((d) => usesCt(i, d));
 
@@ -136,7 +152,7 @@ const stateLine = () =>
       .map(([i, s]) => `${i + 1}:${[...s].join("+")}`)
       .join(" ")}}`,
   );
-const keys = (...ks: [string, string][]) => `  ${ks.map(([k, w]) => `${p.bold(k)} ${p.dim(w)}`).join("   ")}`;
+const keys = (...ks: [string, string][]) => `\n  ${ks.map(([k, w]) => `${p.bold(k)} ${p.dim(w)}`).join("     ")}\n`;
 
 // ── the list every variant starts from (today's screen, cut down) ───────────
 const listRows = (cursor: number, status: (i: number) => string): string[] => [
@@ -180,13 +196,13 @@ function variantA(): Variant {
       const x = pairs[cursor]!;
       const panel = [`  ${p.bold(`Row ${cursor + 1}`)}  ${p.ct(x.ct)} → ${x.eh ? p.eh(`${x.eh} EH ${x.ehId}`) : p.dim("new hire")}`];
       if (linkable(x)) {
-        panel.push(`  ${p.dim("External ID")}  ${idLine(cursor)}`);
+        panel.push(`  ${p.dim("EH External ID")}  ${idLine(cursor)}`);
         if (x.diffs.length) {
-          panel.push(`  ${p.dim("Details that differ")} ${inDetails ? "" : p.dim("(d to choose)")}`);
+          panel.push("", `  ${p.dim("Details that differ")} ${inDetails ? "" : p.dim("(d to choose)")}`);
           x.diffs.forEach((d, k) => {
             const ct = usesCt(cursor, d);
             const cell = `${ct ? "( )" : p.eh("(•)")} Keep EH's   ${ct ? p.ct("(•)") : "( )"} Use Connecteam's`;
-            panel.push(`  ${ptr(inDetails && k === dc)} ${pad(d, 20)} ${cell}`);
+            panel.push(`  ${ptr(inDetails && k === dc)} ${fieldPair(d)}  ${cell}`);
           });
           const sent = sentFromCt(cursor);
           if (sent.length) panel.push(p.dim(`    Link notice will say: Sent from Connecteam: ${sent.join(", ")}`));
@@ -291,13 +307,13 @@ function variantB(): Variant {
           const choice = x.keyAgrees
             ? `${opt(!replace.has(i), `Keep ${x.extId} (held)`)} ${opt(replace.has(i), `Replace with ${x.ctUserId}`)}`
             : p.bad(`EH has ${x.extId}: can't replace, no email/TFN/name+DOB match - held`);
-          body.push(`  ${ptr(on)} ${p.bold(pad("External ID", 20))} ${choice}`);
+          body.push(`  ${ptr(on)} ${p.bold(pad("EH External ID", 63))} ${choice}`);
           body.push("");
         } else {
-          if (k === (ls[0] === "@id" ? 1 : 0)) body.push(`    ${p.dim("Details that differ")}`);
+          if (k === (ls[0] === "@id" ? 1 : 0)) body.push(`    ${p.dim(pad("Details that differ", 26))}   ${p.dim(pad("(Connecteam field → EH field)", 33))}`);
           const ct = usesCt(i, d);
           const opt = (sel: boolean, s: string, col: (s: string) => string) => (sel ? p.inv(col(` ${s} `)) : p.dim(` ${s} `));
-          body.push(`  ${ptr(on)} ${pad(d, 20)} ${opt(!ct, "Keep EH's", p.eh)} ${opt(ct, "Use Connecteam's", p.ct)}`);
+          body.push(`  ${ptr(on)} ${fieldPair(d)}  ${opt(!ct, "Keep EH's", p.eh)} ${opt(ct, "Use Connecteam's", p.ct)}`);
         }
       });
       const sent = sentFromCt(i);
@@ -389,7 +405,8 @@ function variantC(): Variant {
       const i = rs[r]!;
       const sent = sentFromCt(i);
       const foot = [
-        `  ${p.dim("Selected:")} ${p.ct(pairs[i]!.ct)} · ${p.dim("External ID")} ${idLine(i)}`,
+        `  ${p.dim("Selected:")} ${p.ct(pairs[i]!.ct)} · ${p.dim("EH External ID")} ${idLine(i)}`,
+        cs[col] === "External ID" ? "" : `  ${p.dim("Column:")} ${fieldPair(cs[col]!)}`,
         p.dim(`  Link notice will say: ${[...(replace.has(i) ? ["External ID replaced"] : []), ...(sent.length ? [`Sent from Connecteam: ${sent.join(", ")}`] : [])].join(". ") || "(just linked)"}`),
       ];
       return [
