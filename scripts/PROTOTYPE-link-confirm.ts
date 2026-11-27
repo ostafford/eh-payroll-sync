@@ -304,7 +304,7 @@ function renderPopup(pu: Popup): string[] {
       `${lbl("Sent from Connecteam at link")}${fromCt.size ? p.change([...fromCt].map(([d, n]) => (n > 1 ? `${d} ×${n}` : d)).join(", ")) : "nothing"}`,
       `${lbl("Kept as EH's")}${kept} detail${kept === 1 ? "" : "s"}`,
     ],
-    [keyHint(["y", "save"], ["n", "back"])],
+    [keyHint(["y", "save"], ["Esc / Backspace / n", "back"])],
   );
 }
 
@@ -313,7 +313,7 @@ function popupKey(str: string | undefined, key: { name?: string }): void {
   const pu = popup!;
   if (pu.kind === "save") {
     if (str === "y") [popup, saved] = [null, true];
-    else if (str === "n" || key.name === "escape") popup = null;
+    else if (str === "n" || key.name === "escape" || key.name === "backspace") popup = null;
     return;
   }
   if (key.name === "escape" || key.name === "backspace") return void (popup = null);
