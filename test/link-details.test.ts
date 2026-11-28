@@ -2,11 +2,14 @@ import { describe, it, expect } from "vitest";
 import { differingDetails } from "../scripts/lib/link-details.js";
 import { applyFieldMap } from "../src/mapping/apply.js";
 import { parseFieldMap } from "../src/mapping/schema.js";
-import { phoneAu } from "../src/mapping/transforms.js";
+import { locationField, phoneAu } from "../src/mapping/transforms.js";
 import { syntheticUser } from "./fixtures/connecteam-user.js";
 import { syntheticUserInEh } from "./fixtures/synthetic-user-in-eh.js";
 import demoFieldMap from "./fixtures/demo-field-map.json" with { type: "json" };
 import ehRecord from "./fixtures/eh-bulk-employee.json" with { type: "json" };
+
+// `ehRecord`: a real EH bulk-list record's fields and formats with made-up
+// values, shapes from the demo's `/employee/unstructured` list (#232).
 
 const map = { rules: { constants: { bankAccount1_AllocatedPercentage: 100 } } };
 
@@ -65,31 +68,25 @@ describe("differingDetails: what the link stage asks Keep EH's / Use Connecteam'
   });
 });
 
-/** The same person as the field map maps them, every detail in the form EH holds it; each test puts one into the form Connecteam gives. */
-const ehFormPack = {
-  firstName: "Jordan",
-  surname: "Example",
-  emailAddress: "jordan.example+test@example.com",
-  mobilePhone: "0400 000 001",
-  residentialStreetAddress: "100 Sample Street",
+/**
+ * The same person as the field map maps them, every detail in the form EH
+ * holds it (taken from `ehRecord`); each test puts one into the form
+ * Connecteam gives. Suburb is in Connecteam's case, as the demo's are.
+ */
+const ehFormPack: Record<string, unknown> = {
+  ...Object.fromEntries(
+    [
+      "firstName", "surname", "emailAddress", "mobilePhone",
+      "residentialStreetAddress", "residentialState", "residentialPostCode", "residentialCountry",
+      "emergencyContact1_Name", "emergencyContact1_Relationship", "emergencyContact1_ContactNumber",
+      "jobTitle", "employmentType",
+      "bankAccount1_AccountName", "bankAccount1_BSB", "bankAccount1_AccountNumber",
+      "superFund1_FundName", "superFund1_ProductCode", "superFund1_MemberNumber",
+    ].map((f) => [f, (ehRecord as Record<string, unknown>)[f]]),
+  ),
   residentialSuburb: "Sampleville",
-  residentialState: "VIC",
-  residentialPostCode: "3000",
-  residentialCountry: "Australia",
-  emergencyContact1_Name: "Casey Example",
-  emergencyContact1_Relationship: "Partner",
-  emergencyContact1_ContactNumber: "0400000002",
-  jobTitle: "Barista",
-  employmentType: "Full Time",
-  bankAccount1_AccountName: "Jordan Example",
-  bankAccount1_BSB: "000001",
-  bankAccount1_AccountNumber: "123456789",
-  superFund1_FundName: "Sample Super Fund Accumulation Plan",
-  superFund1_ProductCode: "00000000000001",
-  superFund1_MemberNumber: "100000001",
 };
 
-/** `ehRecord`: a real EH bulk-list record's fields and formats, with made-up values: shapes from the demo's `/employee/unstructured` list. */
 describe("differingDetails against EH's real formats (#232)", () => {
   const detailsAgainst = (pack: Record<string, unknown>, eh: Record<string, unknown> = {}) =>
     differingDetails({ ...ehFormPack, ...pack }, { ...ehRecord, ...eh }, map);
@@ -123,9 +120,29 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ residentialCountry: "United Kingdom" }, { residentialCountry: "UK" })).toEqual([]);
   });
 
-  it("doesn't list a phone number EH holds as 61 without the plus, or typed with (0)", () => {
+  it("doesn't list a phone number EH holds as 61 without the plus", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "61400000001" })).toEqual([]);
+  });
+
+  it("doesn't list a number typed with (0), on either side", () => {
     expect(detailsAgainst({ emergencyContact1_ContactNumber: "+61 (0)400 000 002" })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "+61 (0)400 000 001" })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "(0)400 000 001" })).toEqual([]);
+  });
+
+  it("doesn't list a number EH holds with Australia's 0011 international prefix", () => {
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "0011 44 20 7946 0000" })).toEqual([]);
+  });
+
+  it("leaves out a number it can't read as Australian or international, rather than listing it", () => {
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "020 7946 0000" })).toEqual([]);
+    expect(detailsAgainst({ emergencyContact1_ContactNumber: "ask reception" })).toEqual([]);
+  });
+
+  it("still lists a number where EH holds none", () => {
+    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: null })).toEqual([
+      { unit: "mobilePhone", label: "Mobile", fields: ["Mobile"] },
+    ]);
   });
 
   it("doesn't list a mobile typed with (0) in Connecteam, as the field map sends it", () => {
@@ -141,11 +158,27 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ bankAccount1_AccountNumber: "00123457" }, { bankAccount1_AccountNumber: 123456 })).toEqual([
       { unit: "bankAccount1", label: "Bank account", fields: ["Account number"] },
     ]);
+    expect(detailsAgainst({ bankAccount1_AccountNumber: null }, { bankAccount1_AccountNumber: 0 })).toEqual([
+      { unit: "bankAccount1", label: "Bank account", fields: ["Account number"] },
+    ]);
   });
 
-  it("doesn't list a BSB EH returns as a number, and leaves out a value that isn't text", () => {
+  it("doesn't list a BSB that lost its leading zeros, as a number or as text", () => {
     expect(detailsAgainst({ bankAccount1_BSB: "000-001" }, { bankAccount1_BSB: 1 })).toEqual([]);
+    expect(detailsAgainst({ bankAccount1_BSB: "012-345" }, { bankAccount1_BSB: "12345" })).toEqual([]);
+  });
+
+  it("leaves out a value that isn't text, an object or a list, on either side", () => {
     expect(detailsAgainst({ jobTitle: { name: "Barista" } })).toEqual([]);
+    expect(detailsAgainst({ jobTitle: ["Barista"] })).toEqual([]);
+    expect(detailsAgainst({}, { jobTitle: { name: "Chef" } })).toEqual([]);
+  });
+
+  it("lists a street address the field map cut at its first comma: a real difference in what's sent", () => {
+    const streetLine = locationField({ address: "Unit 3, 100 Sample Street, Sampleville VIC 3000" }, "streetLine");
+    expect(detailsAgainst({ residentialStreetAddress: streetLine }, { residentialStreetAddress: "Unit 3, 100 Sample Street" })).toEqual([
+      { unit: "residentialAddress", label: "Residential address", fields: ["Street address"] },
+    ]);
   });
 
   it("doesn't list a phone number sent as +61 when EH holds it spaced, from 0", () => {
@@ -187,8 +220,9 @@ describe("differingDetails against EH's real formats (#232)", () => {
   });
 
   it("lists nothing for a pack the demo field map makes from a Connecteam user, against EH holding the same details", () => {
-    const { payload } = applyFieldMap(structuredClone(syntheticUser), parseFieldMap(demoFieldMap));
-    expect(differingDetails(payload, syntheticUserInEh, parseFieldMap(demoFieldMap))).toEqual([]);
+    const demoMap = parseFieldMap(demoFieldMap);
+    const { payload } = applyFieldMap(structuredClone(syntheticUser), demoMap);
+    expect(differingDetails(payload, syntheticUserInEh, demoMap)).toEqual([]);
   });
 
   it("still lists a phone number that is different", () => {

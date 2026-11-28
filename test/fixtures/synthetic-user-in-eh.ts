@@ -30,4 +30,4 @@ export const syntheticUserInEh: Record<string, unknown> = {
   superFund1_ProductCode: "HOS0100AU",
   superFund1_FundName: "Hostplus",
   superFund1_MemberNumber: "M123456",
-    };
+};

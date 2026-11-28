@@ -108,6 +108,9 @@ describe("phoneAu", () => {
     expect(phoneAu("+61 411 687 336")).toBe("+61411687336");
     expect(phoneAu("(03) 9123 4567")).toBe("+61391234567");
   });
+  it("drops a (0) typed after the country code, as dialled", () => {
+    expect(phoneAu("+61 (0)411 687 336")).toBe("+61411687336");
+  });
   it("keeps a well-formed non-AU international number as-is", () => {
     expect(phoneAu("+1 415 555 0100")).toBe("+14155550100");
   });

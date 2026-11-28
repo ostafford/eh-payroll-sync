@@ -131,7 +131,8 @@ export function locationField(v: unknown, part: "full" | "streetLine"): string {
 }
 
 export function phoneAu(v: unknown): string {
-  const raw = asString(v).trim();
+  // A "(0)" after the country code isn't dialled: "+61 (0)4…" is "+614…".
+  const raw = asString(v).trim().replace(/^(\+\d{1,3})\s*\(0\)\s*/, "$1");
   const hasPlus = raw.startsWith("+");
   const stripped = raw.replace(/[^\d]/g, "");
   if (stripped.length < 6) {
