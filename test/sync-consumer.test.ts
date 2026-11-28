@@ -940,6 +940,34 @@ describe("runSyncJob - link with the Baseline taken at confirmation (#230)", () 
     ]);
   });
 
+  it("records the link's audit row as sending the changed units, by name, not 'Payroll ID only'", async () => {
+    const store = await confirmedWhile(cloneUser());
+    await run(store, handEntered(), editJobTitle("Team Lead"));
+
+    expect(store.log.map((l) => l.detail)).toEqual(["linked: Payroll ID, then sending jobTitle", "synced"]);
+  });
+
+  it("posts the Link notice again for a pair re-confirmed after an undo, within the de-dup window", async () => {
+    const store = await confirmedWhile(cloneUser());
+    const eh = handEntered();
+    const ct = fakeCt(editJobTitle("Team Lead"));
+    const d = deps({ store, eh: eh as unknown as SyncDeps["eh"], ct });
+    await runSyncJob(job(), d);
+    // Undone by hand (RUNBOOK), then confirmed again in the link stage.
+    const reconfirmed = (await confirmedWhile(editJobTitle("Team Lead"))).pending.get(ME)!;
+    store.rows.delete(ME);
+    store.pending.set(ME, { ...reconfirmed, confirmedAt: 2 });
+
+    const again = fakeCt(editJobTitle("Chef"));
+    await runSyncJob(job({ eventTimestamp: 2000 }), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct: again }));
+
+    expect(ct.channels.filter((c) => c.text.startsWith("🔗"))).toHaveLength(1);
+    expect(again.channels.filter((c) => c.text.startsWith("🔗")).map((c) => c.text)).toEqual([
+      expect.stringContaining("Sent from Connecteam: Job title."),
+    ]);
+    expect(store.rows.get(ME)).toMatchObject({ linkedAt: 1_000_000 });
+  });
+
   it("treats a Baseline stored under another BASELINE_KEY as none: taken at link, nothing named or sent", async () => {
     const store = fakeGateway();
     const mapped = applyFieldMap(cloneUser(), fieldMap);

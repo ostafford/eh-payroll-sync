@@ -25,7 +25,7 @@ We considered three options (#220):
 ### Side effects, and why each is safe to re-run (ADR-0007)
 
 1. **The Payroll ID write**: unchanged. EH is checked first, so a retry that finds it there skips the write.
-2. **The Link notice**: claimed before it's sent, as before, so a retry skips it. It's sent before `completeLink`, so a crash after it can't lose the link.
+2. **The Link notice**: claimed before it's sent, as before, so a retry skips it. It's sent before `completeLink`, so a crash after it can't lose the link. Its claim is keyed by when the pair was confirmed as well as by person and EH employee, so a pair undone by hand and confirmed again still gets its own notice (found on the demo, 2026-11-28). The link's audit row names the units it goes on to send, by unit name only.
 3. **`completeLink`**: one D1 batch, as before. With a stored Baseline it saves no payload hash and no event time, so a retry of the same job isn't stopped as identical or stale before the changed units are sent.
 4. **The changed-units write**: an upsert keyed by the Payroll ID, so a re-send carries the same values. A retry after a crash or a failed write finds the person Linked, so it runs only this sync, against the stored Baseline, which moves only once EH accepts the write.
 5. **The sync's messages**: claimed by payload hash, as for every Linked employee's sync.

@@ -272,6 +272,7 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
       payload: mapped.payload,
       unmapped: mapped.issues.map((i) => i.ehField),
       confirmed,
+      confirmedAt: pending.confirmedAt,
       hash,
       eventTimestamp,
       now: now(),
@@ -780,6 +781,8 @@ async function linkOnApproval(
      * Baseline is taken now, as before.
      */
     confirmed?: Baseline | null;
+    /** When the pair was confirmed in the link stage: a re-confirmed pair gets its own Link notice. Absent for a link by a copied Payroll ID. */
+    confirmedAt?: number;
     hash: string;
     eventTimestamp: number;
     now: number;
@@ -831,7 +834,9 @@ async function linkOnApproval(
   // naming details that differ asks the admin to check them, so it's sent.
   // Counted before the claim, so a failed count leaves nothing claimed.
   const rollUp = !linking.differs?.length && (await inBurst(deps.store, "link", linking.now));
-  const key = await noticeKey("link", ctUserId, [ehEmployeeId]);
+  // Keyed by the confirmation too, so a pair undone and confirmed again
+  // inside the de-dup window still gets its notice.
+  const key = await noticeKey("link", ctUserId, linking.confirmedAt === undefined ? [ehEmployeeId] : [ehEmployeeId, String(linking.confirmedAt)]);
   if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, linking.now)) {
     if (!rollUp) {
       const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
@@ -862,8 +867,10 @@ async function linkOnApproval(
     baseline,
   );
   if ((linking.link?.failureCycleCount ?? 0) > 0) await deps.store.setFailureCount(ctUserId, 0);
-  await deps.store.appendSyncLog({ ctUserId, at: linking.now, outcome: "ok", detail: LINKED_DETAIL });
-  return { status: "synced", reason: LINKED_DETAIL, ehEmployeeId };
+  // Unit names only, as every audit row (ADR-0001). The sync's own row follows.
+  const detail = toSend.length > 0 ? `linked: Payroll ID, then sending ${toSend.join(", ")}` : LINKED_DETAIL;
+  await deps.store.appendSyncLog({ ctUserId, at: linking.now, outcome: "ok", detail });
+  return { status: "synced", reason: detail, ehEmployeeId };
 }
 
 /** The unit each mapping follow-up is about. One not listed here is always posted. */
