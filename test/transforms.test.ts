@@ -125,6 +125,30 @@ describe("phoneAu", () => {
     expect(() => phoneAu("00 44 20 7946 0000")).toThrow(TransformError);
     expect(phoneAu("(0011) 44 20 7946 0000")).toBe("+442079460000");
   });
+  it("reads a + typed before a dial-out prefix as the number after it (#238)", () => {
+    expect(phoneAu("+0011 44 20 7946 0000")).toBe("+442079460000");
+    expect(phoneAu("+0015 1 415 555 0100")).toBe("+14155550100");
+    expect(phoneAu("+00 61 412 345 678")).toBe("+61412345678");
+    expect(phoneAu("+0061 (0)412 345 678")).toBe("+61412345678");
+  });
+  it("reads a dial-out prefix after a + spaced, dashed or bracketed as typed (#238)", () => {
+    expect(phoneAu("+ 0011 44 20 7946 0000")).toBe("+442079460000");
+    expect(phoneAu("+-0011 44 20 7946 0000")).toBe("+442079460000");
+    expect(phoneAu("+ 00 61 412 345 678")).toBe("+61412345678");
+    expect(phoneAu("+(00) 61 412 345 678")).toBe("+61412345678");
+    expect(phoneAu("+(00)(61) 412345678")).toBe("+61412345678");
+    expect(() => phoneAu("+ 001 44 20 7946 0000")).toThrow(TransformError);
+  });
+  it("rejects any other number typed +0, as no country code starts with 0 (#238)", () => {
+    expect(() => phoneAu("+0044 20 7946 0000")).toThrow(TransformError);
+    expect(() => phoneAu("+0412 345 678")).toThrow(TransformError);
+    expect(() => phoneAu("+(0)412 345 678")).toThrow(TransformError);
+  });
+  it("says what came before the 0: a + or a dial-out prefix (#238)", () => {
+    expect(() => phoneAu("+0412 345 678")).toThrow(/after the \+/);
+    expect(() => phoneAu("0011 0412 345 678")).toThrow(/after the dial-out prefix/);
+    expect(() => phoneAu("0011 0412 345 678")).not.toThrow(/\+/);
+  });
   it("reads 0061 as +61, spaced or not, trunk 0 or not (#235)", () => {
     expect(phoneAu("0061 412 345 678")).toBe("+61412345678");
     expect(phoneAu("0061412345678")).toBe("+61412345678");

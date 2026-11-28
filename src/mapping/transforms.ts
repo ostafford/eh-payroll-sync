@@ -159,6 +159,11 @@ export function readPhoneAu(v: unknown): PhoneReading {
   if (stripped.length < 6) {
     throw new TransformError(`"${raw}" does not look like a phone number`);
   }
+  if (countryWritten && stripped.startsWith("0")) {
+    // `+0044 …`, `+0412 …`, `0011 0412 …`: which number it means is a guess.
+    const after = prefixLength > 0 ? "the dial-out prefix" : "the +";
+    throw new TransformError(`"${raw}" has no country code after ${after}: none starts with 0`);
+  }
   if (!countryWritten && stripped.startsWith("00")) {
     // No Australian number starts 00, so it's a dial-out prefix mistyped
     // (`001 44 …`) or another country's: which number it means is a guess.
@@ -174,11 +179,15 @@ export function readPhoneAu(v: unknown): PhoneReading {
  * does: Australia's 0011 (and 0014/15/18/19 through a chosen carrier), or the
  * 00 of 0061 (00 is other countries' prefix, so only before Australia's
  * code). Read as written, so `001 44 …` isn't taken as 0014 with a space
- * moved. Brackets around it are allowed (`(0011) 44 …`, `00 (61) …`).
+ * moved. Spaces, dashes and brackets may come before it and between 00 and
+ * 61 (`(0011) 44 …`, `00 (61) …`), and so may a + (`+ 0011 44 …`, #238): no
+ * country code starts with 0, so a + then 00 can only be a prefix.
  */
 function dialOutPrefixLength(raw: string): number {
-  if (/^\(?001[14589]/.test(raw)) return 4;
-  if (/^\(?00[\s-]*\(?61/.test(raw)) return 2;
+  const lead = /^\+?[\s()-]*/.exec(raw)?.[0] ?? "";
+  const rest = raw.slice(lead.length);
+  if (/^001[14589]/.test(rest)) return 4;
+  if (/^00[\s()-]*61/.test(rest)) return 2;
   return 0;
 }
 
