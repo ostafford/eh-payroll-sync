@@ -57,3 +57,90 @@ describe("differingDetails: what the link stage asks Keep EH's / Use Connecteam'
     for (const v of ["3000", "3058", "Sam\"", "Samuel"]) expect(text).not.toContain(v);
   });
 });
+
+/**
+ * A real EH bulk-list record's fields and formats, made-up values (#232).
+ * Shapes taken from the demo's `/employee/unstructured` list.
+ */
+import ehRecord from "./fixtures/eh-bulk-employee.json" with { type: "json" };
+
+/** The same person as the field map maps them, every detail in the form EH holds it; each test puts one into the form Connecteam gives. */
+const packFor = {
+  firstName: "Jordan",
+  surname: "Example",
+  emailAddress: "jordan.example+test@example.com",
+  mobilePhone: "0400 000 001",
+  residentialStreetAddress: "100 Sample Street",
+  residentialSuburb: "Sampleville",
+  residentialState: "VIC",
+  residentialPostCode: "3000",
+  residentialCountry: "Australia",
+  emergencyContact1_Name: "Casey Example",
+  emergencyContact1_Relationship: "Partner",
+  emergencyContact1_ContactNumber: "0400000002",
+  jobTitle: "Barista",
+  employmentType: "Full Time",
+  bankAccount1_AccountName: "Jordan Example",
+  bankAccount1_BSB: "000001",
+  bankAccount1_AccountNumber: "123456789",
+  superFund1_FundName: "Sample Super Fund Accumulation Plan",
+  superFund1_ProductCode: "00000000000001",
+  superFund1_MemberNumber: "100000001",
+};
+
+describe("differingDetails against EH's real formats (#232)", () => {
+  const differ = (pack: Record<string, unknown>) => differingDetails({ ...packFor, ...pack }, ehRecord, map);
+
+  it("doesn't list a country sent as its code when EH holds its name", () => {
+    expect(differ({ residentialCountry: "AU" })).toEqual([]);
+  });
+
+  it("leaves out a country code it can't match to EH's name, but still lists a different name", () => {
+    expect(differ({ residentialCountry: "NZ" })).toEqual([]);
+    expect(differ({ residentialCountry: "New Zealand" })).toEqual([
+      { unit: "residentialAddress", label: "Residential address", fields: ["Country"] },
+    ]);
+  });
+
+  it("doesn't list a phone number sent as +61 when EH holds it spaced, from 0", () => {
+    expect(differ({ mobilePhone: "+61400000001", emergencyContact1_ContactNumber: "+61 400 000 002" })).toEqual([]);
+  });
+
+  it("doesn't list an employment type sent without its space", () => {
+    expect(differ({ employmentType: "FullTime" })).toEqual([]);
+    expect(differ({ employmentType: "PartTime" })).toEqual([
+      { unit: "employmentType", label: "Employment type", fields: ["Employment type"] },
+    ]);
+  });
+
+  it("doesn't list a BSB, account number or USI sent with spaces or dashes", () => {
+    expect(
+      differ({ bankAccount1_BSB: "000-001", bankAccount1_AccountNumber: "1234 5678 9", superFund1_ProductCode: "00 000 000 000 001" }),
+    ).toEqual([]);
+  });
+
+  it("still lists a BSB that is different", () => {
+    expect(differ({ bankAccount1_BSB: "000-002" })).toEqual([{ unit: "bankAccount1", label: "Bank account", fields: ["BSB"] }]);
+  });
+
+  it("doesn't list an email or street address that differs only in case", () => {
+    expect(differ({ emailAddress: "Jordan.Example+test@Example.com", residentialStreetAddress: "100 sample street" })).toEqual([]);
+  });
+
+  it("lists nothing for a whole pack in the forms Connecteam gives, when EH holds the same details", () => {
+    const fromConnecteam = {
+      mobilePhone: "+61400000001",
+      emergencyContact1_ContactNumber: "0400000002",
+      residentialSuburb: "Sampleville",
+      residentialCountry: "AU",
+      employmentType: "FullTime",
+      dateOfBirth: "1990-01-02",
+      superFund1_ProductCode: "00 000 000 000 001",
+    };
+    expect(differ(fromConnecteam)).toEqual([]);
+  });
+
+  it("still lists a phone number that is different", () => {
+    expect(differ({ mobilePhone: "+61400000009" })).toEqual([{ unit: "mobilePhone", label: "Mobile", fields: ["Mobile"] }]);
+  });
+});
