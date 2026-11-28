@@ -418,14 +418,20 @@ export function linkNoticeMessage(
   payrollIdSet: boolean,
   /** Keys that disagree with the EH record, for a link by a copied Payroll ID (ADR-0011). Names only. */
   differs: readonly MatchKey[] = [],
+  /** EH's labels of the units sent from Connecteam at the link (#230). Names only. */
+  sent: readonly string[] = [],
 ): string {
+  const sentLine = sent.length ? `Sent from Connecteam: ${sent.join(", ")}.` : "";
   const differ = differs.length
     ? `Their ${keyPhrase(differs, "differ")} in Employment Hero: check which is right.`
     : "";
   return clamp(
     sections(
       `🔗 ${personLabel(ref)} is now linked to Employment Hero employee ${ehEmployeeId}.`,
-      `${payrollIdSet ? "Only the Payroll ID was set." : "Their Payroll ID was already in Employment Hero, so nothing was written."} From now on, only what they change in Connecteam is synced.`,
+      sent.length
+        ? `${payrollIdSet ? "The Payroll ID was set." : "Their Payroll ID was already in Employment Hero."} From now on, only what they change in Connecteam is synced.`
+        : `${payrollIdSet ? "Only the Payroll ID was set." : "Their Payroll ID was already in Employment Hero, so nothing was written."} From now on, only what they change in Connecteam is synced.`,
+      sentLine,
       differ,
     ),
   );
@@ -449,7 +455,8 @@ export function bulkSummaryMessage(kind: RollupKind, count: number): string {
     case "link":
       return sections(
         `🔗 ${count} more Pre-existing ${one ? "employee is" : "employees are"} now linked to Employment Hero.`,
-        "For each, only the Payroll ID was set, or nothing was written if Employment Hero already had it. From now on, only what they change in Connecteam is synced.",
+        // #230: a link can also send what changed since its pair was confirmed.
+        "For each, the Payroll ID was set (unless Employment Hero already had it), and anything changed in Connecteam since their link was confirmed was sent. From now on, only what they change in Connecteam is synced.",
       );
     case "admin_success":
       return sections(

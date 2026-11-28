@@ -20,14 +20,20 @@
  * Exits 3 when nothing was saved (cancelled, not confirmed, or no terminal),
  * so the wizard stops before the deploy.
  *
- * Reads names, emails, Payroll IDs and status only: never a TFN or date of
- * birth. It first rebuilds wrangler.deploy.json and checks it against the
+ * On confirm it also takes each pair's Baseline (#230): the details that
+ * differ between Connecteam and EH are listed by name, and the admin picks
+ * Use Connecteam's for any that should be sent at the link (the rest keep
+ * EH's). Packs and EH records, TFN and date of birth included, are compared
+ * in memory only: nothing is printed or written but names and fingerprints.
+ *
+ * It first rebuilds wrangler.deploy.json and checks it against the
  * live Worker, if there is one yet (`npm run deploy:config -- --check-live
  * --allow-missing-secrets`: it needs the database, not the Worker's secrets),
  * so it never reads or writes a database other than the live one.
  *
  * Env (from .dev.vars or the shell): CT_API_KEY, EH_API_KEY, EH_BUSINESS_ID,
- * CT_ONBOARDING_PACK_ID, FIELD_MAP_CLIENT (optional).
+ * CT_ONBOARDING_PACK_ID, BASELINE_KEY, FIELD_MAP_CLIENT (optional). A
+ * rehearsal without BASELINE_KEY takes no Baselines.
  */
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
@@ -35,6 +41,8 @@ import { fileURLToPath } from "node:url";
 import { ConnecteamClient } from "../src/connecteam/client.js";
 import { EhPayrollClient } from "../src/eh/client.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
+import { baselineKeyId } from "../src/sync/baseline.js";
+import type { DifferingDetail } from "./lib/link-details.js";
 import type { LinkStageData, LinkStageMapRow } from "./lib/link-input.js";
 import { linkListInput } from "./lib/link-input.js";
 import { buildLinkList, type LinkPendingRow } from "./lib/link-list.js";
@@ -70,11 +78,21 @@ function need(name: string): string {
 // --- D1, through the built config ------------------------------------------
 
 const MAP_SQL = "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, last_outcome AS lastOutcome, external_id AS externalId FROM employee_map";
-const PENDING_SQL = "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId FROM pending_link";
+/** A stored Baseline's key id only: a pair counts as having one only under this BASELINE_KEY (#230). */
+const PENDING_SQL =
+  "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, json_extract(baseline, '$.keyId') AS baselineKeyId FROM pending_link";
 /** Each person's latest existing_match row: the Pre-create check's candidates (not their latest row of any kind). */
 const HELD_SQL =
   "SELECT ct_user_id AS ctUserId, detail FROM sync_log WHERE id IN " +
   "(SELECT MAX(id) FROM sync_log WHERE outcome = 'existing_match' GROUP BY ct_user_id)";
+
+/** The `pending_link` rows; one whose Baseline was made under another BASELINE_KEY counts as having none, so this run takes it again. */
+async function pendingLinks(): Promise<LinkPendingRow[]> {
+  const keyId = process.env.BASELINE_KEY ? await baselineKeyId(process.env.BASELINE_KEY) : null;
+  return (d1(PENDING_SQL) as Array<{ ctUserId: number; ehEmployeeId: string | null; baselineKeyId: string | null }>).map(
+    ({ baselineKeyId: stored, ...p }) => ({ ...p, hasBaseline: stored !== null && stored === keyId }),
+  );
+}
 
 // --- APIs ------------------------------------------------------------------
 
@@ -82,8 +100,9 @@ async function listEhEmployees(businessId: string, apiKey: string): Promise<Reco
   const list = await new EhPayrollClient({ businessId, apiKey }).listEmployees();
   // Status only: a response body can echo an employee's details back.
   if (list.outcome !== "ok") throw new Error(`Employment Hero employee list -> ${list.status === null ? "no response" : `HTTP ${list.status}`}`);
-  // Only what the link list reads, so nothing else (a TFN, a birth date) is kept.
-  return list.data.map(({ id, firstName, surname, emailAddress, externalId, status }) => ({ id, firstName, surname, emailAddress, externalId, status }));
+  // Whole records, in memory only: the Baseline step compares them with each
+  // pack (#230). Nothing from them is printed or written but field names.
+  return list.data;
 }
 
 async function loadLive(): Promise<LinkStageData> {
@@ -98,7 +117,7 @@ async function loadLive(): Promise<LinkStageData> {
     ehEmployees: await listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY")),
     assignments: assignments.data,
     employeeMap: (d1(MAP_SQL) as LinkStageMapRow[]).map((m) => ({ ...m, ehEmployeeId: m.ehEmployeeId === null ? null : String(m.ehEmployeeId) })),
-    pendingLinks: d1(PENDING_SQL) as LinkPendingRow[],
+    pendingLinks: await pendingLinks(),
     heldDetails: d1(HELD_SQL) as LinkStageData["heldDetails"],
     payrollIdFrom: loadFieldMap(process.env.FIELD_MAP_CLIENT).identity.externalIdFrom,
   };
@@ -118,6 +137,30 @@ async function confirm(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     return /^y(es)?$/i.test((await rl.question(`\n${question} [y/N] `)).trim());
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * The plain Details list (#230; the Edit pop-up replaces it): one person's
+ * differing details by name, each keeping EH's unless picked. Returns the
+ * units to take from Connecteam.
+ */
+async function chooseDetails(person: string, details: readonly DifferingDetail[]): Promise<string[]> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(`\n${person}: these details differ between Connecteam and Employment Hero.`);
+    details.forEach((d, i) => {
+      const fields = d.fields.length === 1 && d.fields[0] === d.label ? "" : ` (${d.fields.join(", ")} differ${d.fields.length === 1 ? "s" : ""}: the whole ${d.label.toLowerCase()} is sent)`;
+      console.log(`  ${i + 1}. ${d.label}${fields}`);
+    });
+    for (;;) {
+      const answer = (await rl.question("Each keeps EH's unless picked. Use Connecteam's for which? (numbers, e.g. 1 3; Enter for none) ")).trim();
+      const picks = answer === "" ? [] : answer.split(/[\s,]+/).map(Number);
+      if (picks.every((n) => Number.isInteger(n) && n >= 1 && n <= details.length)) return [...new Set(picks)].map((n) => details[n - 1]!.unit);
+      console.log(`  Type numbers from 1 to ${details.length}, or press Enter to keep EH's for all.`);
+    }
   } finally {
     rl.close();
   }
@@ -145,6 +188,10 @@ async function main(): Promise<void> {
     now: () => Date.now(),
     rehearsal: file !== undefined,
     ...(process.argv.includes("--before-deploy") ? { beforeDeploy: { confirm } } : {}),
+    // Live, a missing key stops here; a rehearsal without one takes no Baselines.
+    ...(file && !process.env.BASELINE_KEY
+      ? {}
+      : { baseline: { secret: need("BASELINE_KEY"), fieldMap: loadFieldMap(process.env.FIELD_MAP_CLIENT) }, chooseDetails }),
   });
   if (outcome === "cancelled" || outcome === "unconfirmed") process.exit(NOTHING_SAVED);
 }

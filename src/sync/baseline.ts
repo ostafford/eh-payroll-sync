@@ -201,3 +201,29 @@ export function clearedFields(before: Baseline, now: Baseline): Record<string, s
 export function changedUnits(before: Baseline, now: Baseline): string[] {
   return Object.keys(now.units).filter((unit) => now.units[unit] !== before.units[unit]);
 }
+
+/**
+ * The Baseline taken when the admin confirms a pair in the link stage (#230):
+ * stored with the pending link, so every change after it reaches EH at the
+ * link. A unit marked **Use Connecteam's** is recorded as blank then (known,
+ * no fingerprint), so the link sends it. The pay-run set is left out: the
+ * stage doesn't read pay rates, so at the link it's baselined without being
+ * sent, as before.
+ */
+export async function baselineAtConfirm(
+  payload: Record<string, unknown>,
+  map: BaselineMap,
+  secret: string,
+  opts: { useConnecteam?: readonly string[]; unmapped?: readonly string[] } = {},
+): Promise<Baseline> {
+  const b = await takeBaseline(payload, map, secret, opts.unmapped);
+  const units = { ...b.units };
+  const filled = { ...b.filled };
+  delete units[UNIT.payRun];
+  delete filled[UNIT.payRun];
+  for (const unit of opts.useConnecteam ?? []) {
+    delete units[unit];
+    filled[unit] = [];
+  }
+  return { keyId: b.keyId, units, filled };
+}

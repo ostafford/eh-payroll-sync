@@ -32,7 +32,7 @@ describe("bulkSummaryMessage (#193)", () => {
   it("counts the Linked employees", () => {
     expect(bulkSummaryMessage("link", 98)).toBe(
       "🔗 98 more Pre-existing employees are now linked to Employment Hero.\n\n" +
-        "For each, only the Payroll ID was set, or nothing was written if Employment Hero already had it. From now on, only what they change in Connecteam is synced.",
+        "For each, the Payroll ID was set (unless Employment Hero already had it), and anything changed in Connecteam since their link was confirmed was sent. From now on, only what they change in Connecteam is synced.",
     );
   });
 

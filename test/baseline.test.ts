@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { baselineKeyId, changedUnits, takeBaseline, unitOf, unitsOf } from "../src/sync/baseline.js";
+import { baselineAtConfirm, baselineKeyId, changedUnits, newUnits, takeBaseline, unitOf, unitsOf } from "../src/sync/baseline.js";
 
 const map = { rules: { constants: { bankAccount1_AllocatedPercentage: 100, bankAccount1: "Electronic" } } };
 
@@ -106,5 +106,38 @@ describe("the pay-run unit's fingerprint", () => {
 
     expect(newDefault.units.payRun).toBe(before.units.payRun);
     expect(newRate.units.payRun).not.toBe(before.units.payRun);
+  });
+});
+
+/** What a Linked employee's sync sends (ADR-0009): changed units, less those new to the Baseline (baselined, not sent). */
+function sentAtLink(before: Awaited<ReturnType<typeof takeBaseline>>, now: Awaited<ReturnType<typeof takeBaseline>>): string[] {
+  const fresh = new Set(newUnits(before, now));
+  return changedUnits(before, now).filter((u) => !fresh.has(u)).sort();
+}
+
+describe("the Baseline taken when a pair is confirmed in the link stage (#230)", () => {
+  it("sends at link only what changed since, and every detail marked Use Connecteam's", async () => {
+    const confirmed = await baselineAtConfirm(payload, map, "k-one", { useConnecteam: ["residentialAddress"] });
+    // Edited while waiting for approval (or while the link was blocked).
+    const atLink = await takeBaseline({ ...payload, emergencyContact1_Name: "Jo Rivera" }, map, "k-one");
+
+    expect(sentAtLink(confirmed, atLink)).toEqual(["emergencyContact1", "residentialAddress"]);
+  });
+
+  it("leaves the pay-run set out, so at link it's baselined as new and not sent", async () => {
+    const confirmed = await baselineAtConfirm(payload, map, "k-one");
+    const atLink = await takeBaseline({ ...payload, rate: 35 }, map, "k-one");
+
+    expect(sentAtLink(confirmed, atLink)).toEqual([]);
+    expect(newUnits(confirmed, atLink)).toEqual(["payRun"]);
+  });
+
+  it("holds no value, and the same key id as a Baseline taken at link", async () => {
+    const confirmed = await baselineAtConfirm(payload, map, "k-one", { useConnecteam: ["firstName"] });
+    expect(confirmed.keyId).toBe(await baselineKeyId("k-one"));
+    const text = JSON.stringify(confirmed);
+    for (const v of ["Samuel", "123456782", "012345", "00123456", "Example Rd", "Alex", "HOS0100AU", "Weekly"]) {
+      expect(text).not.toContain(v);
+    }
   });
 });

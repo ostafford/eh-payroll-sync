@@ -11,7 +11,7 @@ import {
   type SyncDeps,
 } from "../src/sync/consumer.js";
 import { CORRECTION_NOTICE_DEDUPE_MS } from "../src/sync/notices.js";
-import { takeBaseline } from "../src/sync/baseline.js";
+import { baselineAtConfirm, takeBaseline } from "../src/sync/baseline.js";
 import type { SyncJob } from "../src/sync/job.js";
 import type { Baseline, EmployeeLink } from "../src/sync/gateway.js";
 import type { CtResult, PayRate } from "../src/connecteam/types.js";
@@ -838,6 +838,166 @@ describe("runSyncJob - link on first approval (#150, ADR-0009)", () => {
     expect((await runSyncJob(job(), deps({ store, eh }))).status).toBe("synced");
     expect(eh.upserts).toHaveLength(1);
     expect(store.rows.get(ME)!.linkedAt).toBeUndefined();
+  });
+});
+
+describe("runSyncJob - link with the Baseline taken at confirmation (#230)", () => {
+  const ME = 17760356;
+  const TARGET = "40213";
+  const KEY = "test-baseline-key";
+
+  /** A pending link confirmed in the link stage while the pack was `atConfirm`. */
+  async function confirmedWhile(atConfirm: ConnecteamUser, useConnecteam: string[] = []) {
+    const store = fakeGateway();
+    const mapped = applyFieldMap(atConfirm, fieldMap);
+    const baseline = await baselineAtConfirm(mapped.payload, fieldMap, KEY, { useConnecteam, unmapped: mapped.issues.map((i) => i.ehField) });
+    store.pending.set(ME, { ctUserId: ME, ehEmployeeId: TARGET, confirmedAt: 1, baseline });
+    return store;
+  }
+
+  /**
+   * The hand-entered EH employee, with no Payroll ID yet. Found by Payroll ID
+   * only once it's PUT; then it takes changed-units writes like any EH record.
+   */
+  function handEntered() {
+    const eh = fakeEh({ id: Number(TARGET) });
+    const lookUp = eh.getByExternalId.bind(eh);
+    const puts: string[] = [];
+    let payrollId: string | null = null;
+    return Object.assign(eh, {
+      puts,
+      async getEmployee(id: string) {
+        return { outcome: "ok", data: id === TARGET ? { id: Number(TARGET), externalId: payrollId, status: "Active" } : null };
+      },
+      async setExternalId(id: string, key: string) {
+        puts.push(id);
+        payrollId = key;
+        return { outcome: "ok", data: null };
+      },
+      async getByExternalId(key: string) {
+        return payrollId === key ? lookUp(key) : { outcome: "ok", data: null };
+      },
+    });
+  }
+
+  const editJobTitle = (title: string) => {
+    const user = cloneUser();
+    user.customFields.find((f) => f.customFieldId === 25145108)!.value = title;
+    return user;
+  };
+  const run = (store: ReturnType<typeof fakeGateway>, eh: ReturnType<typeof handEntered>, user: ConnecteamUser, j = job()) =>
+    runSyncJob(j, deps({ store, eh: eh as unknown as SyncDeps["eh"], ct: fakeCt(user) }));
+
+  it("sends at link what changed since the pair was confirmed, and the Link notice names it", async () => {
+    const store = await confirmedWhile(cloneUser());
+    const eh = handEntered();
+    const ct = fakeCt(editJobTitle("Team Lead"));
+
+    const out = await runSyncJob(job(), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct }));
+
+    expect(out).toMatchObject({ status: "synced", ehEmployeeId: TARGET });
+    expect(eh.puts).toEqual([TARGET]);
+    expect(eh.upserts.map((u) => u.payload)).toEqual([{ jobTitle: "Team Lead" }]);
+    expect(store.rows.get(ME)).toMatchObject({ linkedAt: 1_000_000, ehEmployeeId: TARGET });
+    expect(store.pending.has(ME)).toBe(false);
+    const notice = ct.channels.find((c) => c.text.startsWith("🔗"))!.text;
+    expect(notice).toContain("Sent from Connecteam: Job title.");
+    expect(notice).not.toContain("Team Lead");
+  });
+
+  it("moves the Baseline on, so the same pack again sends nothing", async () => {
+    const store = await confirmedWhile(cloneUser());
+    const eh = handEntered();
+    await run(store, eh, editJobTitle("Team Lead"));
+
+    const again = await run(store, eh, editJobTitle("Team Lead"), job({ reason: "profile_update", eventTimestamp: 2000 }));
+
+    expect(again.status).toBe("skipped");
+    expect(eh.upserts).toHaveLength(1);
+  });
+
+  it("sends a detail the admin marked Use Connecteam's, though it hasn't changed since", async () => {
+    const store = await confirmedWhile(cloneUser(), ["jobTitle"]);
+    const eh = handEntered();
+
+    await run(store, eh, cloneUser());
+
+    expect(eh.upserts.map((u) => Object.keys(u.payload))).toEqual([["jobTitle"]]);
+  });
+
+  it("sets only the Payroll ID, as before, when nothing changed since confirmation", async () => {
+    const store = await confirmedWhile(cloneUser());
+    const eh = handEntered();
+    const ct = fakeCt(cloneUser());
+
+    const out = await runSyncJob(job(), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct }));
+
+    expect(out).toEqual({ status: "synced", reason: "linked: Payroll ID only", ehEmployeeId: TARGET });
+    expect(eh.upserts).toEqual([]);
+    expect(ct.channels.map((c) => c.text)).toEqual([
+      "🔗 Sam Rivera (17760356) is now linked to Employment Hero employee 40213.\n\n" +
+        "Only the Payroll ID was set. From now on, only what they change in Connecteam is synced.",
+    ]);
+  });
+
+  it("records the link's audit row as sending the changed units, by name, not 'Payroll ID only'", async () => {
+    const store = await confirmedWhile(cloneUser());
+    await run(store, handEntered(), editJobTitle("Team Lead"));
+
+    expect(store.log.map((l) => l.detail)).toEqual(["linked: Payroll ID, then sending jobTitle", "synced"]);
+  });
+
+  it("posts the Link notice again for a pair re-confirmed after an undo, within the de-dup window", async () => {
+    const store = await confirmedWhile(cloneUser());
+    const eh = handEntered();
+    const ct = fakeCt(editJobTitle("Team Lead"));
+    const d = deps({ store, eh: eh as unknown as SyncDeps["eh"], ct });
+    await runSyncJob(job(), d);
+    // Undone by hand (RUNBOOK), then confirmed again in the link stage.
+    const reconfirmed = (await confirmedWhile(editJobTitle("Team Lead"))).pending.get(ME)!;
+    store.rows.delete(ME);
+    store.pending.set(ME, { ...reconfirmed, confirmedAt: 2 });
+
+    const again = fakeCt(editJobTitle("Chef"));
+    await runSyncJob(job({ eventTimestamp: 2000 }), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct: again }));
+
+    expect(ct.channels.filter((c) => c.text.startsWith("🔗"))).toHaveLength(1);
+    expect(again.channels.filter((c) => c.text.startsWith("🔗")).map((c) => c.text)).toEqual([
+      expect.stringContaining("Sent from Connecteam: Job title."),
+    ]);
+    expect(store.rows.get(ME)).toMatchObject({ linkedAt: 1_000_000 });
+  });
+
+  it("treats a Baseline stored under another BASELINE_KEY as none: taken at link, nothing named or sent", async () => {
+    const store = fakeGateway();
+    const mapped = applyFieldMap(cloneUser(), fieldMap);
+    store.pending.set(ME, { ctUserId: ME, ehEmployeeId: TARGET, confirmedAt: 1, baseline: await baselineAtConfirm(mapped.payload, fieldMap, "another-key") });
+    const eh = handEntered();
+    const ct = fakeCt(editJobTitle("Team Lead"));
+
+    const out = await runSyncJob(job(), deps({ store, eh: eh as unknown as SyncDeps["eh"], ct }));
+
+    expect(out).toEqual({ status: "synced", reason: "linked: Payroll ID only", ehEmployeeId: TARGET });
+    expect(eh.upserts).toEqual([]);
+    expect(ct.channels.map((c) => c.text).join("\n")).not.toContain("Sent from Connecteam");
+  });
+
+  it("still sends the change on a retry after EH was down for it, with one Link notice", async () => {
+    const store = await confirmedWhile(cloneUser());
+    const eh = handEntered();
+    const ct = fakeCt(editJobTitle("Team Lead"));
+    const down = { outcome: "retryable", status: 503, detail: "down" };
+    const upsert = eh.upsertByExternalId;
+    let fails = 1;
+    eh.upsertByExternalId = (async (...a: Parameters<typeof upsert>) => (fails-- > 0 ? down : upsert(...a))) as typeof upsert;
+    const d = deps({ store, eh: eh as unknown as SyncDeps["eh"], ct });
+
+    expect(await runSyncJob(job(), d)).toMatchObject({ status: "retry" });
+    expect(await runSyncJob(job(), d)).toMatchObject({ status: "synced" });
+
+    // The fake records only the write EH accepted: the retry's.
+    expect(eh.upserts.map((u) => u.payload)).toEqual([{ jobTitle: "Team Lead" }]);
+    expect(ct.channels.filter((c) => c.text.startsWith("🔗"))).toHaveLength(1);
   });
 });
 
