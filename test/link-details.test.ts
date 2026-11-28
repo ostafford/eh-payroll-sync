@@ -154,13 +154,41 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "0011 44 20 7946 0000" })).toEqual([]);
   });
 
-  it("leaves out a number it can't read as Australian or international, rather than listing it", () => {
+  it("leaves out a number it can't read, or that isn't 9 digits after +61, rather than listing it", () => {
     expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "020 7946 0000" })).toEqual([]);
     expect(detailsAgainst({ emergencyContact1_ContactNumber: "ask reception" })).toEqual([]);
   });
 
-  it("still lists a number where EH holds none", () => {
+  it("still lists a number where EH holds none, readable or not", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: null })).toEqual(mobile);
+    expect(detailsAgainst({ mobilePhone: "1300 000 000" }, { mobilePhone: null })).toEqual(mobile);
+    expect(detailsAgainst({ mobilePhone: null }, { mobilePhone: "+614000000012" })).toEqual(mobile);
+  });
+
+  it("reads Australia's other international prefixes (0014, 0015, 0018, 0019)", () => {
+    for (const prefix of ["0014", "0015", "0018", "0019"]) {
+      expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: `${prefix} 44 20 7946 0000` })).toEqual([]);
+    }
+  });
+
+  it("compares every phone field the field map can fill the same way", () => {
+    const fields = ["workPhone", "emergencyContact1_AlternateContactNumber", "emergencyContact2_ContactNumber"];
+    for (const f of fields) expect(detailsAgainst({ [f]: "+61400000009" }, { [f]: "0400 000 009" })).toEqual([]);
+  });
+
+  it("compares the postal country, second bank accounts and second super funds as their first ones", () => {
+    expect(detailsAgainst({ postalCountry: "AU" })).toEqual([]);
+    expect(
+      detailsAgainst(
+        { bankAccount2_BSB: "000-001", bankAccount2_AccountNumber: "1234 5678 9", superFund2_ProductCode: "00 000 000 000 001" },
+        { bankAccount2_BSB: "000001", bankAccount2_AccountNumber: "123456789", superFund2_ProductCode: "00000000000001" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("doesn't list a postcode EH returns as a number, or a TFN typed with spaces", () => {
+    expect(detailsAgainst({ residentialPostCode: "0800" }, { residentialPostCode: 800 })).toEqual([]);
+    expect(detailsAgainst({ taxFileNumber: "000000000" }, { taxFileNumber: "000 000 000" })).toEqual([]);
   });
 
   it("doesn't list an overseas number that differs only in spacing", () => {
