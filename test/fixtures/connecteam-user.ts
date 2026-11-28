@@ -3,7 +3,9 @@ import type { ConnecteamUser } from "../../src/mapping/apply.js";
 /**
  * A synthetic Connecteam user shaped exactly like the real API response
  * (field IDs are the real ones discovered in the account; every value is fake).
- * `structuredClone` it per test and mutate as needed.
+ * `structuredClone` it per test and mutate as needed. `syntheticUserInEh`
+ * (synthetic-user-in-eh.ts) is the same person as EH holds them: change the
+ * two together.
  */
 export const syntheticUser: ConnecteamUser = {
   userId: 17760356,
