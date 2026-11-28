@@ -115,6 +115,10 @@ describe("phoneAu", () => {
     expect(phoneAu("+610411687336")).toBe("+61411687336");
     expect(phoneAu("+61 0411 687 336")).toBe("+61411687336");
   });
+  it("reads a number dialled from Australia with an international prefix", () => {
+    expect(phoneAu("0011 44 20 7946 0000")).toBe("+442079460000");
+    expect(phoneAu("0018 61 411 687 336")).toBe("+61411687336");
+  });
   it("drops a (0) or trunk 0 written with dashes", () => {
     expect(phoneAu("+61 0411-687-336")).toBe("+61411687336");
     expect(phoneAu("+61-0411687336")).toBe("+61411687336");
