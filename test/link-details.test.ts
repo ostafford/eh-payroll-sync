@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { differingDetails } from "../scripts/lib/link-details.js";
+import { applyFieldMap } from "../src/mapping/apply.js";
+import { parseFieldMap } from "../src/mapping/schema.js";
+import { syntheticUser } from "./fixtures/connecteam-user.js";
+import demoFieldMap from "./fixtures/demo-field-map.json" with { type: "json" };
+/** A real EH bulk-list record's fields and formats, made-up values (#232): shapes from the demo's `/employee/unstructured` list. */
+import ehRecord from "./fixtures/eh-bulk-employee.json" with { type: "json" };
 
 const map = { rules: { constants: { bankAccount1_AllocatedPercentage: 100 } } };
 
@@ -58,14 +64,8 @@ describe("differingDetails: what the link stage asks Keep EH's / Use Connecteam'
   });
 });
 
-/**
- * A real EH bulk-list record's fields and formats, made-up values (#232).
- * Shapes taken from the demo's `/employee/unstructured` list.
- */
-import ehRecord from "./fixtures/eh-bulk-employee.json" with { type: "json" };
-
 /** The same person as the field map maps them, every detail in the form EH holds it; each test puts one into the form Connecteam gives. */
-const packFor = {
+const ehFormPack = {
   firstName: "Jordan",
   surname: "Example",
   emailAddress: "jordan.example+test@example.com",
@@ -89,7 +89,9 @@ const packFor = {
 };
 
 describe("differingDetails against EH's real formats (#232)", () => {
-  const differ = (pack: Record<string, unknown>) => differingDetails({ ...packFor, ...pack }, ehRecord, map);
+  const differ = (pack: Record<string, unknown>, eh: Record<string, unknown> = {}) =>
+    differingDetails({ ...ehFormPack, ...pack }, { ...ehRecord, ...eh }, map);
+  const country = [{ unit: "residentialAddress", label: "Residential address", fields: ["Country"] }];
 
   it("doesn't list a country sent as its code when EH holds its name", () => {
     expect(differ({ residentialCountry: "AU" })).toEqual([]);
@@ -97,9 +99,33 @@ describe("differingDetails against EH's real formats (#232)", () => {
 
   it("leaves out a country code it can't match to EH's name, but still lists a different name", () => {
     expect(differ({ residentialCountry: "NZ" })).toEqual([]);
-    expect(differ({ residentialCountry: "New Zealand" })).toEqual([
-      { unit: "residentialAddress", label: "Residential address", fields: ["Country"] },
-    ]);
+    expect(differ({ residentialCountry: "New Zealand" })).toEqual(country);
+  });
+
+  it("matches AU's 3-letter code too", () => {
+    expect(differ({ residentialCountry: "AUS" })).toEqual([]);
+    expect(differ({ residentialCountry: "AUS" }, { residentialCountry: "New Zealand" })).toEqual(country);
+  });
+
+  it("still lists two different codes, and a code where EH holds no country", () => {
+    expect(differ({ residentialCountry: "NZ" }, { residentialCountry: "US" })).toEqual(country);
+    expect(differ({ residentialCountry: "NZ" }, { residentialCountry: null })).toEqual(country);
+    expect(differ({ residentialCountry: "UK" }, { residentialCountry: "UK" })).toEqual([]);
+  });
+
+  it("leaves out a name against a short form EH holds that it can't match", () => {
+    expect(differ({ residentialCountry: "United Kingdom" }, { residentialCountry: "UK" })).toEqual([]);
+  });
+
+  it("doesn't list a phone number EH holds as 61 without the plus, or sent with (0)", () => {
+    expect(differ({ mobilePhone: "+61400000001" }, { mobilePhone: "61400000001" })).toEqual([]);
+    expect(differ({ mobilePhone: "+61 (0)400 000 001" })).toEqual([]);
+    expect(differ({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "+442079460000" })).toEqual([]);
+  });
+
+  it("doesn't list a BSB EH returns as a number, and leaves out a value that isn't text", () => {
+    expect(differ({ bankAccount1_BSB: "000-001" }, { bankAccount1_BSB: 1 })).toEqual([]);
+    expect(differ({ jobTitle: { name: "Barista" } })).toEqual([]);
   });
 
   it("doesn't list a phone number sent as +61 when EH holds it spaced, from 0", () => {
@@ -138,6 +164,39 @@ describe("differingDetails against EH's real formats (#232)", () => {
       superFund1_ProductCode: "00 000 000 000 001",
     };
     expect(differ(fromConnecteam)).toEqual([]);
+  });
+
+  it("lists nothing for a pack the demo field map makes from a Connecteam user, against EH holding the same details", () => {
+    const { payload } = applyFieldMap(structuredClone(syntheticUser), parseFieldMap(demoFieldMap));
+    // The same person as EH's bulk list holds them: a known-good record in EH's own forms.
+    const sameInEh = {
+      ...ehRecord,
+      firstName: "Samuel",
+      surname: "Rivera",
+      dateOfBirth: "1992-04-07T00:00:00",
+      gender: "Female",
+      emailAddress: "Sam.Rivera@Example.com",
+      mobilePhone: "0411 000 111",
+      residentialStreetAddress: "12 Example Rd",
+      residentialSuburb: "COBURG",
+      residentialState: "VIC",
+      residentialPostCode: "3058",
+      residentialCountry: "Australia",
+      startDate: "2026-09-01T00:00:00",
+      jobTitle: "Support Officer",
+      employmentType: "Full Time",
+      emergencyContact1_Name: "Alex Rivera",
+      emergencyContact1_ContactNumber: "0412000222",
+      emergencyContact1_Relationship: "Sibling",
+      taxFileNumber: "123456782",
+      bankAccount1_AccountName: "Samuel Rivera",
+      bankAccount1_BSB: "012345",
+      bankAccount1_AccountNumber: "00123456",
+      superFund1_ProductCode: "HOS0100AU",
+      superFund1_FundName: "Hostplus",
+      superFund1_MemberNumber: "M123456",
+    };
+    expect(differingDetails(payload, sameInEh, parseFieldMap(demoFieldMap))).toEqual([]);
   });
 
   it("still lists a phone number that is different", () => {
