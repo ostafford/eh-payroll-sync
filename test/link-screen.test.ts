@@ -524,16 +524,18 @@ describe("link screen on a re-run: To review, External ID and Details (#225)", (
     expect(bottom).toContain("Esc / Backspace");
   });
 
-  it("draws the selected list row and pop-up option as a full-width black bar, and a grey one on a dark terminal", () => {
+  it("draws the selected list row and pop-up option as a full-width bar: black on a light terminal, grey on a dark one or one that doesn't say", () => {
     const BLACK = "\u001b[1;97;40m";
     const GREY = "\u001b[1;97;100m";
     const colour = { columns: 160, rows: 30, color: true };
     const avery = (lines: string[]) => lines.find((l) => l.includes("Avery") && l.includes("▶")) ?? "";
-    expect(avery(rerunScreen().render(colour))).toContain(BLACK);
-    const dark = avery(rerunScreen().render({ ...colour, background: "dark" }));
-    expect(dark).toContain(GREY);
-    expect(dark).not.toContain(BLACK);
-    const option = press(rerunScreen(), "e").render(colour).find((l) => l.includes("Keep EH's") && l.includes("▶")) ?? "";
+    expect(avery(rerunScreen().render({ ...colour, background: "light" }))).toContain(BLACK);
+    for (const size of [colour, { ...colour, background: "dark" as const }]) {
+      const bar = avery(rerunScreen().render(size));
+      expect(bar).toContain(GREY);
+      expect(bar).not.toContain(BLACK);
+    }
+    const option = press(rerunScreen(), "e").render({ ...colour, background: "light" }).find((l) => l.includes("Keep EH's") && l.includes("▶")) ?? "";
     expect(option).toContain(BLACK);
   });
 });

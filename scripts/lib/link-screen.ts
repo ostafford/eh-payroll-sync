@@ -27,7 +27,7 @@ export interface LinkScreenSize {
   columns: number;
   rows: number;
   color: boolean;
-  /** The terminal's background, when it says (COLORFGBG): the highlight bar is grey on a dark one. */
+  /** The terminal's background, when it says (COLORFGBG): the highlight bar is black only on a light one. */
   background?: "light" | "dark";
 }
 
@@ -126,17 +126,22 @@ const confirmedOn = (ms: number) => new Date(ms).toLocaleDateString("en-AU", { d
 type Body = string | { text: string; bar: boolean };
 
 /**
- * The highlight bar (#222): a fixed black bar with bright white bold text,
- * the marks on it kept in their meaning colours, so it reads on a light
- * terminal. Without colour, the ▶ / > pointer is the cue.
+ * The highlight bar (#222): a fixed bar with bright white bold text, the
+ * marks on it kept in their meaning colours. Black on a light terminal (the
+ * developer's pick), grey on a dark one or one that doesn't say. Without
+ * colour, the ▶ / > pointer is the cue.
  */
 const BAR = { light: "\u001b[1;97;40m", dark: "\u001b[1;97;100m" } as const;
 const BAR_MARKS: Record<string, string> = { "▶": "96", "●": "96", "○": "37", "✓": "92", "⚠": "93", "✗": "91" };
-/** `s` as the highlight bar, `w` wide. A black bar can't be seen on a dark terminal, so it's grey there. */
+/**
+ * `s` as the highlight bar, `w` wide. A black bar can't be seen on a dark
+ * terminal, and most terminals don't say which they are, so it's grey
+ * (which reads on either) unless the terminal reports a light background.
+ */
 function highlight(s: string, w: number, size: Pick<LinkScreenSize, "color" | "background">): string {
   if (!size.color) return pad(s, w);
   const text = pad(stripAnsi(s), w).replace(/[▶●○✓⚠✗]/g, (m) => `\u001b[${BAR_MARKS[m]}m${m}\u001b[97m`);
-  return `${BAR[size.background ?? "light"]}${text}\u001b[0m`;
+  return `${BAR[size.background === "light" ? "light" : "dark"]}${text}\u001b[0m`;
 }
 
 /** A bordered box: a title on the top edge, the body, and an optional footer under a rule. */

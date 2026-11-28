@@ -12,14 +12,14 @@ export interface LinkTerminal {
   stdin: Readable & { setRawMode(on: boolean): unknown };
   stdout: Writable & { columns?: number; rows?: number };
   color: boolean;
-  /** The terminal's background, when it says: the highlight bar is grey on a dark one. */
+  /** The terminal's background, when it says: the highlight bar is black only on a light one. */
   background?: "light" | "dark";
 }
 
 /**
  * The background a terminal reports in `COLORFGBG` ("fg;bg", its last part
  * an ANSI colour number: 0-6 and 8 dark, 7 and 9-15 light), or undefined
- * when it doesn't say. Most terminals don't: the bar is black then.
+ * when it doesn't say. Most terminals don't: the bar is grey then, to read on either.
  */
 export function terminalBackground(colorfgbg: string | undefined): "light" | "dark" | undefined {
   const bg = Number(colorfgbg?.split(";").at(-1));

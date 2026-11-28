@@ -20,6 +20,7 @@ We considered three options (#220):
 - **The pay-run set is left out** of that Baseline. The link stage doesn't read pay rates, and EH's pay isn't in its bulk list to compare. At the link the pay-run set is new to the Baseline, so it's baselined without being sent, as before. A pay-rate change made while the link waited isn't sent.
 - **At the link.** After the Payroll ID checks and write, the Link notice is claimed and sent. It names the units about to be sent: "Sent from Connecteam: Job title." `completeLink` then records them as Linked with the stored Baseline. The existing changed-units sync then runs as for any Linked employee's edit. It sends every unit changed since confirmation, posts the cleared-field follow-up, and baselines new units. Its own Correction, follow-up and success messages go out as configured.
 - **A pair confirmed before this change** has no stored Baseline. It takes one at the link, as before. A re-run of the link stage with `BASELINE_KEY` gives every kept pair one, so the upgrade steps are to re-run the link stage for all waiting pairs.
+- **On a re-run of the link stage** (#224, #225; amended 2026-11-28), a stored Baseline is **kept**, so everything changed since confirmation is still sent at the link. If the admin picks anything in that pair's Edit pop-up, the Baseline is **taken again** with the new picks, and `confirmed_at` moves with it. That drops the changes made since the first confirmation: they're decided in the pop-up rather than sent. So the pop-up warns first: "changes since <date> are decided here, not sent". Opening the pop-up without picking changes nothing. A kept pair with no Baseline gets one on save (**re-confirmed**), with Keep EH's for every detail not picked. That holds whether or not it was opened, and whatever its External ID, since a Baseline can't make a held link worse. A kept pair with nothing to take a Baseline from (its Connecteam user is gone) is left as it was, so its `confirmed_at` doesn't move.
 - **The Link summary** (ADR-0013) now says that anything changed in Connecteam since the link was confirmed was sent, as well as the Payroll ID. Notices naming sent units roll up in a burst like a plain one, because a re-run for many stuck people would otherwise flood the channel.
 
 ### Side effects, and why each is safe to re-run (ADR-0007)
@@ -32,6 +33,7 @@ We considered three options (#220):
 
 ## Consequences
 
+- A re-pick on a re-run trades the changes made since the first confirmation for the admin's decision in the pop-up. A re-run that only opens pop-ups, or picks nothing, sends exactly what it would have before.
 - The edit that triggers a link, and every edit made while it was blocked, reaches EH at the link.
 - Onboarding-pack entries made after confirmation are sent at the link too. That's accepted: they're newer data from the employee.
 - If EH rejects a unit named in the Link notice, the notice still says it was sent. The Correction that follows says otherwise.

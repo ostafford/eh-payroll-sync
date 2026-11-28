@@ -102,20 +102,25 @@ async function withBaselines(
   const touched = new Set([...changes.remove, ...changes.upsert.map((r) => r.ctUserId)]);
   const unbaselined = data.pendingLinks.filter((p) => p.ehEmployeeId !== null && p.hasBaseline === false && !touched.has(p.ctUserId));
   const upsert: LinkUpsert[] = [];
+  const reconfirm = new Set(unbaselined.map((p) => p.ctUserId));
+  let reconfirmed = 0;
   for (const row of [...changes.upsert, ...unbaselined]) {
     const user = lookup.users.get(row.ctUserId);
     const eh = row.ehEmployeeId === null ? undefined : lookup.ehById.get(row.ehEmployeeId);
     if (!user || !eh) {
-      upsert.push({ ctUserId: row.ctUserId, ehEmployeeId: row.ehEmployeeId, baseline: null });
+      // A kept pair with nothing to take a Baseline from is left as it was:
+      // re-writing it would only move its confirmed_at, which keys its Link notice.
+      if (!reconfirm.has(row.ctUserId)) upsert.push({ ctUserId: row.ctUserId, ehEmployeeId: row.ehEmployeeId, baseline: null });
       continue;
     }
+    if (reconfirm.has(row.ctUserId)) reconfirmed++;
     const mapped = lookup.mappedOf(user);
     const useConnecteam = "useConnecteam" in row ? (row.useConnecteam ?? []) : [];
     const unmapped = mapped.issues.map((i) => i.ehField);
     const baseline = await baselineAtConfirm(mapped.payload, fieldMap, secret, { useConnecteam, unmapped });
     upsert.push({ ctUserId: row.ctUserId, ehEmployeeId: row.ehEmployeeId, baseline });
   }
-  return { changes: { upsert, remove: changes.remove }, reconfirmed: unbaselined.length };
+  return { changes: { upsert, remove: changes.remove }, reconfirmed };
 }
 
 /** Each load step's elapsed time, for stderr (#224): "Connecteam users 3.1 s · EH employees 4.0 s". */

@@ -244,6 +244,26 @@ describe("the Baseline, taken when a pair is confirmed (#230)", () => {
     expect(sql).not.toMatch(/\(102,/);
     expect(s.out.join("\n")).toContain("Saved: 1 re-confirmed with a Baseline.");
   });
+
+  it("leaves alone, and doesn't count, a pair saved before Baselines that can't get one: their Connecteam user is gone", async () => {
+    const s = stage([], {
+      load: async () =>
+        data({
+          ...named(),
+          pendingLinks: [
+            { ctUserId: 100, ehEmployeeId: "40213", hasBaseline: false },
+            // No longer an active Connecteam user: nothing to take a Baseline from.
+            { ctUserId: 999, ehEmployeeId: "40377", hasBaseline: false },
+          ],
+        }),
+      baseline: { secret: KEY, fieldMap },
+    });
+    await s.run();
+    const sql = s.execute.mock.calls[0]![0];
+    expect(storedBaseline(sql, 100)).not.toBeNull();
+    expect(sql).not.toMatch(/\(999,/);
+    expect(s.out.join("\n")).toContain("Saved: 1 re-confirmed with a Baseline.");
+  });
 });
 
 describe("stepTimes (#224)", () => {
