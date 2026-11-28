@@ -62,8 +62,12 @@ EH Payroll's `externalId` field on an employee (labelled "External ID" in the EH
 The number Connecteam gives every user automatically. It can't be edited. The normal Payroll ID.
 
 **EH Employee ID**:
-EH's own number for an employee record, shown in its URL and labelled "Employee ID" in EH's General settings. It identifies the record inside EH; it is never the Payroll ID. A client may keep it in a Connecteam field as their own reference, but the sync doesn't match on it.
+EH's own number for an employee record, shown in its URL and labelled "Employee ID" in EH's General settings. It identifies the record inside EH; it is never the Payroll ID. A client may keep it in a Connecteam field as their own reference; the sync never matches on it or writes it, but that field can serve as the EH Employee ID hint.
 _Avoid_: "Employee ID" on its own: EH and a client's Connecteam field both use the phrase for different numbers
+
+**EH Employee ID hint**:
+A Connecteam field holding each person's EH Employee ID, chosen at setup. The link stage uses it only to suggest which EH employee someone is, or to confirm a match already found; the admin still decides. It never becomes the Payroll ID, and it never on its own allows a link that replaces an External ID or holds a new hire.
+_Avoid_: backup Payroll ID, secondary match key
 
 **Pre-existing employee**:
 A person who already has an EH employee record, created outside the sync (e.g. entered by hand and already paid), before the client's go-live. Each one is matched either by the Payroll ID the client copied into Connecteam, or through the Link list the admin confirms at setup. On their approval the sync only links them (setting their Payroll ID if EH doesn't already hold it) and writes nothing else. From then on they're a Linked employee. Anyone hired after go-live is not pre-existing.
@@ -96,8 +100,12 @@ The admin-channel message saying someone is a Held employee: which EH employees 
 The admin-channel line saying a Pre-existing employee is now a Linked employee, and that only their Payroll ID was set. Posted in place of the Admin success notice; the employee gets no Success message, since nothing new reached EH for them.
 _Avoid_: link confirmation, welcome
 
+**Can't-link alert**:
+An admin-channel message saying a link the admin confirmed in the link stage can't be made, why, and what to do. The person stays unlinked, and their Connecteam edits wait until they link. Posted once per person, EH employee and reason, then not again for a week unless the pair is confirmed again; the weekly status digest lists them as Broken meanwhile.
+_Avoid_: System alert (that's for failures nobody but the integrator can fix), Payroll ID alert
+
 **Bulk summary**:
-One admin-channel message counting the rest of a burst of Existing-match, Link or first-sync Admin success notices, in place of one each (ADR-0013). The first 3 of a kind within 10 minutes go out as usual; each notice after that is **rolled up**: claimed, but counted in the summary instead of sent. A count only, never names.
+One admin-channel message counting the rest of a burst of Existing-match, Link, Can't-link or first-sync Admin success notices, in place of one each (ADR-0013). The first 3 of a kind within 10 minutes go out as usual; each notice after that is **rolled up**: claimed, but counted in the summary instead of sent. A count only, never names.
 _Avoid_: digest (that's the weekly status digest), batch notice
 
 **In-scope fields**:
