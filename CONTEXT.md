@@ -97,7 +97,7 @@ _Avoid_: blocked employee, collision
 The admin-channel message saying someone is a Held employee: which EH employees they may be, and which details matched or disagreed. It never shows the values themselves. Distinct from a Manual-follow-up notice, which means EH needs something done by hand.
 
 **Link notice**:
-The admin-channel line saying a Pre-existing employee is now a Linked employee, and that only their Payroll ID was set. Posted in place of the Admin success notice; the employee gets no Success message, since nothing new reached EH for them.
+The admin-channel line saying a Pre-existing employee is now a Linked employee: their Payroll ID was set, and, by name only, what was sent from Connecteam because it changed since their Baseline ("Sent from Connecteam: Job title", ADR-0014). Posted in place of the Admin success notice. When nothing was sent, the employee gets no Success message.
 _Avoid_: link confirmation, welcome
 
 **Can't-link alert**:

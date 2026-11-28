@@ -63,6 +63,12 @@ export interface PendingLink {
   /** The EH employee to link to, or null for "New hire, not this person" (ADR-0010). */
   ehEmployeeId: string | null;
   confirmedAt: number;
+  /**
+   * The Baseline taken when the pair was confirmed (#230): every change after
+   * it is sent at the link. Null or absent for a pair confirmed before it was
+   * stored (or one that can't be read): the link takes its Baseline then.
+   */
+  baseline?: Baseline | null;
 }
 
 /** Values written back to `employee_map` after an attempt. */

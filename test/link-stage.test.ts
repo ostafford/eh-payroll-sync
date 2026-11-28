@@ -3,6 +3,12 @@ import type { ConnecteamUser } from "../src/connecteam/types.js";
 import type { LinkStageData } from "../scripts/lib/link-input.js";
 import type { LinkScreen } from "../scripts/lib/link-screen.js";
 import { runLinkStage, type LinkStageDeps } from "../scripts/lib/link-stage.js";
+import type { DifferingDetail } from "../scripts/lib/link-details.js";
+import { applyFieldMap } from "../src/mapping/apply.js";
+import type { FieldMap } from "../src/mapping/schema.js";
+import { changedUnits, newUnits, takeBaseline } from "../src/sync/baseline.js";
+import type { Baseline } from "../src/sync/gateway.js";
+import demoFieldMap from "./fixtures/demo-field-map.json" with { type: "json" };
 
 const ctUser = (userId: number, firstName: string, lastName: string, email: string): ConnecteamUser => ({
   userId,
@@ -161,5 +167,75 @@ describe("runLinkStage", () => {
     expect(out).toContain("Rehearsal: nothing written. It would save 2 links added or changed.");
     expect(out).toContain("INSERT INTO pending_link");
     expect(out).not.toContain("Saved");
+  });
+});
+
+describe("the Baseline, taken when a pair is confirmed (#230)", () => {
+  const KEY = "k-one";
+  const fieldMap = demoFieldMap as unknown as FieldMap;
+  /** Connecteam users whose pack maps a legal first name and surname. */
+  const withNames = (u: ConnecteamUser): ConnecteamUser => ({
+    ...u,
+    customFields: [
+      { customFieldId: 42920713, value: u.firstName, type: "str", name: "Legal First Name" },
+      { customFieldId: 42920714, value: u.lastName, type: "str", name: "Legal Surname" },
+    ],
+  });
+  const named = () => data({ ctUsers: data().ctUsers.map(withNames) });
+
+  /** The Baseline written for one person, read back out of the stage's SQL. */
+  function storedBaseline(sql: string, ctUserId: number): Baseline | null {
+    const row = new RegExp(`\\(${ctUserId}, [^,]+, \\d+, (NULL|'((?:[^']|'')*)')\\)`).exec(sql);
+    if (!row) throw new Error(`no row for ${ctUserId}`);
+    return row[1] === "NULL" ? null : (JSON.parse(row[2]!.replace(/''/g, "'")) as Baseline);
+  }
+  /** What the link would send against it, with the pack unchanged since (ADR-0009: new units aren't sent). */
+  async function sentAtLinkUnchanged(stored: Baseline, user: ConnecteamUser): Promise<string[]> {
+    const mapped = applyFieldMap(user, fieldMap);
+    const now = await takeBaseline(mapped.payload, fieldMap, KEY, mapped.issues.map((i) => i.ehField));
+    const fresh = new Set(newUnits(stored, now));
+    return changedUnits(stored, now).filter((u) => !fresh.has(u)).sort();
+  }
+
+  it("asks Keep EH's / Use Connecteam's only for the details that differ, and stores a Baseline that sends just the Use Connecteam's ones", async () => {
+    const chooseDetails = vi.fn(async (_who: string, details: readonly DifferingDetail[]) => details.map((d) => d.unit));
+    const s = stage(["<return>"], { load: async () => named(), baseline: { secret: KEY, fieldMap }, chooseDetails });
+    await s.run();
+
+    // Mia's EH surname is "Chen-Wong"; Jack's details all agree, so he isn't asked about.
+    expect(chooseDetails).toHaveBeenCalledTimes(1);
+    expect(chooseDetails).toHaveBeenCalledWith("Mia Chen", [{ unit: "surname", label: "Surname", fields: ["Surname"] }]);
+    const sql = s.execute.mock.calls[0]![0];
+    const [jack, mia] = named().ctUsers;
+    expect(await sentAtLinkUnchanged(storedBaseline(sql, 100)!, jack!)).toEqual([]);
+    expect(await sentAtLinkUnchanged(storedBaseline(sql, 101)!, mia!)).toEqual(["surname"]);
+  });
+
+  it("keeps EH's for every detail the admin doesn't pick", async () => {
+    const s = stage(["<return>"], { load: async () => named(), baseline: { secret: KEY, fieldMap }, chooseDetails: async () => [] });
+    await s.run();
+    const mia = named().ctUsers[1]!;
+    expect(await sentAtLinkUnchanged(storedBaseline(s.execute.mock.calls[0]![0], 101)!, mia)).toEqual([]);
+  });
+
+  it("gives a pair confirmed before Baselines were stored one on a re-run, and leaves a stored one alone", async () => {
+    const s = stage([], {
+      load: async () =>
+        data({
+          ...named(),
+          pendingLinks: [
+            { ctUserId: 100, ehEmployeeId: "40213", hasBaseline: false },
+            { ctUserId: 101, ehEmployeeId: "40377", hasBaseline: true },
+            { ctUserId: 102, ehEmployeeId: null, hasBaseline: false },
+          ],
+        }),
+      baseline: { secret: KEY, fieldMap },
+      chooseDetails: async () => [],
+    });
+    await s.run();
+    const sql = s.execute.mock.calls[0]![0];
+    expect(storedBaseline(sql, 100)).not.toBeNull();
+    expect(sql).not.toMatch(/\(101,/);
+    expect(sql).not.toMatch(/\(102,/);
   });
 });

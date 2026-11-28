@@ -825,7 +825,10 @@ gets one line about it. The cost: a Connecteam edit that hadn't synced before
 the change is absorbed into the new Baseline and never sent. Re-saving the
 same value won't send it either, since it now matches the Baseline. Ask anyone
 who edited their profile around then to check EH: fix it there by hand, or
-have the employee change the value and change it back.
+have the employee change the value and change it back. A pending link whose
+Baseline was taken under the old key takes a new one at its link instead
+(ADR-0014), so its edits since confirmation aren't sent: re-run the link
+stage to take them again.
 
 To rotate on purpose, first check nothing is waiting: `ops.queueBacklog` on
 `/health` is `0`. Then make a new key, replace the `BASELINE_KEY` line in
@@ -913,13 +916,23 @@ normal throughout.
    - **Can't link: already linked to someone else**: the EH match is already
      linked to a different Connecteam user. Fix it by hand with the admin.
 
+   On save, each confirmed pair's **Baseline** is taken (ADR-0014). For anyone
+   whose details differ between Connecteam and EH, the stage lists those
+   details by name and asks which to take from Connecteam: each keeps EH's
+   unless picked. A group (say Residential address) is one choice and goes
+   whole. Everything changed in Connecteam after this is sent at the link,
+   with the Link notice naming it. A pair confirmed before this existed has
+   no Baseline until the stage is re-run with it on the list.
+
    Anyone already approved but never synced (an old dead-letter, say) is
    linked by the sweep within a minute of saving, with no profile edit.
 3. **Release the held approvals:**
    1. **Canary.** Pick 3–5 people from the Link list. Snapshot their EH records
       (`npm run eh-diff -- snapshot <EH id>...`), have the admin approve them,
       wait for them to sync, then `npm run eh-diff -- diff`. It must exit `0`,
-      showing `externalId set` and nothing else. `GET /status` shows each
+      showing `externalId set` and nothing else, apart from details picked as
+      Connecteam's in step 2 or changed in Connecteam since (each named in
+      their Link notice). `GET /status` shows each
       `ready` with `linked: true`.
    2. **Everyone else at once.** The sweep paces approvals at 20 a minute
       (~180 people ≈ 9 minutes). After the first 3 Link notices, the rest are

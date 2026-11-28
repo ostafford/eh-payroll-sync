@@ -236,20 +236,25 @@ export class SyncStore implements SyncGateway, LinkGateway, RollupGateway {
       .from(pendingLink)
       .where(eq(pendingLink.ctUserId, ctUserId))
       .limit(1);
-    return row ?? null;
+    return row ? asPendingLink(row) : null;
   }
 
   async listPendingLinks(): Promise<PendingLink[]> {
-    return this.#db.select(pendingLinkColumns).from(pendingLink);
+    return (await this.#db.select(pendingLinkColumns).from(pendingLink)).map(asPendingLink);
   }
 
   async savePendingLink(link: PendingLink): Promise<void> {
     await this.#db
       .insert(pendingLink)
-      .values(link)
+      .values({ ...link, baseline: link.baseline ? JSON.stringify(link.baseline) : null })
       .onConflictDoUpdate({
         target: pendingLink.ctUserId,
-        set: { ehEmployeeId: link.ehEmployeeId, confirmedAt: link.confirmedAt, queuedAt: null },
+        set: {
+          ehEmployeeId: link.ehEmployeeId,
+          confirmedAt: link.confirmedAt,
+          queuedAt: null,
+          baseline: link.baseline ? JSON.stringify(link.baseline) : null,
+        },
       });
   }
 
@@ -419,7 +424,14 @@ const pendingLinkColumns = {
   ctUserId: pendingLink.ctUserId,
   ehEmployeeId: pendingLink.ehEmployeeId,
   confirmedAt: pendingLink.confirmedAt,
+  baseline: pendingLink.baseline,
 };
+
+/** A `pending_link` row with its Baseline read (#230): absent when none is stored, or it can't be read. */
+function asPendingLink({ baseline, ...row }: { ctUserId: number; ehEmployeeId: string | null; confirmedAt: number; baseline: string | null }): PendingLink {
+  const read = parseBaseline(baseline);
+  return read ? { ...row, baseline: read } : row;
+}
 
 const keepFirstExternalId = sql`coalesce(${employeeMap.externalId}, excluded.external_id)`;
 

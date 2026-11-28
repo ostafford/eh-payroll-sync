@@ -40,6 +40,8 @@ export interface LinkMapRow {
 export interface LinkPendingRow {
   ctUserId: number;
   ehEmployeeId: string | null;
+  /** False for a pair confirmed before Baselines were stored with it (#230): a re-run gives it one. */
+  hasBaseline?: boolean;
 }
 
 export interface LinkListInput {

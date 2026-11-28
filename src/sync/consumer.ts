@@ -75,6 +75,7 @@ import {
   type GroupUnit,
   type PayRunKey,
 } from "./baseline.js";
+import { unitLabel } from "./labels.js";
 import { logEvent } from "../log.js";
 import {
   noticeKey,
@@ -260,17 +261,29 @@ export async function runSyncJob(job: SyncJob, deps: SyncDeps): Promise<SyncJobO
   // Payroll ID is written; nothing else about them reaches EH.
   const pending = await deps.store.getPendingLink(ctUserId);
   if (pending?.ehEmployeeId && !hasSyncedBefore(link)) {
-    return linkOnApproval(deps, {
+    // One made under another BASELINE_KEY can't be compared: the link takes
+    // its Baseline now, as for a pair confirmed before they were stored (#230).
+    const confirmed = pending.baseline?.keyId === (await baselineKeyId(deps.baselineKey)) ? pending.baseline : null;
+    const linked = await linkOnApproval(deps, {
       person,
       link,
       ehEmployeeId: pending.ehEmployeeId,
       externalId: matchKey,
       payload: mapped.payload,
       unmapped: mapped.issues.map((i) => i.ehField),
+      confirmed,
       hash,
       eventTimestamp,
       now: now(),
     });
+    // Linked against the Baseline taken at confirmation (#230): what changed
+    // since goes now, through the changed-units sync. A retry after a crash
+    // here finds them linked and runs that sync itself.
+    if (linked.status !== "synced" || !confirmed) return linked;
+    const row = await deps.store.getEmployeeLink(ctUserId);
+    if (!row?.linkedAt) return linked;
+    const synced = await syncChangedUnits(deps, { link: row, user, person, mapped, payRate, matchKey, hash, eventTimestamp, now });
+    return synced.status === "skipped" ? linked : synced;
   }
 
   // A Payroll ID the client copied into Connecteam (ADR-0011): when it finds
@@ -761,6 +774,12 @@ async function linkOnApproval(
     unmapped: readonly string[];
     /** Keys that disagree with the EH record, named in the Link notice (a link by a copied Payroll ID). */
     differs?: readonly MatchKey[];
+    /**
+     * The Baseline taken when the pair was confirmed in the link stage
+     * (#230), or null for a pair confirmed before it was stored: then the
+     * Baseline is taken now, as before.
+     */
+    confirmed?: Baseline | null;
     hash: string;
     eventTimestamp: number;
     now: number;
@@ -769,7 +788,12 @@ async function linkOnApproval(
   const { person, ehEmployeeId, externalId } = linking;
   const { ctUserId } = person;
   // Before any write, so a missing key can't leave a link without a Baseline.
-  const baseline = await takeBaseline(linking.payload, deps.fieldMap, deps.baselineKey, linking.unmapped);
+  const now = await takeBaseline(linking.payload, deps.fieldMap, deps.baselineKey, linking.unmapped);
+  const baseline = linking.confirmed ?? now;
+  // What the changed-units sync right after the link sends (#230), named in
+  // the Link notice: changed since confirmation, less units new to the
+  // Baseline, cleared ones and ones with a mapping issue (none of them sent).
+  const toSend = linking.confirmed ? unitsToSend(linking.confirmed, now, linking.unmapped) : [];
 
   const other = await deps.store.findByEhEmployeeId(ehEmployeeId);
   if (other !== null && other !== ctUserId) {
@@ -811,7 +835,10 @@ async function linkOnApproval(
   if (await shouldPostNotice(deps.store, key, CORRECTION_NOTICE_DEDUPE_MS, linking.now)) {
     if (!rollUp) {
       const sent = await sendClaimed(deps.store, key, ctUserId, "link", () =>
-        deps.ct.sendChannelMessage(deps.adminChannelId, linkNoticeMessage(person, ehEmployeeId, weSetIt, linking.differs)),
+        deps.ct.sendChannelMessage(
+          deps.adminChannelId,
+          linkNoticeMessage(person, ehEmployeeId, weSetIt, linking.differs, toSend.map(unitLabel)),
+        ),
       );
       if (!sent) return sendFailed("link");
     }
@@ -826,6 +853,10 @@ async function linkOnApproval(
       lastPayloadHash: linking.hash,
       lastOutcome: "ok",
       externalId,
+      // With a Baseline from confirmation the changed-units sync follows, and
+      // stores the hash and event time itself: either stored now would stop
+      // its retry (as identical, or as stale) before it sent anything.
+      ...(linking.confirmed ? { lastPayloadHash: null, lastSyncedTs: null } : {}),
     },
     linking.now,
     baseline,
@@ -1014,6 +1045,17 @@ export const KEY_CHANGED_DETAIL = "Baseline key changed: re-baselined, nothing s
 
 /** The `skipped` reason when a Linked employee's only change was units new to the field map (#152). */
 export const NEW_UNITS_DETAIL = "new in the field map: baselined, nothing sent";
+
+/**
+ * The units a Linked employee's sync would send from `before` to `now`
+ * (ADR-0009): changed ones, less those new to `before` (baselined, not sent),
+ * those now cleared (a follow-up, not sent) and those with a mapping issue
+ * (a Correction). The pay-run set is never new here once in `before`.
+ */
+function unitsToSend(before: Baseline, now: Baseline, unmapped: readonly string[]): string[] {
+  const skipped = new Set([...newUnits(before, now), ...Object.keys(clearedFields(before, now)), ...unmapped.map(unitOf)]);
+  return changedUnits(before, now).filter((u) => !skipped.has(u));
+}
 
 /** `before` with `units` taken from `now`, fingerprint and filled fields both. A unit now blank keeps an empty `filled` entry. */
 function moveUnits(before: Baseline, now: Baseline, units: readonly string[]): Baseline {

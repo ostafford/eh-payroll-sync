@@ -39,6 +39,8 @@ export const pendingLink = sqliteTable("pending_link", {
   confirmedAt: integer("confirmed_at").notNull(),
   /** When the sweep queued this person for the link (#155); cleared when the link is confirmed again. */
   queuedAt: integer("queued_at"),
+  /** The Baseline taken at confirmation (#230), as `employee_map.baseline`. NULL before it existed, and for a new hire. */
+  baseline: text("baseline"),
 });
 
 /** Last-seen state of each onboarding-pack assignment, for the approval sweep diff. */
