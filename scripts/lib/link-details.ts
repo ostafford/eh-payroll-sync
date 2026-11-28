@@ -16,6 +16,7 @@
 import { UNIT, unitsOf } from "../../src/sync/baseline.js";
 import { fieldLabel, groupLabel } from "../../src/sync/labels.js";
 import type { FieldMap } from "../../src/mapping/schema.js";
+import { phoneAu } from "../../src/mapping/transforms.js";
 
 export interface DifferingDetail {
   /** The unit the choice is for: a group's name, or the EH field's own. */
@@ -34,8 +35,16 @@ function comparable(v: unknown): string {
   return ISO_DATE.test(s.toUpperCase()) ? s.slice(0, 10) : s;
 }
 
-/** A field's value as EH's bulk list holds it (#232), so a format-only difference compares equal. */
-type Form = (v: unknown) => string;
+/** One value put in the form EH's bulk list holds it in (#232), so a format-only difference compares equal. */
+type Normalise = (v: unknown) => string;
+
+/** Whether a mapped Connecteam value and EH's differ; `false` too when the two can't be compared reliably. */
+type Differs = (ct: unknown, eh: unknown) => boolean;
+
+const byForm =
+  (normalise: Normalise): Differs =>
+  (ct, eh) =>
+    normalise(ct) !== normalise(eh);
 
 /**
  * Country names EH's bulk list holds for the codes Connecteam sends. Only
@@ -45,61 +54,75 @@ const COUNTRY_NAME: Record<string, string> = { au: "australia", aus: "australia"
 const COUNTRY_CODE = /^[a-z]{2,3}$/;
 
 /**
- * Whether two countries differ, or `false` when they can't be compared: a
- * code against a name, with the code not in {@link COUNTRY_NAME} (`NZ`
- * against `New Zealand`, or EH's `UK` against `United Kingdom`). Leaving
- * one out keeps EH's, the default, so nothing wrong is sent. Two codes, two
- * names, or a country against none compare as they are.
+ * Two codes, two names, or a country against none compare as they are. A
+ * code against a name is compared only when one side is Australia, the one
+ * name with known codes: `NZ` against `Australia` differs. Any other pair
+ * (`NZ` against `New Zealand`, or EH's `UK` against `United Kingdom`) can't
+ * be compared, so it's left out: Keep EH's is the default, so nothing wrong
+ * is sent.
  */
-function countryDiffers(ct: unknown, eh: unknown): boolean {
+const countryDiffers: Differs = (ct, eh) => {
   const named = (v: unknown) => COUNTRY_NAME[comparable(v)] ?? comparable(v);
   const [a, b] = [named(ct), named(eh)];
   if (a === "" || b === "" || COUNTRY_CODE.test(a) === COUNTRY_CODE.test(b)) return a !== b;
-  return false;
-}
+  return a === "australia" || b === "australia";
+};
 
 /**
- * A phone number as digits, an Australian one from 0: Connecteam sends
- * `+61…`, EH's list holds that, `61…`, or the local form it was typed in,
- * spaced or not. A `(0)` after the country code is dropped, as dialled.
+ * A phone number in the form the field map sends a mobile in: `phoneAu`'s
+ * `+61…`, so both mean the same by "the same AU number". EH's list holds that,
+ * `61…`, or the local form it was typed in, spaced or not. A `(0)` after the
+ * country code is dropped, as dialled, whether typed in or left in by
+ * `phoneAu`. A number `phoneAu` can't read (an overseas one without its `+`,
+ * or in its local form) is compared as digits, so it may still be listed.
  */
-const phone: Form = (v) => {
-  const s = comparable(v).replace(/\(0\)/g, "");
-  const digits = s.replace(/\D/g, "");
-  const au = digits.match(/^(?:0061|61)(\d{9})$/);
-  if (au && (s.startsWith("+") || digits.startsWith("00") || digits.length === 11)) return `0${au[1]}`;
-  return s.startsWith("+") ? `+${digits}` : digits;
+const phone: Normalise = (v) => {
+  const s = comparable(v).replace(/\(0\)/g, "").replace(/^00/, "+");
+  try {
+    return phoneAu(s).replace(/^\+610(?=\d{9}$)/, "+61");
+  } catch {
+    return s.replace(/\D/g, "");
+  }
 };
 
 /** Spaces aside: Connecteam's `FullTime` is EH's `Full Time`. */
-const unspaced: Form = (v) => comparable(v).replace(/ /g, "");
+const unspaced: Normalise = (v) => comparable(v).replace(/ /g, "");
 
 /**
- * A number EH's list holds bare (BSB, account number, USI), so spaces and
- * dashes are formatting: Connecteam's USI comes spaced in groups.
+ * A number EH's list holds without separators (BSB, account number, USI):
+ * spaces and dashes are formatting. Connecteam's USI comes spaced in groups.
  */
-const bare: Form = (v) => comparable(v).replace(/[\s-]/g, "");
+const unseparated: Normalise = (v) => comparable(v).replace(/[\s-]/g, "");
 
 /** A BSB is six digits: one returned as a number has lost its leading zeros. */
-const bsb: Form = (v) => (typeof v === "number" ? String(v).padStart(6, "0") : bare(v));
+const bsb: Normalise = (v) => (typeof v === "number" ? String(v).padStart(6, "0") : unseparated(v));
+
+/**
+ * An account number's length varies, so one returned as a number can't get
+ * its leading zeros back: compare both without them. Two strings compare in full.
+ */
+const accountNumberDiffers: Differs = (ct, eh) => {
+  const [a, b] = [unseparated(ct), unseparated(eh)];
+  if (typeof ct !== "number" && typeof eh !== "number") return a !== b;
+  return a.replace(/^0+/, "") !== b.replace(/^0+/, "");
+};
 
 /** The fields EH returns in its own form; any other is compared with {@link comparable}. */
-const FORM: Record<string, Form> = {
-  mobilePhone: phone,
-  homePhone: phone,
-  emergencyContact1_ContactNumber: phone,
-  employmentType: unspaced,
-  bankAccount1_BSB: bsb,
-  bankAccount1_AccountNumber: bare,
-  superFund1_ProductCode: bare,
+const DIFFERS: Record<string, Differs> = {
+  residentialCountry: countryDiffers,
+  mobilePhone: byForm(phone),
+  homePhone: byForm(phone),
+  emergencyContact1_ContactNumber: byForm(phone),
+  employmentType: byForm(unspaced),
+  bankAccount1_BSB: byForm(bsb),
+  bankAccount1_AccountNumber: accountNumberDiffers,
+  superFund1_ProductCode: byForm(unseparated),
 };
 
 function differs(field: string, ct: unknown, eh: unknown): boolean {
   // An object or array has no text form to compare: left out, not listed.
   if ((typeof ct === "object" && ct !== null) || (typeof eh === "object" && eh !== null)) return false;
-  if (field === "residentialCountry") return countryDiffers(ct, eh);
-  const form = FORM[field] ?? comparable;
-  return form(ct) !== form(eh);
+  return (DIFFERS[field] ?? byForm(comparable))(ct, eh);
 }
 
 export function differingDetails(
