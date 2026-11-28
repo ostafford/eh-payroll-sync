@@ -129,7 +129,7 @@ export function norm(s: string | null): string {
  * trailing space are ignored, but a leading space or zero counts (tested on
  * the demo account, 2026-11-11). The sync asks with a trimmed value.
  */
-function payrollIdKey(id: string): string {
+export function payrollIdKey(id: string): string {
   return id.replace(/\s+$/, "").toLowerCase();
 }
 
@@ -155,6 +155,31 @@ function byId(id: string | null, eh: readonly PreflightEhEmployee[]): PreflightM
  * Payroll ID. Each holds the link and posts a System alert.
  */
 export type LinkBlock = "linked-in-sync" | "payroll-id-elsewhere" | "not-found" | "different-payroll-id";
+
+/**
+ * What the link step would refuse, linking `ctUserId` to the EH employee
+ * `target` under `payrollId` (as written, trimmed), or null. `ownerOf` is
+ * who `employee_map` gives each EH employee to. Shared with the link stage,
+ * so a saved link it lists as blocked is one this check predicts (#225).
+ */
+export function linkBlockOf(args: {
+  ctUserId: number;
+  target: string;
+  payrollId: string;
+  eh: readonly { id: number | string; externalId?: unknown }[];
+  ownerOf: ReadonlyMap<string, number>;
+}): LinkBlock | null {
+  const { ctUserId, target, payrollId, eh, ownerOf } = args;
+  const owner = ownerOf.get(target);
+  if (owner !== undefined && owner !== ctUserId) return "linked-in-sync";
+  const holders = eh.filter((e) => typeof e.externalId === "string" && payrollIdKey(e.externalId) === payrollIdKey(payrollId));
+  if (holders.some((e) => String(e.id) !== target)) return "payroll-id-elsewhere";
+  if (holders.length > 0) return null; // the target already carries it
+  const record = eh.find((e) => String(e.id) === target);
+  if (!record) return "not-found";
+  const theirs = typeof record.externalId === "string" ? record.externalId.trim() : "";
+  return theirs && theirs !== payrollId ? "different-payroll-id" : null;
+}
 
 /** One person on their way through {@link classifyAll}. */
 interface PersonContext {
@@ -187,17 +212,8 @@ export function classifyAll(
     return owner !== undefined && owner !== ctUserId;
   };
 
-  /** What the link step would refuse, linking `ctUserId` to `target` under `payrollId`, or null. */
-  const linkBlock = (ctUserId: number, target: string, payrollId: string): LinkBlock | null => {
-    if (othersRecord(target, ctUserId)) return "linked-in-sync";
-    const holders = eh.filter((e) => externalIdOf(e) === payrollIdKey(payrollId));
-    if (holders.some((e) => String(e.id) !== target)) return "payroll-id-elsewhere";
-    if (holders.length > 0) return null; // the target already carries it
-    const record = eh.find((e) => String(e.id) === target);
-    if (!record) return "not-found";
-    const theirs = typeof record.externalId === "string" ? record.externalId.trim() : "";
-    return theirs && theirs !== payrollId ? "different-payroll-id" : null;
-  };
+  const linkBlock = (ctUserId: number, target: string, payrollId: string): LinkBlock | null =>
+    linkBlockOf({ ctUserId, target, payrollId, eh, ownerOf });
 
   const contexts = people.map((p): PersonContext => {
     const base: PreflightRow = { ctUserId: p.ctUserId, outcome: "not-found", eh: [], hits: [], newHire: false, waitsForDetails: false };

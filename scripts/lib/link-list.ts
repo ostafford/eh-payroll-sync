@@ -6,7 +6,7 @@
  */
 import type { OnboardingAssignment } from "../../src/connecteam/types.js";
 import { isTerminated } from "../../src/sync/precheck.js";
-import { norm } from "./preflight.js";
+import { linkBlockOf, norm, type LinkBlock } from "./preflight.js";
 
 export interface LinkCtUser {
   ctUserId: number;
@@ -42,6 +42,8 @@ export interface LinkPendingRow {
   ehEmployeeId: string | null;
   /** False for a pair confirmed before Baselines were stored with it (#230): a re-run gives it one. */
   hasBaseline?: boolean;
+  /** When the admin confirmed it, epoch ms. */
+  confirmedAt?: number;
 }
 
 export interface LinkListInput {
@@ -90,6 +92,10 @@ export interface LinkRow {
   /** A Held employee also offers "New hire, not this person". */
   newHireChoice?: true;
   pack: PackStatus;
+  /** A saved link the link step would refuse at approval, by preflight's own check (#225). */
+  wouldBlock?: LinkBlock;
+  /** A Link-list row: whether its Baseline was taken when it was confirmed (#230), and when that was. */
+  saved?: { hasBaseline: boolean; confirmedAt?: number };
 }
 
 export interface LinkList {
@@ -140,6 +146,7 @@ interface Index {
   ctByEhId: Map<string, number>;
   held: Set<number>;
   onLinkList: Map<number, string | null>;
+  pending: Map<number, LinkPendingRow>;
 }
 
 function indexInput(input: LinkListInput): Index {
@@ -172,6 +179,7 @@ function indexInput(input: LinkListInput): Index {
     ctByEhId: new Map(input.employeeMap.flatMap((m) => (m.ehEmployeeId ? [[m.ehEmployeeId, m.ctUserId] as const] : []))),
     held: new Set(input.employeeMap.filter((m) => m.lastOutcome === "existing_match").map((m) => m.ctUserId)),
     onLinkList: new Map(input.pendingLinks.map((p) => [p.ctUserId, p.ehEmployeeId])),
+    pending: new Map(input.pendingLinks.map((p) => [p.ctUserId, p])),
   };
 }
 
@@ -232,7 +240,11 @@ function classify(ix: Index, u: LinkCtUser): Omit<LinkRow, "pack"> {
   const { ctUserId } = u;
   if (ix.onLinkList.has(ctUserId)) {
     const id = ix.onLinkList.get(ctUserId) ?? null;
-    return { ctUserId, kind: "onLinkList", suggestion: id, candidates: id ? [recheck(ix, id, ctUserId)] : [] };
+    const p = ix.pending.get(ctUserId)!;
+    const saved = { hasBaseline: p.hasBaseline === true, ...(p.confirmedAt === undefined ? {} : { confirmedAt: p.confirmedAt }) };
+    const row = { ctUserId, kind: "onLinkList" as const, suggestion: id, candidates: id ? [recheck(ix, id, ctUserId)] : [], saved };
+    const wouldBlock = id && linkBlockOf({ ctUserId, target: id, payrollId: u.payrollId.trim(), eh: ix.input.ehEmployees, ownerOf: ix.ctByEhId });
+    return wouldBlock ? { ...row, wouldBlock } : row;
   }
   if (ix.held.has(ctUserId)) {
     const candidates = (ix.input.heldCandidates.get(ctUserId) ?? []).map((id) => recheck(ix, id, ctUserId));

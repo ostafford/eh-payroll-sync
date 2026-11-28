@@ -916,13 +916,28 @@ normal throughout.
    - **Can't link: already linked to someone else**: the EH match is already
      linked to a different Connecteam user. Fix it by hand with the admin.
 
-   On save, each confirmed pair's **Baseline** is taken (ADR-0014). For anyone
-   whose details differ between Connecteam and EH, the stage lists those
-   details by name and asks which to take from Connecteam: each keeps EH's
-   unless picked. A group (say Residential address) is one choice and goes
-   whole. Everything changed in Connecteam after this is sent at the link,
-   with the Link notice naming it. A pair confirmed before this existed has
-   no Baseline until the stage is re-run with it on the list.
+   **Enter** or **`e`** on a linked pair opens its **Edit** pop-up: its EH
+   External ID, and each detail that differs between Connecteam and EH, by
+   name only, with **Keep EH's** (picked to start) / **Use Connecteam's**. A
+   group (say Residential address) is one choice and goes whole. Enter on a
+   row not yet linked links it, then opens Edit if the pair has details to
+   choose. Esc goes back with the picks kept; nothing is saved until **Save
+   these links?**, which counts what the save does, people held at approval
+   included.
+
+   On save, each confirmed pair's **Baseline** is taken with those picks
+   (ADR-0014). Everything changed in Connecteam after this is sent at the
+   link, with the Link notice naming it.
+
+   **Re-running it** (`npm run link` runs the stage on its own): **To review**
+   lists only the rows needing a decision, and the Status column says why:
+   not linked yet, a saved link that would be blocked at approval, an EH
+   External ID that doesn't match, or details that differ with no choice
+   made. Tab shows everyone. A stored Baseline is kept; picking in a pair's
+   Edit pop-up takes it again, so changes since it was confirmed are decided
+   there instead of sent. A pair saved before Baselines existed gets one on
+   save (Keep EH's unless picked), counted as **re-confirmed**. stderr shows
+   how long each load step took.
 
    Anyone already approved but never synced (an old dead-letter, say) is
    linked by the sweep within a minute of saving, with no profile edit.
