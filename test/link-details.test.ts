@@ -182,6 +182,12 @@ describe("differingDetails against EH's real formats (#232)", () => {
   it("reads a country code typed in brackets as written, so it's compared against an overseas number", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "(+61) 400 000 001" })).toEqual([]);
     expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "(+61) 400 000 001" })).toEqual(mobile);
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "(61) 400 000 001" })).toEqual(mobile);
+  });
+
+  it("leaves out another country's code typed in brackets with its trunk 0, which phoneAu can't settle", () => {
+    expect(detailsAgainst({ mobilePhone: "+64 21 123 4567" }, { mobilePhone: "(+64) 021 123 4567" })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "(+44)(0)20 7946 0000" })).toEqual([]);
   });
 
   it("doesn't list a number typed with (0), on either side", () => {

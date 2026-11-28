@@ -102,8 +102,10 @@ type ReadPhone = { kind: "read"; e164: string; origin: "au" | "overseas" | "loca
  * `phoneAu` doesn't settle are put right here, for comparing only (what's
  * sent is unchanged): Australia's international dial-out prefixes (`0011`,
  * and `0014`/`15`/`18`/`19` through a chosen carrier) and `0061` (spaced or
- * not), a country code typed in brackets (`(+61)`), and Australia's trunk 0
- * after `+61`, typed as `(0)` or not. Another country's
+ * not), Australia's code typed in brackets (`(+61)`, `(61)`), and its trunk
+ * 0 after `+61`, typed as `(0)` or not. Another country's code in brackets
+ * is left as typed: `phoneAu` can't read it, so it's left out rather than
+ * compared with its trunk 0 kept (`(+64) 021 …`). Another country's
  * `(0)` is kept, as Italy dials it. Unreadable when `phoneAu` doesn't take
  * it (13, 1300 and 1800 numbers among them).
  */
@@ -111,7 +113,7 @@ function readPhone(v: unknown): ReadPhone {
   const written = comparable(v)
     .replace(/^001[14589][\s-]*/, "+")
     .replace(/^00[\s-]*61/, "+61")
-    .replace(/^\(\+(\d{1,3})\)/, "+$1")
+    .replace(/^\(\+?61\)/, "+61")
     .replace(/^\+61[\s-]*\(0\)/, "+61");
   let e164: string;
   try {
