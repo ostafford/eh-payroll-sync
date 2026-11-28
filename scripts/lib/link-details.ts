@@ -16,7 +16,7 @@
 import { UNIT, unitsOf } from "../../src/sync/baseline.js";
 import { fieldLabel, groupLabel } from "../../src/sync/labels.js";
 import type { FieldMap } from "../../src/mapping/schema.js";
-import { readPhoneAu } from "../../src/mapping/transforms.js";
+import { readPhoneAu, type PhoneReading } from "../../src/mapping/transforms.js";
 
 export interface DifferingDetail {
   /** The unit the choice is for: a group's name, or the EH field's own. */
@@ -91,7 +91,8 @@ const countryDiffers: Comparer = (ct, eh) => {
 
 /**
  * A phone number as `phoneAu` reads it, and where its country came from:
- * written as `+61` / `61` (`au`), as another `+` code (`overseas`), or not
+ * written as `+61` / `61` or Australia's dial-out prefix before it (`au`), as
+ * another `+` code or a dial-out prefix before one (`overseas`), or not
  * written at all (`local`, read as Australian).
  */
 type ReadPhone = { kind: "read"; e164: string; origin: "au" | "overseas" | "local" } | { kind: "unreadable" };
@@ -107,7 +108,7 @@ type ReadPhone = { kind: "read"; e164: string; origin: "au" | "overseas" | "loca
  * numbers, and a `00…` number that isn't a dial-out prefix, among them).
  */
 function readPhone(v: unknown): ReadPhone {
-  let read: { e164: string; local: boolean };
+  let read: PhoneReading;
   try {
     read = readPhoneAu(comparable(v));
   } catch {

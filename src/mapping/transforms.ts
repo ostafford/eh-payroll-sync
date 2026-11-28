@@ -1,5 +1,7 @@
 /**
  * Pure value transforms: Connecteam field value -> Employment Hero-ready value.
+ * Also {@link readPhoneAu}, the reading {@link phoneAu} is built on, exported
+ * so the link stage's compare reads a number exactly as it's sent.
  *
  * Every function is total and side-effect free. On input it cannot make sense of
  * it throws {@link TransformError} with a human-readable reason and no field
@@ -134,27 +136,35 @@ export function phoneAu(v: unknown): string {
   return readPhoneAu(v).e164;
 }
 
+/** What {@link readPhoneAu} reads a phone number as. */
+export interface PhoneReading {
+  /** The number as {@link phoneAu} sends it. */
+  e164: string;
+  /** No country was written, so it was read as Australian. */
+  local: boolean;
+}
+
 /**
  * A phone number as {@link phoneAu} reads it, and whether a country was
  * written (`+`, `61`, or a dial-out prefix) or not (`local`, read as
  * Australian). The link stage's compare needs the second: `021 …` read as
  * Australian may be the same number as an overseas one.
  */
-export function readPhoneAu(v: unknown): { e164: string; local: boolean } {
+export function readPhoneAu(v: unknown): PhoneReading {
   const raw = asString(v).trim();
   const allDigits = raw.replace(/[^\d]/g, "");
-  const prefix = dialOutPrefix(raw);
-  const hasPlus = raw.startsWith("+") || prefix > 0;
-  const stripped = allDigits.slice(prefix);
+  const prefixLength = dialOutPrefixLength(raw);
+  const countryWritten = raw.startsWith("+") || prefixLength > 0;
+  const stripped = allDigits.slice(prefixLength);
   if (stripped.length < 6) {
     throw new TransformError(`"${raw}" does not look like a phone number`);
   }
-  if (!hasPlus && stripped.startsWith("00")) {
+  if (!countryWritten && stripped.startsWith("00")) {
     // No Australian number starts 00, so it's a dial-out prefix mistyped
     // (`001 44 …`) or another country's: which number it means is a guess.
     throw new TransformError(`"${raw}" starts 00 but not with Australia's dial-out prefix (0011) or 0061`);
   }
-  if (hasPlus || stripped.startsWith("61")) return { e164: withoutAuTrunkZero(`+${stripped}`), local: false };
+  if (countryWritten || stripped.startsWith("61")) return { e164: withoutAuTrunkZero(`+${stripped}`), local: false };
   if (stripped.startsWith("0")) return { e164: `+61${stripped.slice(1)}`, local: true };
   throw new TransformError(`"${raw}" is not a recognisable Australian or international number`);
 }
@@ -166,7 +176,7 @@ export function readPhoneAu(v: unknown): { e164: string; local: boolean } {
  * code). Read as written, so `001 44 …` isn't taken as 0014 with a space
  * moved. Brackets around it are allowed (`(0011) 44 …`, `00 (61) …`).
  */
-function dialOutPrefix(raw: string): number {
+function dialOutPrefixLength(raw: string): number {
   if (/^\(?001[14589]/.test(raw)) return 4;
   if (/^\(?00[\s-]*\(?61/.test(raw)) return 2;
   return 0;
