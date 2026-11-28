@@ -135,8 +135,8 @@ export function phoneAu(v: unknown): string {
   // Nor is Australia's trunk 0 after +61: "+61 04…" is "+614…" too.
   const raw = asString(v)
     .trim()
-    .replace(/^(\+\d{1,3})\s*\(0\)\s*/, "$1")
-    .replace(/^\+61\s*0(?=[\d\s]{9,}$)/, "+61");
+    .replace(/^(\+\d{1,3})[\s-]*\(0\)[\s-]*/, "$1")
+    .replace(/^\+61[\s-]*0(?=[\d\s-]{9,}$)/, "+61");
   const hasPlus = raw.startsWith("+");
   const stripped = raw.replace(/[^\d]/g, "");
   if (stripped.length < 6) {

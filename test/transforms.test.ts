@@ -115,6 +115,11 @@ describe("phoneAu", () => {
     expect(phoneAu("+610411687336")).toBe("+61411687336");
     expect(phoneAu("+61 0411 687 336")).toBe("+61411687336");
   });
+  it("drops a (0) or trunk 0 written with dashes", () => {
+    expect(phoneAu("+61 0411-687-336")).toBe("+61411687336");
+    expect(phoneAu("+61-0411687336")).toBe("+61411687336");
+    expect(phoneAu("+61-(0)411-687-336")).toBe("+61411687336");
+  });
   it("keeps a well-formed non-AU international number as-is", () => {
     expect(phoneAu("+1 415 555 0100")).toBe("+14155550100");
   });
