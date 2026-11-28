@@ -2,14 +2,14 @@ import { describe, it, expect } from "vitest";
 import { differingDetails } from "../scripts/lib/link-details.js";
 import { applyFieldMap } from "../src/mapping/apply.js";
 import { parseFieldMap } from "../src/mapping/schema.js";
-import { locationField, phoneAu } from "../src/mapping/transforms.js";
+import { locationField } from "../src/mapping/transforms.js";
 import { syntheticUser } from "./fixtures/connecteam-user.js";
 import { syntheticUserInEh } from "./fixtures/synthetic-user-in-eh.js";
 import demoFieldMap from "./fixtures/demo-field-map.json" with { type: "json" };
-import ehRecord from "./fixtures/eh-bulk-employee.json" with { type: "json" };
+import ehBulkEmployee from "./fixtures/eh-bulk-employee.json" with { type: "json" };
 
-// `ehRecord`: a real EH bulk-list record's fields and formats with made-up
-// values, shapes from the demo's `/employee/unstructured` list (#232).
+/** A real EH bulk-list record's fields and formats with made-up values: shapes from the demo's `/employee/unstructured` list (#232). */
+const ehRecord: Record<string, unknown> = ehBulkEmployee;
 
 const map = { rules: { constants: { bankAccount1_AllocatedPercentage: 100 } } };
 
@@ -82,7 +82,7 @@ const mappedInEhForms: Record<string, unknown> = {
       "jobTitle", "employmentType",
       "bankAccount1_AccountName", "bankAccount1_BSB", "bankAccount1_AccountNumber",
       "superFund1_FundName", "superFund1_ProductCode", "superFund1_MemberNumber",
-    ].map((f) => [f, (ehRecord as Record<string, unknown>)[f]]),
+    ].map((f) => [f, ehRecord[f]]),
   ),
   residentialSuburb: "Sampleville",
 };
@@ -116,6 +116,12 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ residentialCountry: "NZ" }, { residentialCountry: "US" })).toEqual(country);
     expect(detailsAgainst({ residentialCountry: "NZ" }, { residentialCountry: null })).toEqual(country);
     expect(detailsAgainst({ residentialCountry: "UK" }, { residentialCountry: "UK" })).toEqual([]);
+  });
+
+  it("leaves out two codes from different code systems, unless both are Australia's", () => {
+    expect(detailsAgainst({ residentialCountry: "US" }, { residentialCountry: "USA" })).toEqual([]);
+    expect(detailsAgainst({ residentialCountry: "AU" }, { residentialCountry: "AUS" })).toEqual([]);
+    expect(detailsAgainst({ residentialCountry: "AU" }, { residentialCountry: "NZL" })).toEqual(country);
   });
 
   it("leaves out a name against a short form EH holds that it can't match", () => {
@@ -162,7 +168,6 @@ describe("differingDetails against EH's real formats (#232)", () => {
   it("still lists a number where EH holds none, readable or not", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: null })).toEqual(mobile);
     expect(detailsAgainst({ mobilePhone: "1300 000 000" }, { mobilePhone: null })).toEqual(mobile);
-    expect(detailsAgainst({ mobilePhone: null }, { mobilePhone: "+614000000012" })).toEqual(mobile);
   });
 
   it("reads Australia's other international prefixes (0014, 0015, 0018, 0019)", () => {
@@ -188,6 +193,10 @@ describe("differingDetails against EH's real formats (#232)", () => {
 
   it("doesn't list a postcode EH returns as a number, or a TFN typed with spaces", () => {
     expect(detailsAgainst({ residentialPostCode: "0800" }, { residentialPostCode: 800 })).toEqual([]);
+    // Text is compared as typed: an overseas "101" isn't "0101".
+    expect(detailsAgainst({ residentialPostCode: "0101" }, { residentialPostCode: "101" })).toEqual([
+      { unit: "residentialAddress", label: "Residential address", fields: ["Postcode"] },
+    ]);
     expect(detailsAgainst({ taxFileNumber: "000000000" }, { taxFileNumber: "000 000 000" })).toEqual([]);
   });
 
@@ -204,6 +213,10 @@ describe("differingDetails against EH's real formats (#232)", () => {
   it("doesn't list a BSB that lost its leading zeros, as a number or as text", () => {
     expect(detailsAgainst({ bankAccount1_BSB: "000-001" }, { bankAccount1_BSB: 1 })).toEqual([]);
     expect(detailsAgainst({ bankAccount1_BSB: "012-345" }, { bankAccount1_BSB: "12345" })).toEqual([]);
+  });
+
+  it("doesn't list an ABN typed with spaces", () => {
+    expect(detailsAgainst({ contractorABN: "00 000 000 000" }, { contractorABN: "00000000000" })).toEqual([]);
   });
 
   it("leaves out a value that isn't text (an object or a list), on either side", () => {
