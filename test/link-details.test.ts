@@ -174,8 +174,14 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "0400 000 00" })).toEqual(mobile);
   });
 
-  it("reads 0061 as +61", () => {
+  it("reads 0061 as +61, spaced or not", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "0061 400 000 001" })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "00 61 400 000 001" })).toEqual([]);
+  });
+
+  it("reads a country code typed in brackets as written, so it's compared against an overseas number", () => {
+    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "(+61) 400 000 001" })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "(+61) 400 000 001" })).toEqual(mobile);
   });
 
   it("doesn't list a number typed with (0), on either side", () => {
@@ -219,32 +225,12 @@ describe("differingDetails against EH's real formats (#232)", () => {
     ).toEqual([]);
   });
 
-  // Defensive: the demo's EH list returns these as text; a JSON number was never seen.
-  it("doesn't list a postcode EH returns as a number, or a TFN typed with spaces", () => {
-    expect(detailsAgainst({ residentialPostCode: "0800" }, { residentialPostCode: 800 })).toEqual([]);
-    // Text is compared as typed: an overseas "101" isn't "0101".
-    expect(detailsAgainst({ residentialPostCode: "0101" }, { residentialPostCode: "101" })).toEqual(residentialAddress("Postcode"));
-    expect(detailsAgainst({ taxFileNumber: "000000000" }, { taxFileNumber: "000 000 000" })).toEqual([]);
-  });
-
   it("doesn't list an overseas number that differs only in spacing", () => {
     expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "+442079460000" })).toEqual([]);
   });
 
-  // Defensive: the demo's EH list returns these as text; a JSON number was never seen.
-  it("doesn't list an account number EH returns as a number", () => {
-    expect(detailsAgainst({ bankAccount1_AccountNumber: "00123456" }, { bankAccount1_AccountNumber: 123456 })).toEqual([]);
-    expect(detailsAgainst({ bankAccount1_AccountNumber: "00123457" }, { bankAccount1_AccountNumber: 123456 })).toEqual(bankAccount("Account number"));
-    expect(detailsAgainst({ bankAccount1_AccountNumber: null }, { bankAccount1_AccountNumber: 0 })).toEqual(bankAccount("Account number"));
-  });
-
-  // Defensive: the demo's EH list returns these as text; a JSON number was never seen.
-  it("doesn't list a BSB that lost its leading zeros, as a number or as text", () => {
-    expect(detailsAgainst({ bankAccount1_BSB: "000-001" }, { bankAccount1_BSB: 1 })).toEqual([]);
-    expect(detailsAgainst({ bankAccount1_BSB: "012-345" }, { bankAccount1_BSB: "12345" })).toEqual([]);
-  });
-
-  it("doesn't list an ABN typed with spaces", () => {
+  it("doesn't list a TFN or ABN typed with spaces", () => {
+    expect(detailsAgainst({ taxFileNumber: "000000000" }, { taxFileNumber: "000 000 000" })).toEqual([]);
     expect(detailsAgainst({ contractorABN: "00 000 000 000" }, { contractorABN: "00000000000" })).toEqual([]);
   });
 
@@ -305,5 +291,25 @@ describe("differingDetails against EH's real formats (#232)", () => {
 
   it("still lists a phone number that is different", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000009" })).toEqual(mobile);
+  });
+
+  // The demo's EH list returns all of these as text: a JSON number was never seen.
+  describe("defensive: EH returning a number", () => {
+    it("doesn't list a postcode EH returns as a number", () => {
+      expect(detailsAgainst({ residentialPostCode: "0800" }, { residentialPostCode: 800 })).toEqual([]);
+      // Text is compared as typed: an overseas "101" isn't "0101".
+      expect(detailsAgainst({ residentialPostCode: "0101" }, { residentialPostCode: "101" })).toEqual(residentialAddress("Postcode"));
+    });
+
+    it("doesn't list an account number EH returns as a number", () => {
+      expect(detailsAgainst({ bankAccount1_AccountNumber: "00123456" }, { bankAccount1_AccountNumber: 123456 })).toEqual([]);
+      expect(detailsAgainst({ bankAccount1_AccountNumber: "00123457" }, { bankAccount1_AccountNumber: 123456 })).toEqual(bankAccount("Account number"));
+      expect(detailsAgainst({ bankAccount1_AccountNumber: null }, { bankAccount1_AccountNumber: 0 })).toEqual(bankAccount("Account number"));
+    });
+
+    it("doesn't list a BSB that lost its leading zeros, as a number or as text", () => {
+      expect(detailsAgainst({ bankAccount1_BSB: "000-001" }, { bankAccount1_BSB: 1 })).toEqual([]);
+      expect(detailsAgainst({ bankAccount1_BSB: "012-345" }, { bankAccount1_BSB: "12345" })).toEqual([]);
+    });
   });
 });

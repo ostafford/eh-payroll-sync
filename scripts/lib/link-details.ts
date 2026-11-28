@@ -101,15 +101,17 @@ type ReadPhone = { kind: "read"; e164: string; origin: "au" | "overseas" | "loca
  * `phoneAu`'s E.164, so both mean the same by "the same number". The forms
  * `phoneAu` doesn't settle are put right here, for comparing only (what's
  * sent is unchanged): Australia's international dial-out prefixes (`0011`,
- * and `0014`/`15`/`18`/`19` through a chosen carrier) and `0061`, and
- * Australia's trunk 0 after `+61`, typed as `(0)` or not. Another country's
+ * and `0014`/`15`/`18`/`19` through a chosen carrier) and `0061` (spaced or
+ * not), a country code typed in brackets (`(+61)`), and Australia's trunk 0
+ * after `+61`, typed as `(0)` or not. Another country's
  * `(0)` is kept, as Italy dials it. Unreadable when `phoneAu` doesn't take
  * it (13, 1300 and 1800 numbers among them).
  */
 function readPhone(v: unknown): ReadPhone {
   const written = comparable(v)
     .replace(/^001[14589][\s-]*/, "+")
-    .replace(/^0061/, "+61")
+    .replace(/^00[\s-]*61/, "+61")
+    .replace(/^\(\+(\d{1,3})\)/, "+$1")
     .replace(/^\+61[\s-]*\(0\)/, "+61");
   let e164: string;
   try {
@@ -146,7 +148,7 @@ const unspaced: Normalise = (v) => comparable(v).replace(/ /g, "");
 const unseparated: Normalise = (v) => comparable(v).replace(/[\s-]/g, "");
 
 /** A BSB is six digits: a shorter one (returned as a number, or typed so) has lost its leading zeros. */
-const bsb: Normalise = (v) => {
+const bsbDigits: Normalise = (v) => {
   const s = unseparated(v);
   return /^\d{1,5}$/.test(s) ? s.padStart(6, "0") : s;
 };
@@ -155,7 +157,7 @@ const bsb: Normalise = (v) => {
  * A postcode EH returns as a JSON number has lost its leading zero. Text is
  * compared as typed: an overseas postcode can be shorter than four digits.
  */
-const postcode: Normalise = (v) => (typeof v === "number" ? String(v).padStart(4, "0") : comparable(v));
+const paddedPostcode: Normalise = (v) => (typeof v === "number" ? String(v).padStart(4, "0") : comparable(v));
 
 /**
  * An account number's length varies, so one EH returns as a JSON number
@@ -183,9 +185,9 @@ const accountNumberDiffers: Comparer = (ct, eh) => {
 const FIELD_COMPARERS: ReadonlyArray<readonly [field: RegExp, comparer: Comparer]> = [
   [/^(residential|postal|workingHolidayVisa)Country$/, countryDiffers],
   [/^(mobile|home|work)Phone$|^emergencyContact\d_(Alternate)?ContactNumber$/, phoneDiffers],
-  [/^(residential|postal)PostCode$/, comparerFor(postcode)],
+  [/^(residential|postal)PostCode$/, comparerFor(paddedPostcode)],
   [/^employmentType$/, comparerFor(unspaced)],
-  [/^bankAccount\d_BSB$/, comparerFor(bsb)],
+  [/^bankAccount\d_BSB$/, comparerFor(bsbDigits)],
   [/^bankAccount\d_AccountNumber$/, accountNumberDiffers],
   [/^superFund\d_ProductCode$|^taxFileNumber$|ABN$/, comparerFor(unseparated)],
 ];
