@@ -2,8 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { ConnecteamUser } from "../src/connecteam/types.js";
 import type { LinkStageData } from "../scripts/lib/link-input.js";
 import type { LinkScreen } from "../scripts/lib/link-screen.js";
-import { runLinkStage, type LinkStageDeps } from "../scripts/lib/link-stage.js";
-import type { DifferingDetail } from "../scripts/lib/link-details.js";
+import { runLinkStage, stepTimes, type LinkStageDeps } from "../scripts/lib/link-stage.js";
 import { applyFieldMap } from "../src/mapping/apply.js";
 import type { FieldMap } from "../src/mapping/schema.js";
 import { changedUnits, newUnits, takeBaseline } from "../src/sync/baseline.js";
@@ -197,14 +196,10 @@ describe("the Baseline, taken when a pair is confirmed (#230)", () => {
     return changedUnits(stored, now).filter((u) => !fresh.has(u)).sort();
   }
 
-  it("asks Keep EH's / Use Connecteam's only for the details that differ, and stores a Baseline that sends just the Use Connecteam's ones", async () => {
-    const chooseDetails = vi.fn(async (_who: string, details: readonly DifferingDetail[]) => details.map((d) => d.unit));
-    const s = stage(["<return>"], { load: async () => named(), baseline: { secret: KEY, fieldMap }, chooseDetails });
+  it("compares details only where they differ, and stores a Baseline that sends just the ones picked Use Connecteam's in the Edit pop-up", async () => {
+    // Enter links Mia (her EH surname is "Chen-Wong"), and her Edit pop-up opens: ↓ Enter picks Use Connecteam's.
+    const s = stage(["<return>", "<down>", "<return>", "<escape>"], { load: async () => named(), baseline: { secret: KEY, fieldMap } });
     await s.run();
-
-    // Mia's EH surname is "Chen-Wong"; Jack's details all agree, so he isn't asked about.
-    expect(chooseDetails).toHaveBeenCalledTimes(1);
-    expect(chooseDetails).toHaveBeenCalledWith("Mia Chen", [{ unit: "surname", label: "Surname", fields: ["Surname"] }]);
     const sql = s.execute.mock.calls[0]![0];
     const [jack, mia] = named().ctUsers;
     expect(await sentAtLinkUnchanged(storedBaseline(sql, 100)!, jack!)).toEqual([]);
@@ -212,10 +207,21 @@ describe("the Baseline, taken when a pair is confirmed (#230)", () => {
   });
 
   it("keeps EH's for every detail the admin doesn't pick", async () => {
-    const s = stage(["<return>"], { load: async () => named(), baseline: { secret: KEY, fieldMap }, chooseDetails: async () => [] });
+    const s = stage(["<return>", "<escape>"], { load: async () => named(), baseline: { secret: KEY, fieldMap } });
     await s.run();
     const mia = named().ctUsers[1]!;
     expect(await sentAtLinkUnchanged(storedBaseline(s.execute.mock.calls[0]![0], 101)!, mia)).toEqual([]);
+  });
+
+  it("keeps a stored Baseline on a re-run, and takes it again only once the admin picks in that pair's Edit pop-up", async () => {
+    const load = async () => data({ ...named(), pendingLinks: [{ ctUserId: 101, ehEmployeeId: "40377", hasBaseline: true, confirmedAt: 1762000000000 }] });
+    const kept = stage(["<tab>", "<down>", "e", "<escape>"], { load, baseline: { secret: KEY, fieldMap } });
+    await kept.run();
+    expect(kept.execute.mock.calls[0]?.[0] ?? "").not.toMatch(/\(101,/);
+    // Mia is row 2 in Everyone; ↓ Enter picks Use Connecteam's for her surname.
+    const retaken = stage(["<tab>", "<down>", "e", "<down>", "<return>", "<escape>"], { load, baseline: { secret: KEY, fieldMap } });
+    await retaken.run();
+    expect(await sentAtLinkUnchanged(storedBaseline(retaken.execute.mock.calls[0]![0], 101)!, named().ctUsers[1]!)).toEqual(["surname"]);
   });
 
   it("gives a pair confirmed before Baselines were stored one on a re-run, and leaves a stored one alone", async () => {
@@ -230,12 +236,24 @@ describe("the Baseline, taken when a pair is confirmed (#230)", () => {
           ],
         }),
       baseline: { secret: KEY, fieldMap },
-      chooseDetails: async () => [],
     });
     await s.run();
     const sql = s.execute.mock.calls[0]![0];
     expect(storedBaseline(sql, 100)).not.toBeNull();
     expect(sql).not.toMatch(/\(101,/);
     expect(sql).not.toMatch(/\(102,/);
+    expect(s.out.join("\n")).toContain("Saved: 1 re-confirmed with a Baseline.");
+  });
+});
+
+describe("stepTimes (#224)", () => {
+  it("prints each load step's elapsed time in seconds, one decimal, in order", () => {
+    expect(
+      stepTimes([
+        ["Connecteam users", 3080],
+        ["EH employees", 4000],
+        ["records", 4249],
+      ]),
+    ).toBe("Connecteam users 3.1 s · EH employees 4.0 s · records 4.2 s");
   });
 });

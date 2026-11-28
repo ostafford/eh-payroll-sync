@@ -12,11 +12,24 @@ export interface LinkTerminal {
   stdin: Readable & { setRawMode(on: boolean): unknown };
   stdout: Writable & { columns?: number; rows?: number };
   color: boolean;
+  /** The terminal's background, when it says: the highlight bar is grey on a dark one. */
+  background?: "light" | "dark";
 }
 
-export function driveLinkScreen(screen: LinkScreen, { stdin, stdout, color }: LinkTerminal): Promise<"save" | "cancel"> {
-  const draw = () =>
-    stdout.write("\u001b[H\u001b[2J" + screen.render({ columns: stdout.columns || 100, rows: stdout.rows || 30, color }).join("\n"));
+/**
+ * The background a terminal reports in `COLORFGBG` ("fg;bg", its last part
+ * an ANSI colour number: 0-6 and 8 dark, 7 and 9-15 light), or undefined
+ * when it doesn't say. Most terminals don't: the bar is black then.
+ */
+export function terminalBackground(colorfgbg: string | undefined): "light" | "dark" | undefined {
+  const bg = Number(colorfgbg?.split(";").at(-1));
+  if (!colorfgbg || !Number.isInteger(bg) || bg < 0 || bg > 15) return undefined;
+  return bg <= 6 || bg === 8 ? "dark" : "light";
+}
+
+export function driveLinkScreen(screen: LinkScreen, { stdin, stdout, color, background }: LinkTerminal): Promise<"save" | "cancel"> {
+  const size = () => ({ columns: stdout.columns || 100, rows: stdout.rows || 30, color, ...(background ? { background } : {}) });
+  const draw = () => stdout.write("\u001b[H\u001b[2J" + screen.render(size()).join("\n"));
   stdout.write("\u001b[?1049h\u001b[?25l"); // alternate screen, hide cursor
   emitKeypressEvents(stdin);
   stdin.setRawMode(true);

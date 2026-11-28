@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { LinkCtUser, LinkEhEmployee, LinkList, LinkRow } from "../scripts/lib/link-list.js";
 import { createLinkScreen } from "../scripts/lib/link-screen.js";
+import type { DifferingDetail } from "../scripts/lib/link-details.js";
 
 // eslint-disable-next-line no-control-regex
 const width = (line: string) => line.replace(/\u001b\[[0-9;]*m/g, "").length;
@@ -225,7 +226,10 @@ describe("link screen", () => {
     it("stays when it's still possible, and the save check counts it as kept, not left unlinked", () => {
       const s = stale();
       expect(decisionFor(s, 102)).toEqual({ ctUserId: 102, onList: true, ehEmployeeId: "40401" });
-      expect(frame(press(s, "c"))).toContain("1 to link · 1 kept as saved, not reviewed · 2 not reviewed - left unlinked, checked again on approval");
+      const f = frame(press(s, "c"));
+      expect(f).toMatch(/To link +1 /);
+      expect(f).toMatch(/Not reviewed, kept as saved +1 /);
+      expect(f).toMatch(/Not reviewed, left unlinked +2 +\(checked again on approval\)/);
     });
   });
 
@@ -306,8 +310,11 @@ describe("link screen", () => {
     it("asks 'Save these links?' on c, counting what's left unreviewed", () => {
       const out = frame(press(screen(), "<return>", "c"));
       expect(out).toContain("Save these links?");
-      expect(out).toContain("3 to link · 2 not reviewed - left unlinked, checked again on approval");
-      expect(frame(press(screen(), "<return>", "x", "x", "c"))).toContain("3 to link · everything reviewed");
+      expect(out).toMatch(/To link +3 /);
+      expect(out).toMatch(/Not reviewed, left unlinked +2 /);
+      const all = frame(press(screen(), "<return>", "x", "x", "c"));
+      expect(all).toMatch(/To link +3 /);
+      expect(all).toContain("Everything reviewed");
     });
 
     it("draws in the field check's colours and marks on a terminal, and in plain text with [ok] / [!] / [x] without colour", () => {
@@ -329,5 +336,204 @@ describe("link screen", () => {
       expect(heading.indexOf("Pack"), "Pack").toBe(mia.indexOf("Ready"));
       expect(lines.join("\n")).toContain("[To review (3)]  Everyone (7)");
     });
+  });
+});
+
+describe("link screen on a re-run: To review, External ID and Details (#225)", () => {
+  const cts: LinkCtUser[] = [
+    { ctUserId: 200, firstName: "Avery", lastName: "Lin", email: "avery@example.com", payrollId: "200" },
+    { ctUserId: 201, firstName: "Blake", lastName: "Okoro", email: "blake@example.com", payrollId: "201" },
+    { ctUserId: 202, firstName: "Casey", lastName: "Duarte", email: "casey@example.com", payrollId: "202" },
+    { ctUserId: 203, firstName: "Devon", lastName: "Marsh", email: "devon@example.com", payrollId: "203" },
+    { ctUserId: 204, firstName: "Emery", lastName: "Novak", email: "emery@example.com", payrollId: "204" },
+    { ctUserId: 205, firstName: "Finley", lastName: "Rowe", email: "finley@example.com", payrollId: "205" },
+    { ctUserId: 206, firstName: "Harper", lastName: "Quinn", email: "harper@example.com", payrollId: "206" },
+  ];
+  const ehs: LinkEhEmployee[] = [
+    { id: "300", firstName: "Avery", surname: "Lin", email: "avery@example.com", externalId: null, status: "Active" },
+    { id: "301", firstName: "Blake", surname: "Okoro", email: "blake@example.com", externalId: "201", status: "Active" },
+    { id: "302", firstName: "Casey", surname: "Duarte", email: "casey@example.com", externalId: null, status: "Active" },
+    { id: "303", firstName: "Devon", surname: "Marsh", email: "devon@example.com", externalId: null, status: "Active" },
+    { id: "304", firstName: "Emery", surname: "Novak", email: "emery@example.com", externalId: null, status: "Terminated" },
+    { id: "305", firstName: "Finley", surname: "Rowe", email: "finley@example.com", externalId: null, status: "Active" },
+    { id: "306", firstName: "Harper", surname: "Quinn", email: "harper@example.com", externalId: "306", status: "Active" },
+  ];
+  const postcode: DifferingDetail = { unit: "residentialAddress", label: "Residential address", fields: ["Postcode"] };
+  const phone: DifferingDetail = { unit: "mobilePhone", label: "Mobile phone", fields: ["Mobile phone"] };
+  const differ: Record<string, DifferingDetail[]> = { "200:300": [postcode, phone], "201:301": [postcode], "202:302": [phone] };
+  const details = (ctUserId: number, ehEmployeeId: string) => differ[`${ctUserId}:${ehEmployeeId}`] ?? [];
+  const saved = (ctUserId: number, eh: string, hasBaseline: boolean, over: Partial<LinkRow> = {}) =>
+    row({ ctUserId, kind: "onLinkList", suggestion: eh, candidates: [{ ehEmployeeId: eh, reasons: [] }], saved: { hasBaseline, confirmedAt: CONFIRMED }, ...over });
+  const CONFIRMED = Date.UTC(2026, 10, 10, 12);
+  /** Rows 1-7, in this order. */
+  const rerun: LinkList = {
+    rows: [
+      saved(200, "300", false),
+      saved(201, "301", true),
+      row({ ctUserId: 202, kind: "matched", suggestion: "302" }),
+      row({ ctUserId: 203, kind: "matched", suggestion: "303" }),
+      saved(204, "304", true, { candidates: [{ ehEmployeeId: "304", reasons: ["terminated"] }] }),
+      saved(205, "305", true, { wouldBlock: "payroll-id-elsewhere" }),
+      saved(206, "306", true, { candidates: [{ ehEmployeeId: "306", reasons: ["hasPayrollId"], payrollId: "306" }], wouldBlock: "different-payroll-id" }),
+    ],
+    ignoredEhCount: 0,
+    ehOwners: new Map(),
+  };
+  const rerunPeople = { ct: new Map(cts.map((u) => [u.ctUserId, u])), eh: new Map(ehs.map((e) => [e.id, e])) };
+  const rerunScreen = () => createLinkScreen(rerun, rerunPeople, { details });
+  /** The list's line for one person, in the frame. */
+  const lineOf = (f: string, name: string) => f.split("\n").find((l) => l.includes(name)) ?? "";
+
+  it("lists exactly who needs a decision: details differ with no choice made, a link that would block, an External ID that doesn't match", () => {
+    const f = frame(rerunScreen());
+    expect(f).toContain("[To review (4)]");
+    for (const name of ["Avery Lin", "Casey Duarte", "Finley Rowe", "Harper Quinn"]) expect(lineOf(f, name)).not.toBe("");
+    // Blake's choices were made when his Baseline was taken; Devon has nothing to check; Emery's saved link goes through.
+    for (const name of ["Blake Okoro", "Devon Marsh", "Emery Novak"]) expect(lineOf(f, name)).toBe("");
+  });
+
+  it("says in the Status column which reason applies", () => {
+    const f = frame(rerunScreen());
+    expect(lineOf(f, "Avery Lin")).toContain("2 details differ · all EH's kept");
+    expect(lineOf(f, "Casey Duarte")).toContain("1 detail differs · all EH's kept");
+    expect(lineOf(f, "Finley Rowe")).toContain("link will be blocked: Payroll ID on another EH employee");
+    expect(lineOf(f, "Harper Quinn")).toContain("EH External ID doesn't match · held at approval");
+  });
+
+  it("e opens one Edit pop-up for the pair, with sections 1 EH External ID and 2 Details, and a ✓ where there's nothing to choose", () => {
+    const f = frame(press(rerunScreen(), "e"));
+    expect(f).toContain("Edit · Avery Lin");
+    expect(f).toMatch(/1 {2}EH External ID/);
+    expect(f).toMatch(/EH External ID +\(blank\)/);
+    expect(f).toMatch(/Connecteam User ID +200/);
+    expect(f).toContain("[ok] Blank in EH: it'll be set to their Connecteam User ID.");
+    expect(f).toMatch(/2 {2}Details \(2 differ\)/);
+    expect(f).toContain("Values aren't shown");
+    expect(f).toContain("Residential address (Postcode)");
+    expect(f).toContain("Mobile phone");
+    expect(f).toMatch(/> \(x\) Keep EH's/);
+    expect(f).toMatch(/\( \) Use Connecteam's/);
+    // Devon (Everyone, row 4): nothing differs.
+    expect(frame(press(rerunScreen(), "<tab>", "<down>", "<down>", "<down>", "e"))).toContain("[ok] All the same in both. Nothing to choose.");
+  });
+
+  it("names both IDs when EH's External ID doesn't match, and flags one that's their EH Employee ID", () => {
+    // Harper is the last row to review; Enter on a linked row edits it.
+    const f = frame(press(rerunScreen(), "<down>", "<down>", "<down>", "<return>"));
+    expect(f).toContain("Edit · Harper Quinn");
+    expect(f).toMatch(/EH External ID +306 +\[!\] this is their EH Employee ID/);
+    expect(f).toMatch(/Connecteam User ID +206/);
+    expect(f).toContain("[x] They don't match: they're held at approval.");
+  });
+
+  it("Enter picks the option under the bar, and Esc or Backspace goes back with the picks kept", () => {
+    const s = press(rerunScreen(), "e", "<down>", "<return>", "<escape>");
+    expect(decisionFor(s, 200)).toEqual({ ctUserId: 200, onList: true, ehEmployeeId: "300", details: { useConnecteam: ["residentialAddress"] } });
+    expect(lineOf(frame(s), "Avery Lin")).toContain("2 details differ · 1 from Connecteam");
+    // Back in: the pick is still there, and Keep EH's puts it back.
+    press(s, "e", "<down>", "<down>", "<down>", "<return>", "<up>", "<up>", "<up>", "<return>", "<backspace>");
+    expect(decisionFor(s, 200)).toEqual({ ctUserId: 200, onList: true, ehEmployeeId: "300", details: { useConnecteam: ["mobilePhone"] } });
+  });
+
+  it("previews what the Link notice will say", () => {
+    expect(frame(press(rerunScreen(), "e"))).toContain("Link notice will say: (just linked)");
+    expect(frame(press(rerunScreen(), "e", "<down>", "<return>", "<down>", "<down>", "<return>"))).toContain(
+      "Link notice will say: Sent from Connecteam: Residential address, Mobile phone",
+    );
+  });
+
+  it("Enter links a row's one suggestion, then opens Edit only when that pair has something to choose", () => {
+    const toPick: LinkList = {
+      rows: [
+        row({ ctUserId: 202, kind: "choice", candidates: [{ ehEmployeeId: "302", reasons: ["nameDiffers"] }] }),
+        row({ ctUserId: 203, kind: "choice", candidates: [{ ehEmployeeId: "303", reasons: ["nameDiffers"] }] }),
+      ],
+      ignoredEhCount: 0,
+      ehOwners: new Map(),
+    };
+    const s = press(createLinkScreen(toPick, rerunPeople, { details }), "<return>");
+    expect(decisionFor(s, 202)).toEqual({ ctUserId: 202, onList: true, ehEmployeeId: "302" });
+    expect(frame(s)).toContain("Edit · Casey Duarte");
+    // Back on the list, the cursor has moved on to Devon: nothing differs, so no pop-up.
+    press(s, "<escape>", "<return>");
+    expect(decisionFor(s, 203)).toEqual({ ctUserId: 203, onList: true, ehEmployeeId: "303" });
+    expect(frame(s)).not.toContain("Edit ·");
+  });
+
+  it("keeps a stored Baseline unless the admin picks in its Edit pop-up, after warning that changes since then are decided there", () => {
+    // Blake (Everyone, row 2) was confirmed with a Baseline on 10 Nov 2026.
+    const blake = () => press(rerunScreen(), "<tab>", "<down>", "e");
+    expect(frame(blake())).toContain("changes since 10 Nov 2026 are decided here, not sent");
+    expect(decisionFor(press(blake(), "<escape>"), 201)).toEqual({ ctUserId: 201, onList: true, ehEmployeeId: "301" });
+    expect(decisionFor(press(blake(), "<return>", "<escape>"), 201)).toEqual({
+      ctUserId: 201,
+      onList: true,
+      ehEmployeeId: "301",
+      details: { useConnecteam: [] },
+    });
+  });
+
+  it("asks 'Save these links?' in a pop-up counting what the save does: held people are counted, not blocking", () => {
+    const f = frame(press(rerunScreen(), "c"));
+    expect(f).toContain("Save these links?");
+    expect(f).toMatch(/To link +7 /);
+    expect(f).toMatch(/New hires +0 /);
+    // Avery was saved before Baselines: re-saved with one.
+    expect(f).toMatch(/Re-confirmed +1 /);
+    // Finley's link would be blocked, Harper's External ID doesn't match.
+    expect(f).toMatch(/Held at approval +2 /);
+    expect(f).toMatch(/Sent from Connecteam at link +nothing /);
+    expect(f).toMatch(/Kept as EH's +3 details /);
+  });
+
+  it("counts each detail sent from Connecteam, and goes back on Esc, Backspace or n", () => {
+    const s = press(rerunScreen(), "e", "<down>", "<return>", "<escape>", "<down>", "e", "<down>", "<return>", "<escape>", "c");
+    expect(frame(s)).toMatch(/Sent from Connecteam at link +Residential address, Mobile phone /);
+    expect(frame(s)).toMatch(/Kept as EH's +1 detail /);
+    for (const back of ["<escape>", "<backspace>", "n"]) {
+      expect(frame(press(rerunScreen(), "c", back))).not.toContain("Save these links?");
+    }
+    expect(press(rerunScreen(), "c").press("y", { name: "y" })).toBe("save");
+  });
+
+  it("shows the selected pair's EH External ID and Details as two status lines in its panel, with Enter / e to edit", () => {
+    const avery = frame(rerunScreen());
+    expect(avery).toMatch(/EH External ID +blank in EH, will be set/);
+    expect(avery).toMatch(/Details +2 differ · all EH's kept/);
+    expect(avery).toContain("Enter / e edit");
+    const harper = frame(press(rerunScreen(), "<down>", "<down>", "<down>"));
+    expect(harper).toMatch(/EH External ID +doesn't match · held at approval/);
+    expect(harper).toMatch(/Details +all the same/);
+  });
+
+  it("scrolls a pop-up taller than the terminal inside itself, keeping the bar in view", () => {
+    const many = Array.from({ length: 12 }, (_, k): DifferingDetail => ({ unit: `u${k + 1}`, label: `Detail ${k + 1}`, fields: [`Detail ${k + 1}`] }));
+    const one: LinkList = { rows: [row({ ctUserId: 203, kind: "matched", suggestion: "303" })], ignoredEhCount: 0, ehOwners: new Map() };
+    const s = press(createLinkScreen(one, rerunPeople, { details: () => many }), "<tab>", "e");
+    const top = frame(s);
+    expect(top.split("\n").length).toBeLessThanOrEqual(30);
+    expect(top).toContain("Detail 1");
+    expect(top).not.toContain("Detail 12");
+    expect(top).toMatch(/↓ \d+ more/);
+    // Down to the last option: Detail 12's Use Connecteam's.
+    press(s, ...Array.from({ length: 23 }, () => "<down>"));
+    const bottom = frame(s);
+    expect(bottom).toContain("Detail 12");
+    expect(bottom).toMatch(/> \( \) Use Connecteam's/);
+    expect(bottom).toMatch(/↑ \d+ more/);
+    expect(bottom).toContain("Esc / Backspace");
+  });
+
+  it("draws the selected list row and pop-up option as a full-width black bar, and a grey one on a dark terminal", () => {
+    const BLACK = "\u001b[1;97;40m";
+    const GREY = "\u001b[1;97;100m";
+    const colour = { columns: 160, rows: 30, color: true };
+    const avery = (lines: string[]) => lines.find((l) => l.includes("Avery") && l.includes("▶")) ?? "";
+    expect(avery(rerunScreen().render(colour))).toContain(BLACK);
+    const dark = avery(rerunScreen().render({ ...colour, background: "dark" }));
+    expect(dark).toContain(GREY);
+    expect(dark).not.toContain(BLACK);
+    const option = press(rerunScreen(), "e").render(colour).find((l) => l.includes("Keep EH's") && l.includes("▶")) ?? "";
+    expect(option).toContain(BLACK);
   });
 });

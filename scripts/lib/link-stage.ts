@@ -36,11 +36,6 @@ export interface LinkStageDeps {
    * the link takes one at approval, as before.
    */
   baseline?: { secret: string; fieldMap: FieldMap };
-  /**
-   * The details that differ for one person, by name: returns the units to
-   * take from Connecteam (**Use Connecteam's**). The rest keep EH's.
-   */
-  chooseDetails?(person: string, details: readonly DifferingDetail[]): Promise<readonly string[]>;
 }
 
 export type LinkStageOutcome = "saved" | "unchanged" | "rehearsed" | "cancelled" | "unconfirmed";
@@ -64,43 +59,75 @@ function whenTheySync(print: (line: string) => void): void {
 }
 
 /**
- * The changes with each pair's Baseline (#230), plus a re-confirm of every
- * kept pair that has none yet (confirmed before Baselines were stored). The
- * pack and EH record are read in memory only; just fingerprints are kept.
+ * Each pair's details compared (#225): the mapped pack against EH's
+ * bulk-list record, in memory only, with no per-person call. TFN and date
+ * of birth are read here and never shown, logged or stored: only the names
+ * of the details that differ leave it.
+ */
+function detailsLookup(data: LinkStageData, fieldMap: FieldMap) {
+  const users = new Map<number, ConnecteamUser>(data.ctUsers.map((u) => [u.userId, u]));
+  const ehById = new Map(data.ehEmployees.map((e) => [String(e.id), e]));
+  const mapped = new Map<number, ReturnType<typeof applyFieldMap>>();
+  const cache = new Map<string, readonly DifferingDetail[]>();
+  const mappedOf = (u: ConnecteamUser) => mapped.get(u.userId) ?? mapped.set(u.userId, applyFieldMap(u, fieldMap)).get(u.userId)!;
+  return {
+    users,
+    ehById,
+    mappedOf,
+    details(ctUserId: number, ehEmployeeId: string): readonly DifferingDetail[] {
+      const key = `${ctUserId}:${ehEmployeeId}`;
+      const hit = cache.get(key);
+      if (hit) return hit;
+      const user = users.get(ctUserId);
+      const eh = ehById.get(ehEmployeeId);
+      const found = user && eh ? differingDetails(mappedOf(user).payload, eh, fieldMap) : [];
+      cache.set(key, found);
+      return found;
+    },
+  };
+}
+
+/**
+ * The changes with each pair's Baseline (#230), taken with the Edit pop-up's
+ * picks (Keep EH's where none was made), plus a re-confirm of every kept pair
+ * that has none yet (confirmed before Baselines were stored). A stored
+ * Baseline is kept unless the admin picked in that pair's pop-up (#224).
  */
 async function withBaselines(
   data: LinkStageData,
   changes: LinkChanges,
-  deps: LinkStageDeps & { baseline: NonNullable<LinkStageDeps["baseline"]> },
-): Promise<LinkChanges> {
+  lookup: ReturnType<typeof detailsLookup>,
+  { secret, fieldMap }: NonNullable<LinkStageDeps["baseline"]>,
+): Promise<{ changes: LinkChanges; reconfirmed: number }> {
   const touched = new Set([...changes.remove, ...changes.upsert.map((r) => r.ctUserId)]);
   const unbaselined = data.pendingLinks.filter((p) => p.ehEmployeeId !== null && p.hasBaseline === false && !touched.has(p.ctUserId));
-  const users = new Map<number, ConnecteamUser>(data.ctUsers.map((u) => [u.userId, u]));
-  const ehById = new Map(data.ehEmployees.map((e) => [String(e.id), e]));
-  const { secret, fieldMap } = deps.baseline;
   const upsert: LinkUpsert[] = [];
   for (const row of [...changes.upsert, ...unbaselined]) {
-    const user = users.get(row.ctUserId);
-    const eh = row.ehEmployeeId === null ? undefined : ehById.get(row.ehEmployeeId);
+    const user = lookup.users.get(row.ctUserId);
+    const eh = row.ehEmployeeId === null ? undefined : lookup.ehById.get(row.ehEmployeeId);
     if (!user || !eh) {
       upsert.push({ ctUserId: row.ctUserId, ehEmployeeId: row.ehEmployeeId, baseline: null });
       continue;
     }
-    const mapped = applyFieldMap(user, fieldMap);
-    const details = differingDetails(mapped.payload, eh, fieldMap);
-    const who = `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim();
-    const useConnecteam = details.length && deps.chooseDetails ? await deps.chooseDetails(who, details) : [];
+    const mapped = lookup.mappedOf(user);
+    const useConnecteam = "useConnecteam" in row ? (row.useConnecteam ?? []) : [];
     const unmapped = mapped.issues.map((i) => i.ehField);
     const baseline = await baselineAtConfirm(mapped.payload, fieldMap, secret, { useConnecteam, unmapped });
     upsert.push({ ctUserId: row.ctUserId, ehEmployeeId: row.ehEmployeeId, baseline });
   }
-  return { upsert, remove: changes.remove };
+  return { changes: { upsert, remove: changes.remove }, reconfirmed: unbaselined.length };
+}
+
+/** Each load step's elapsed time, for stderr (#224): "Connecteam users 3.1 s · EH employees 4.0 s". */
+export function stepTimes(steps: ReadonlyArray<readonly [label: string, ms: number]>): string {
+  return steps.map(([label, ms]) => `${label} ${(ms / 1000).toFixed(1)} s`).join(" · ");
 }
 
 export async function runLinkStage(deps: LinkStageDeps): Promise<LinkStageOutcome> {
   const data = await deps.load();
   const input = linkListInput(data);
-  const screen = createLinkScreen(buildLinkList(input), linkScreenPeople(input));
+  const lookup = deps.baseline ? detailsLookup(data, deps.baseline.fieldMap) : undefined;
+  const screen = createLinkScreen(buildLinkList(input), linkScreenPeople(input), lookup ? { details: lookup.details } : {});
   if ((await deps.drive(screen)) === "cancel") {
     deps.print("Nothing saved: the Link list is as it was.");
     return "cancelled";
@@ -111,15 +138,21 @@ export async function runLinkStage(deps: LinkStageDeps): Promise<LinkStageOutcom
     deps.print("Nothing saved, and nothing is live yet. Run the link stage again to add anyone already in EH.");
     return "unconfirmed";
   }
-  const changes = deps.baseline ? await withBaselines(data, decided, { ...deps, baseline: deps.baseline }) : decided;
+  const { changes, reconfirmed } =
+    deps.baseline && lookup ? await withBaselines(data, decided, lookup, deps.baseline) : { changes: decided, reconfirmed: 0 };
   const sql = pendingLinkSql(changes, deps.now());
   if (!sql) {
     deps.print("No changes to the Link list.");
     whenTheySync(deps.print);
     return "unchanged";
   }
-  const removed = changes.remove.length ? `, ${changes.remove.length} taken off the Link list` : "";
-  const what = `${changes.upsert.length} link${changes.upsert.length === 1 ? "" : "s"} added or changed${removed}`;
+  const changed = changes.upsert.length - reconfirmed;
+  const parts = [
+    ...(changed || !reconfirmed ? [`${changed} link${changed === 1 ? "" : "s"} added or changed`] : []),
+    ...(reconfirmed ? [`${reconfirmed} re-confirmed with a Baseline`] : []),
+    ...(changes.remove.length ? [`${changes.remove.length} taken off the Link list`] : []),
+  ];
+  const what = parts.join(", ");
   if (deps.rehearsal) {
     deps.print(`Rehearsal: nothing written. It would save ${what}.`);
     deps.print(sql);

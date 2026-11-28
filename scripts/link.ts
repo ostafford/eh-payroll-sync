@@ -20,11 +20,21 @@
  * Exits 3 when nothing was saved (cancelled, not confirmed, or no terminal),
  * so the wizard stops before the deploy.
  *
- * On confirm it also takes each pair's Baseline (#230): the details that
- * differ between Connecteam and EH are listed by name, and the admin picks
- * Use Connecteam's for any that should be sent at the link (the rest keep
- * EH's). Packs and EH records, TFN and date of birth included, are compared
- * in memory only: nothing is printed or written but names and fingerprints.
+ * Each pair's details are compared from the bulk lists already fetched
+ * (#224): every Connecteam user's pack goes through the field map in memory
+ * and is compared with EH's full record, with no per-person call. TFN and
+ * date of birth are read in memory only for that comparison: they're never
+ * shown, logged or stored. Only the names of the details that differ reach
+ * the screen, and only fingerprints reach D1.
+ *
+ * Enter or `e` on a linked pair opens its Edit pop-up (#225): its EH
+ * External ID, and Keep EH's / Use Connecteam's for each differing detail.
+ * On save each pair's Baseline is taken with those picks (#230); a stored
+ * one is kept unless the admin picked in that pair's pop-up, and a kept pair
+ * saved before Baselines gets one (re-confirmed). To review lists only the
+ * rows needing a decision; Tab shows everyone.
+ *
+ * Each load step's time is printed to stderr, so a slow run measures itself.
  *
  * It first rebuilds wrangler.deploy.json and checks it against the
  * live Worker, if there is one yet (`npm run deploy:config -- --check-live
@@ -42,13 +52,12 @@ import { ConnecteamClient } from "../src/connecteam/client.js";
 import { EhPayrollClient } from "../src/eh/client.js";
 import { loadFieldMap } from "../src/mapping/loader.js";
 import { baselineKeyId } from "../src/sync/baseline.js";
-import type { DifferingDetail } from "./lib/link-details.js";
 import type { LinkStageData, LinkStageMapRow } from "./lib/link-input.js";
 import { linkListInput } from "./lib/link-input.js";
 import { buildLinkList, type LinkPendingRow } from "./lib/link-list.js";
 import { createLinkScreen, linkScreenPeople } from "./lib/link-screen.js";
-import { driveLinkScreen } from "./lib/link-terminal.js";
-import { runLinkStage } from "./lib/link-stage.js";
+import { driveLinkScreen, terminalBackground } from "./lib/link-terminal.js";
+import { runLinkStage, stepTimes } from "./lib/link-stage.js";
 import { checkDeployConfig, d1 } from "./lib/remote-d1.js";
 
 // --- env -----------------------------------------------------------------
@@ -80,7 +89,7 @@ function need(name: string): string {
 const MAP_SQL = "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, last_outcome AS lastOutcome, external_id AS externalId FROM employee_map";
 /** A stored Baseline's key id only: a pair counts as having one only under this BASELINE_KEY (#230). */
 const PENDING_SQL =
-  "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, json_extract(baseline, '$.keyId') AS baselineKeyId FROM pending_link";
+  "SELECT ct_user_id AS ctUserId, eh_employee_id AS ehEmployeeId, confirmed_at AS confirmedAt, json_extract(baseline, '$.keyId') AS baselineKeyId FROM pending_link";
 /** Each person's latest existing_match row: the Pre-create check's candidates (not their latest row of any kind). */
 const HELD_SQL =
   "SELECT ct_user_id AS ctUserId, detail FROM sync_log WHERE id IN " +
@@ -89,9 +98,12 @@ const HELD_SQL =
 /** The `pending_link` rows; one whose Baseline was made under another BASELINE_KEY counts as having none, so this run takes it again. */
 async function pendingLinks(): Promise<LinkPendingRow[]> {
   const keyId = process.env.BASELINE_KEY ? await baselineKeyId(process.env.BASELINE_KEY) : null;
-  return (d1(PENDING_SQL) as Array<{ ctUserId: number; ehEmployeeId: string | null; baselineKeyId: string | null }>).map(
-    ({ baselineKeyId: stored, ...p }) => ({ ...p, hasBaseline: stored !== null && stored === keyId }),
-  );
+  type Row = { ctUserId: number; ehEmployeeId: string | null; confirmedAt: number | null; baselineKeyId: string | null };
+  return (d1(PENDING_SQL) as Row[]).map(({ baselineKeyId: stored, confirmedAt, ...p }) => ({
+    ...p,
+    hasBaseline: stored !== null && stored === keyId,
+    ...(confirmedAt === null ? {} : { confirmedAt }),
+  }));
 }
 
 // --- APIs ------------------------------------------------------------------
@@ -105,20 +117,40 @@ async function listEhEmployees(businessId: string, apiKey: string): Promise<Reco
   return list.data;
 }
 
+/** Runs one load step, adding how long it took to `times`. */
+async function timed<T>(times: Array<[string, number]>, label: string, step: () => Promise<T> | T): Promise<T> {
+  const start = Date.now();
+  try {
+    return await step();
+  } finally {
+    times.push([label, Date.now() - start]);
+  }
+}
+
 async function loadLive(): Promise<LinkStageData> {
   const ct = new ConnecteamClient({ apiKey: need("CT_API_KEY") });
   process.stderr.write("Reading Connecteam users, Employment Hero employees and the sync's records...\n");
-  const users = await ct.listUsers();
-  if (users.outcome !== "ok") throw new Error(`Connecteam users -> ${users.status} ${users.detail}`);
-  const assignments = await ct.listAssignments(Number(need("CT_ONBOARDING_PACK_ID")));
-  if (assignments.outcome !== "ok") throw new Error(`Connecteam onboarding assignments -> ${assignments.status} ${assignments.detail}`);
-  return {
-    ctUsers: users.data,
-    ehEmployees: await listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY")),
-    assignments: assignments.data,
+  const times: Array<[string, number]> = [];
+  const { users, assignments } = await timed(times, "Connecteam users", async () => {
+    const users = await ct.listUsers();
+    if (users.outcome !== "ok") throw new Error(`Connecteam users -> ${users.status} ${users.detail}`);
+    const assignments = await ct.listAssignments(Number(need("CT_ONBOARDING_PACK_ID")));
+    if (assignments.outcome !== "ok") throw new Error(`Connecteam onboarding assignments -> ${assignments.status} ${assignments.detail}`);
+    return { users: users.data, assignments: assignments.data };
+  });
+  const ehEmployees = await timed(times, "EH employees", () => listEhEmployees(need("EH_BUSINESS_ID"), need("EH_API_KEY")));
+  const records = await timed(times, "records", async () => ({
     employeeMap: (d1(MAP_SQL) as LinkStageMapRow[]).map((m) => ({ ...m, ehEmployeeId: m.ehEmployeeId === null ? null : String(m.ehEmployeeId) })),
     pendingLinks: await pendingLinks(),
     heldDetails: d1(HELD_SQL) as LinkStageData["heldDetails"],
+  }));
+  // Each step's time, so a slow run on a big client measures itself (#224).
+  process.stderr.write(`${stepTimes(times)}\n`);
+  return {
+    ctUsers: users,
+    ehEmployees,
+    assignments,
+    ...records,
     payrollIdFrom: loadFieldMap(process.env.FIELD_MAP_CLIENT).identity.externalIdFrom,
   };
 }
@@ -142,30 +174,6 @@ async function confirm(question: string): Promise<boolean> {
   }
 }
 
-/**
- * The plain Details list (#230; the Edit pop-up replaces it): one person's
- * differing details by name, each keeping EH's unless picked. Returns the
- * units to take from Connecteam.
- */
-async function chooseDetails(person: string, details: readonly DifferingDetail[]): Promise<string[]> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    console.log(`\n${person}: these details differ between Connecteam and Employment Hero.`);
-    details.forEach((d, i) => {
-      const fields = d.fields.length === 1 && d.fields[0] === d.label ? "" : ` (${d.fields.join(", ")} differ${d.fields.length === 1 ? "s" : ""}: the whole ${d.label.toLowerCase()} is sent)`;
-      console.log(`  ${i + 1}. ${d.label}${fields}`);
-    });
-    for (;;) {
-      const answer = (await rl.question("Each keeps EH's unless picked. Use Connecteam's for which? (numbers, e.g. 1 3; Enter for none) ")).trim();
-      const picks = answer === "" ? [] : answer.split(/[\s,]+/).map(Number);
-      if (picks.every((n) => Number.isInteger(n) && n >= 1 && n <= details.length)) return [...new Set(picks)].map((n) => details[n - 1]!.unit);
-      console.log(`  Type numbers from 1 to ${details.length}, or press Enter to keep EH's for all.`);
-    }
-  } finally {
-    rl.close();
-  }
-}
-
 async function main(): Promise<void> {
   loadDevVars();
   const file = dataFile(process.argv);
@@ -182,7 +190,10 @@ async function main(): Promise<void> {
 
   const outcome = await runLinkStage({
     load,
-    drive: (screen) => driveLinkScreen(screen, { stdin: process.stdin, stdout: process.stdout, color: !process.env.NO_COLOR }),
+    drive: (screen) => {
+      const background = terminalBackground(process.env.COLORFGBG);
+      return driveLinkScreen(screen, { stdin: process.stdin, stdout: process.stdout, color: !process.env.NO_COLOR, ...(background ? { background } : {}) });
+    },
     execute: async (sql) => void d1(sql),
     print: (line) => console.log(line),
     now: () => Date.now(),
@@ -191,7 +202,7 @@ async function main(): Promise<void> {
     // Live, a missing key stops here; a rehearsal without one takes no Baselines.
     ...(file && !process.env.BASELINE_KEY
       ? {}
-      : { baseline: { secret: need("BASELINE_KEY"), fieldMap: loadFieldMap(process.env.FIELD_MAP_CLIENT) }, chooseDetails }),
+      : { baseline: { secret: need("BASELINE_KEY"), fieldMap: loadFieldMap(process.env.FIELD_MAP_CLIENT) } }),
   });
   if (outcome === "cancelled" || outcome === "unconfirmed") process.exit(NOTHING_SAVED);
 }

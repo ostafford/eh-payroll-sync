@@ -12,6 +12,8 @@ export interface LinkUpsert {
   ehEmployeeId: string | null;
   /** Null for "New hire, not this person". Absent when the stage takes no Baseline: the column isn't written. */
   baseline?: Baseline | null;
+  /** The units picked Use Connecteam's in the Edit pop-up (#225); none is Keep EH's for every detail. */
+  useConnecteam?: string[];
 }
 
 /**
@@ -19,7 +21,17 @@ export interface LinkUpsert {
  * null `ehEmployeeId` is "New hire, not this person"), or off it.
  */
 export type LinkDecision =
-  | { ctUserId: number; onList: true; ehEmployeeId: string | null }
+  | {
+      ctUserId: number;
+      onList: true;
+      ehEmployeeId: string | null;
+      /**
+       * Picked in the Edit pop-up this run (#225): the units to take from
+       * Connecteam, the rest keeping EH's. Present only once the admin picked,
+       * so the pair's Baseline is taken again.
+       */
+      details?: { useConnecteam: string[] };
+    }
   | { ctUserId: number; onList: false };
 
 export interface LinkChanges {
@@ -38,8 +50,9 @@ export function linkChanges(existing: readonly LinkPendingRow[], decisions: read
       continue;
     }
     // `has` first: a stored null ("New hire, not this person") is still a row.
-    if (now.has(d.ctUserId) && now.get(d.ctUserId) === d.ehEmployeeId) continue;
-    upsert.push({ ctUserId: d.ctUserId, ehEmployeeId: d.ehEmployeeId });
+    // Unchanged unless the admin picked in its Edit pop-up: its Baseline is taken again (#225).
+    if (now.has(d.ctUserId) && now.get(d.ctUserId) === d.ehEmployeeId && !d.details) continue;
+    upsert.push({ ctUserId: d.ctUserId, ehEmployeeId: d.ehEmployeeId, ...(d.details ? { useConnecteam: d.details.useConnecteam } : {}) });
   }
   return { upsert, remove };
 }

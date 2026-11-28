@@ -439,4 +439,25 @@ describe("buildLinkList", () => {
     );
     expect(ehOwners).toEqual(new Map([["40001", 100], ["40002", 777]]));
   });
+
+  describe("a saved link the link step would refuse at approval (preflight's checks, #225)", () => {
+    const saved = (over: Partial<LinkListInput> = {}) =>
+      buildLinkList(input({ ctUsers: [ct()], pendingLinks: [{ ctUserId: 100, ehEmployeeId: "40213" }], ...over })).rows[0];
+
+    it("says which refusal it hits: their Payroll ID is on another EH employee", () => {
+      const row = saved({ ehEmployees: [eh({ id: "40213" }), eh({ id: "40999", firstName: "Jo", email: "jo@example.com", externalId: "100" })] });
+      expect(row).toEqual(expect.objectContaining({ kind: "onLinkList", wouldBlock: "payroll-id-elsewhere" }));
+    });
+
+    it("says EH holds a different Payroll ID on the saved EH employee", () => {
+      expect(saved({ ehEmployees: [eh({ id: "40213", externalId: "40213" })] })).toEqual(
+        expect.objectContaining({ wouldBlock: "different-payroll-id" }),
+      );
+    });
+
+    it("has none for a saved link that goes through: EH's External ID blank or already theirs", () => {
+      expect(saved({ ehEmployees: [eh({ id: "40213" })] })).not.toHaveProperty("wouldBlock");
+      expect(saved({ ehEmployees: [eh({ id: "40213", externalId: "100 " })] })).not.toHaveProperty("wouldBlock");
+    });
+  });
 });
