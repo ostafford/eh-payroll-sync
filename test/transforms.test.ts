@@ -108,21 +108,8 @@ describe("phoneAu", () => {
     expect(phoneAu("+61 411 687 336")).toBe("+61411687336");
     expect(phoneAu("(03) 9123 4567")).toBe("+61391234567");
   });
-  it("drops a (0) typed after the country code, as dialled", () => {
-    expect(phoneAu("+61 (0)411 687 336")).toBe("+61411687336");
-  });
-  it("drops Australia's trunk 0 typed after +61", () => {
-    expect(phoneAu("+610411687336")).toBe("+61411687336");
-    expect(phoneAu("+61 0411 687 336")).toBe("+61411687336");
-  });
-  it("reads a number dialled from Australia with an international prefix", () => {
-    expect(phoneAu("0011 44 20 7946 0000")).toBe("+442079460000");
-    expect(phoneAu("0018 61 411 687 336")).toBe("+61411687336");
-  });
-  it("drops a (0) or trunk 0 written with dashes", () => {
-    expect(phoneAu("+61 0411-687-336")).toBe("+61411687336");
-    expect(phoneAu("+61-0411687336")).toBe("+61411687336");
-    expect(phoneAu("+61-(0)411-687-336")).toBe("+61411687336");
+  it("keeps a (0) that another country dials, as Italy does", () => {
+    expect(phoneAu("+39 (0)6 1234 5678")).toBe("+390612345678");
   });
   it("keeps a well-formed non-AU international number as-is", () => {
     expect(phoneAu("+1 415 555 0100")).toBe("+14155550100");

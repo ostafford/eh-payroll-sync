@@ -131,15 +131,7 @@ export function locationField(v: unknown, part: "full" | "streetLine"): string {
 }
 
 export function phoneAu(v: unknown): string {
-  // Australia's international dial-out prefixes (0011, and 0014/15/18/19
-  // through a chosen carrier) mean "+": "0011 44 …" is "+44 …".
-  // A "(0)" after the country code isn't dialled: "+61 (0)4…" is "+614…".
-  // Nor is Australia's trunk 0 after +61: "+61 04…" is "+614…" too.
-  const raw = asString(v)
-    .trim()
-    .replace(/^(?:001[14589]|00)[\s-]*/, "+")
-    .replace(/^(\+\d{1,3})[\s-]*\(0\)[\s-]*/, "$1")
-    .replace(/^\+61[\s-]*0(?=[\d\s-]{9,}$)/, "+61");
+  const raw = asString(v).trim();
   const hasPlus = raw.startsWith("+");
   const stripped = raw.replace(/[^\d]/g, "");
   if (stripped.length < 6) {

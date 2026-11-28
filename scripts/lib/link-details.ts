@@ -41,18 +41,18 @@ type Normalise = (v: unknown) => string;
 /**
  * Whether a mapped Connecteam value and EH's differ, both non-blank; `false`
  * too when the two can't be compared reliably. A blank against a value is
- * settled before one is called (see {@link differs}).
+ * settled before one is called (see {@link detailDiffers}).
  */
 type Comparer = (ct: unknown, eh: unknown) => boolean;
 
 /** Both sides through one function: `[Connecteam's, EH's]`. */
-const sides = <T>(f: (v: unknown) => T, ct: unknown, eh: unknown): [ct: T, eh: T] => [f(ct), f(eh)];
+const bothSides = <T>(f: (v: unknown) => T, ct: unknown, eh: unknown): [ct: T, eh: T] => [f(ct), f(eh)];
 
 /** A comparer that puts both sides in one form first. */
 const comparerFor =
   (normalise: Normalise): Comparer =>
   (ct, eh) => {
-    const [c, e] = sides(normalise, ct, eh);
+    const [c, e] = bothSides(normalise, ct, eh);
     return c !== e;
   };
 
@@ -66,6 +66,8 @@ const plainDiffers = comparerFor(comparable);
 const AUSTRALIA = "australia";
 const COUNTRY_NAME: Record<string, string> = { au: AUSTRALIA, aus: AUSTRALIA };
 const COUNTRY_CODE = /^[a-z]{2,3}$/;
+/** Two codes in use for one country: the UK's ISO code is GB. */
+const CODE_ALIAS: Record<string, string> = { uk: "gb" };
 
 /**
  * Two names, or two codes of one length, compare as they are. A code against
@@ -76,8 +78,11 @@ const COUNTRY_CODE = /^[a-z]{2,3}$/;
  * `USA`). Keep EH's is the default, so nothing wrong is sent.
  */
 const countryDiffers: Comparer = (ct, eh) => {
-  const nameOrCode = (v: unknown) => COUNTRY_NAME[comparable(v)] ?? comparable(v);
-  const [c, e] = sides(nameOrCode, ct, eh);
+  const nameOrCode = (v: unknown) => {
+    const s = CODE_ALIAS[comparable(v)] ?? comparable(v);
+    return COUNTRY_NAME[s] ?? s;
+  };
+  const [c, e] = bothSides(nameOrCode, ct, eh);
   const [cCode, eCode] = [COUNTRY_CODE.test(c), COUNTRY_CODE.test(e)];
   if (cCode && eCode) return c.length === e.length && c !== e;
   if (cCode === eCode) return c !== e;
@@ -93,33 +98,38 @@ type ReadPhone = { kind: "read"; e164: string; origin: "au" | "overseas" | "loca
 
 /**
  * A non-blank phone number in the form the field map sends one in,
- * `phoneAu`'s E.164 (`+61…`), so both mean the same by "the same AU number".
- * Unreadable when `phoneAu` doesn't take it (13, 1300 and 1800 numbers among
- * them), or when an Australian number isn't 9 digits after `+61`: an
- * overseas local form (`020 …`) reads so. `phoneAu` maps such a number as it
- * is; only the comparison needs to know it can't be trusted.
+ * `phoneAu`'s E.164, so both mean the same by "the same number". The forms
+ * `phoneAu` doesn't settle are put right here, for comparing only (what's
+ * sent is unchanged): Australia's international dial-out prefixes (`0011`,
+ * and `0014`/`15`/`18`/`19` through a chosen carrier) and `0061`, and
+ * Australia's trunk 0 after `+61`, typed as `(0)` or not. Another country's
+ * `(0)` is kept, as Italy dials it. Unreadable when `phoneAu` doesn't take
+ * it (13, 1300 and 1800 numbers among them).
  */
 function readPhone(v: unknown): ReadPhone {
+  const written = comparable(v)
+    .replace(/^001[14589][\s-]*/, "+")
+    .replace(/^0061/, "+61")
+    .replace(/^\+61[\s-]*\(0\)/, "+61");
   let e164: string;
   try {
-    e164 = phoneAu(comparable(v));
+    e164 = phoneAu(written).replace(/^\+610(?=\d{9}$)/, "+61");
   } catch {
     return { kind: "unreadable" };
   }
-  const isAu = e164.startsWith("+61");
-  if (isAu && !/^\+61\d{9}$/.test(e164)) return { kind: "unreadable" };
-  const written = comparable(v).replace(/^(?:001[14589]|00)[\s-]*/, "+");
   const local = !written.startsWith("+") && !/^61/.test(written);
-  return { kind: "read", e164, origin: local ? "local" : isAu ? "au" : "overseas" };
+  return { kind: "read", e164, origin: local ? "local" : e164.startsWith("+61") ? "au" : "overseas" };
 }
 
 /**
- * Two numbers compare as `phoneAu` reads them. Left out, not listed, when
- * either can't be read, or when an overseas number meets a local form:
- * `phoneAu` reads `021 …` as Australian, but it may be the same NZ number.
+ * Two numbers compare as {@link readPhone} reads them. Left out, not listed,
+ * when either can't be read, or when an overseas number meets a local form:
+ * `phoneAu` reads `021 …` or `020 …` as Australian, but it may be the same
+ * NZ or UK number. An Australian number of the wrong length is compared as
+ * it is, so it's listed against a well-formed one.
  */
 const phoneDiffers: Comparer = (ct, eh) => {
-  const [ctPhone, ehPhone] = sides(readPhone, ct, eh);
+  const [ctPhone, ehPhone] = bothSides(readPhone, ct, eh);
   if (ctPhone.kind === "unreadable" || ehPhone.kind === "unreadable") return false;
   const origins = new Set([ctPhone.origin, ehPhone.origin]);
   if (origins.has("local") && origins.has("overseas")) return false;
@@ -154,7 +164,7 @@ const postcode: Normalise = (v) => (typeof v === "number" ? String(v).padStart(4
  * EH's. Two strings compare in full.
  */
 const accountNumberDiffers: Comparer = (ct, eh) => {
-  const [c, e] = sides(unseparated, ct, eh);
+  const [c, e] = bothSides(unseparated, ct, eh);
   if (typeof ct !== "number" && typeof eh !== "number") return c !== e;
   return c.replace(/^0+/, "") !== e.replace(/^0+/, "");
 };
@@ -171,7 +181,7 @@ const accountNumberDiffers: Comparer = (ct, eh) => {
  * EH's list holds.
  */
 const FIELD_COMPARERS: ReadonlyArray<readonly [field: RegExp, comparer: Comparer]> = [
-  [/^(residential|postal)Country$/, countryDiffers],
+  [/^(residential|postal|workingHolidayVisa)Country$/, countryDiffers],
   [/^(mobile|home|work)Phone$|^emergencyContact\d_(Alternate)?ContactNumber$/, phoneDiffers],
   [/^(residential|postal)PostCode$/, comparerFor(postcode)],
   [/^employmentType$/, comparerFor(unspaced)],
@@ -180,11 +190,11 @@ const FIELD_COMPARERS: ReadonlyArray<readonly [field: RegExp, comparer: Comparer
   [/^superFund\d_ProductCode$|^taxFileNumber$|ABN$/, comparerFor(unseparated)],
 ];
 
-function differs(field: string, ct: unknown, eh: unknown): boolean {
+function detailDiffers(field: string, ct: unknown, eh: unknown): boolean {
   // An object or array has no text form to compare: left out, not listed.
   if ((typeof ct === "object" && ct !== null) || (typeof eh === "object" && eh !== null)) return false;
   // A blank against a value is a difference whatever the field: one side has none.
-  const [c, e] = sides(comparable, ct, eh);
+  const [c, e] = bothSides(comparable, ct, eh);
   if (c === "" || e === "") return c !== e;
   const comparer = FIELD_COMPARERS.find(([pattern]) => pattern.test(field))?.[1] ?? plainDiffers;
   return comparer(ct, eh);
@@ -199,7 +209,7 @@ export function differingDetails(
   for (const [unit, values] of Object.entries(unitsOf(payload, map))) {
     if (unit === UNIT.payRun) continue;
     // A field EH's list doesn't hold can't be compared: not asked about.
-    const differing = Object.keys(values).filter((f) => f in ehRecord && differs(f, values[f], ehRecord[f]));
+    const differing = Object.keys(values).filter((f) => f in ehRecord && detailDiffers(f, values[f], ehRecord[f]));
     if (differing.length === 0) continue;
     out.push({ unit, label: groupLabel(unit) ?? fieldLabel(unit), fields: differing.map(fieldLabel) });
   }
