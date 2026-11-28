@@ -108,6 +108,32 @@ describe("phoneAu", () => {
     expect(phoneAu("+61 411 687 336")).toBe("+61411687336");
     expect(phoneAu("(03) 9123 4567")).toBe("+61391234567");
   });
+  it("drops Australia's trunk 0 after +61, typed as (0) or not (#235)", () => {
+    expect(phoneAu("+61 (0)412 345 678")).toBe("+61412345678");
+    expect(phoneAu("+61 0412 345 678")).toBe("+61412345678");
+    expect(phoneAu("+61(0)3 9123 4567")).toBe("+61391234567");
+  });
+  it("reads Australia's international dial-out prefixes as + (#235)", () => {
+    expect(phoneAu("0011 44 20 7946 0000")).toBe("+442079460000");
+    expect(phoneAu("0014 64 21 123 4567")).toBe("+64211234567");
+    expect(phoneAu("0015-1-415-555-0100")).toBe("+14155550100");
+    expect(phoneAu("0018 44 20 7946 0000")).toBe("+442079460000");
+    expect(phoneAu("001944 20 7946 0000")).toBe("+442079460000");
+  });
+  it("reads a dial-out prefix only as written, not merged across a space (#235)", () => {
+    expect(() => phoneAu("001 44 20 7946 0000")).toThrow(TransformError);
+    expect(() => phoneAu("00 44 20 7946 0000")).toThrow(TransformError);
+    expect(phoneAu("(0011) 44 20 7946 0000")).toBe("+442079460000");
+  });
+  it("reads 0061 as +61, spaced or not, trunk 0 or not (#235)", () => {
+    expect(phoneAu("0061 412 345 678")).toBe("+61412345678");
+    expect(phoneAu("0061412345678")).toBe("+61412345678");
+    expect(phoneAu("00 61 (0)412 345 678")).toBe("+61412345678");
+  });
+  it("reads Australia's code typed in brackets (#235)", () => {
+    expect(phoneAu("(+61) 412 345 678")).toBe("+61412345678");
+    expect(phoneAu("(61) 0412 345 678")).toBe("+61412345678");
+  });
   it("keeps a (0) that another country dials, as Italy does", () => {
     expect(phoneAu("+39 (0)6 1234 5678")).toBe("+390612345678");
   });

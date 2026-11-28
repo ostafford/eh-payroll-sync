@@ -131,16 +131,54 @@ export function locationField(v: unknown, part: "full" | "streetLine"): string {
 }
 
 export function phoneAu(v: unknown): string {
+  return readPhoneAu(v).e164;
+}
+
+/**
+ * A phone number as {@link phoneAu} reads it, and whether a country was
+ * written (`+`, `61`, or a dial-out prefix) or not (`local`, read as
+ * Australian). The link stage's compare needs the second: `021 …` read as
+ * Australian may be the same number as an overseas one.
+ */
+export function readPhoneAu(v: unknown): { e164: string; local: boolean } {
   const raw = asString(v).trim();
-  const hasPlus = raw.startsWith("+");
-  const stripped = raw.replace(/[^\d]/g, "");
+  const allDigits = raw.replace(/[^\d]/g, "");
+  const prefix = dialOutPrefix(raw);
+  const hasPlus = raw.startsWith("+") || prefix > 0;
+  const stripped = allDigits.slice(prefix);
   if (stripped.length < 6) {
     throw new TransformError(`"${raw}" does not look like a phone number`);
   }
-  if (hasPlus) return `+${stripped}`;
-  if (stripped.startsWith("61")) return `+${stripped}`;
-  if (stripped.startsWith("0")) return `+61${stripped.slice(1)}`;
+  if (!hasPlus && stripped.startsWith("00")) {
+    // No Australian number starts 00, so it's a dial-out prefix mistyped
+    // (`001 44 …`) or another country's: which number it means is a guess.
+    throw new TransformError(`"${raw}" starts 00 but not with Australia's dial-out prefix (0011) or 0061`);
+  }
+  if (hasPlus || stripped.startsWith("61")) return { e164: withoutAuTrunkZero(`+${stripped}`), local: false };
+  if (stripped.startsWith("0")) return { e164: `+61${stripped.slice(1)}`, local: true };
   throw new TransformError(`"${raw}" is not a recognisable Australian or international number`);
+}
+
+/**
+ * How many leading digits are a dial-out prefix that means what a typed +
+ * does: Australia's 0011 (and 0014/15/18/19 through a chosen carrier), or the
+ * 00 of 0061 (00 is other countries' prefix, so only before Australia's
+ * code). Read as written, so `001 44 …` isn't taken as 0014 with a space
+ * moved. Brackets around it are allowed (`(0011) 44 …`, `00 (61) …`).
+ */
+function dialOutPrefix(raw: string): number {
+  if (/^\(?001[14589]/.test(raw)) return 4;
+  if (/^\(?00[\s-]*\(?61/.test(raw)) return 2;
+  return 0;
+}
+
+/**
+ * Australia's trunk 0 isn't dialled after +61 (`+61 (0)4…`, `+61 04…`).
+ * Digits are counted, not spaces: a 0 then nine digits. Only Australia's:
+ * another country's (0) stays, as Italy dials it.
+ */
+function withoutAuTrunkZero(e164: string): string {
+  return e164.replace(/^\+610(?=\d{9}$)/, "+61");
 }
 
 export function mapEnum(value: string, table: Readonly<Record<string, string>>): string {
