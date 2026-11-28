@@ -41,6 +41,9 @@ type Normalise = (v: unknown) => string;
 /** Whether a mapped Connecteam value and EH's differ; `false` too when the two can't be compared reliably. */
 type Differs = (ct: unknown, eh: unknown) => boolean;
 
+/** A blank against a value is a difference whatever the field: EH, or Connecteam, has none. */
+const eitherBlank = (a: string, b: string) => a === "" || b === "";
+
 const differsAfter =
   (normalise: Normalise): Differs =>
   (ct, eh) =>
@@ -65,37 +68,51 @@ const COUNTRY_CODE = /^[a-z]{2,3}$/;
 const countryDiffers: Differs = (ct, eh) => {
   const named = (v: unknown) => COUNTRY_NAME[comparable(v)] ?? comparable(v);
   const [a, b] = [named(ct), named(eh)];
-  if (a === "" || b === "" || COUNTRY_CODE.test(a) === COUNTRY_CODE.test(b)) return a !== b;
+  if (eitherBlank(a, b) || COUNTRY_CODE.test(a) === COUNTRY_CODE.test(b)) return a !== b;
   return a === AUSTRALIA || b === AUSTRALIA;
 };
+
+/** A phone number read as `phoneAu` reads it, and whether it was written in a local form, with no country. */
+interface ReadPhone {
+  e164: string;
+  local: boolean;
+}
 
 /**
  * A phone number in the form the field map sends one in, `phoneAu`'s E.164
  * (`+61…`), so both mean the same by "the same AU number". EH's list holds
  * that, `61…`, a local form, or an international one dialled from Australia
- * (`0011…`), spaced or not. `null` when it can't be read: not something
- * `phoneAu` takes, or an Australian number that isn't 9 digits after `+61`
- * (an overseas number in its local form, `020 …`, reads as one).
+ * (`0011…`), spaced or not. `""` when blank; `null` when it can't be read:
+ * not something `phoneAu` takes (13, 1300 and 1800 numbers among them), or
+ * an Australian number that isn't 9 digits after `+61`.
  */
-function phone(v: unknown): string | null {
+function readPhone(v: unknown): ReadPhone | "" | null {
   const s = comparable(v);
   if (s === "") return "";
-  const dialled = s.replace(/^0011\s*/, "+").replace(/^00\s*/, "+").replace(/^\(0\)\s*/, "0");
+  const dialled = s.replace(/^0011\s*/, "+").replace(/^00\s*/, "+");
   let e164: string;
   try {
     e164 = phoneAu(dialled);
   } catch {
     return null;
   }
-  // EH may still hold "+610…": one sent before phoneAu dropped a "(0)", or typed so.
-  e164 = e164.replace(/^\+610(?=\d{9}$)/, "+61");
-  return e164.startsWith("+61") && !/^\+61\d{9}$/.test(e164) ? null : e164;
+  if (e164.startsWith("+61") && !/^\+61\d{9}$/.test(e164)) return null;
+  return { e164, local: !dialled.startsWith("+") && !/^61/.test(dialled) };
 }
 
-/** Two numbers that can't both be read can't be compared: left out, not listed. A number against none is listed. */
+/**
+ * Two numbers compare as `phoneAu` reads them. Left out, not listed, when
+ * either can't be read, or when an overseas number meets a local form:
+ * `phoneAu` reads `021 …` as Australian, but it may be the same NZ number.
+ * A number against none is listed.
+ */
 const phoneDiffers: Differs = (ct, eh) => {
-  const [a, b] = [phone(ct), phone(eh)];
-  return a !== null && b !== null && a !== b;
+  const [a, b] = [readPhone(ct), readPhone(eh)];
+  if (a === null || b === null) return false;
+  if (a === "" || b === "") return a !== b;
+  const overseas = (p: ReadPhone) => !p.local && !p.e164.startsWith("+61");
+  if ((a.local && overseas(b)) || (b.local && overseas(a))) return false;
+  return a.e164 !== b.e164;
 };
 
 /** Spaces aside: Connecteam's `FullTime` is EH's `Full Time`. */
@@ -119,11 +136,19 @@ const bsb: Normalise = (v) => {
  */
 const accountNumberDiffers: Differs = (ct, eh) => {
   const [a, b] = [unseparated(ct), unseparated(eh)];
-  if (a === "" || b === "" || (typeof ct !== "number" && typeof eh !== "number")) return a !== b;
+  if (eitherBlank(a, b) || (typeof ct !== "number" && typeof eh !== "number")) return a !== b;
   return a.replace(/^0+/, "") !== b.replace(/^0+/, "");
 };
 
-/** The fields EH returns in its own form; any other is compared with {@link comparable}. */
+/**
+ * The fields EH returns in its own form; any other is compared with
+ * {@link comparable}. Checked on the demo and left to it, as they match
+ * once case, spacing and a date's time are set aside: names, email, gender,
+ * dates, job title, street address, suburb, state, postcode, emergency
+ * contact name and relationship, account name, fund name and member
+ * number. The TFN wasn't compared on the demo; it's mapped to bare digits,
+ * the 9-digit form EH's list holds.
+ */
 const DIFFERS: Record<string, Differs> = {
   residentialCountry: countryDiffers,
   mobilePhone: phoneDiffers,

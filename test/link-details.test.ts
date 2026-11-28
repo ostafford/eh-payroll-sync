@@ -73,7 +73,7 @@ describe("differingDetails: what the link stage asks Keep EH's / Use Connecteam'
  * holds it (taken from `ehRecord`); each test puts one into the form
  * Connecteam gives. Suburb is in Connecteam's case, as the demo's are.
  */
-const ehFormPack: Record<string, unknown> = {
+const mappedInEhForms: Record<string, unknown> = {
   ...Object.fromEntries(
     [
       "firstName", "surname", "emailAddress", "mobilePhone",
@@ -89,8 +89,10 @@ const ehFormPack: Record<string, unknown> = {
 
 describe("differingDetails against EH's real formats (#232)", () => {
   const detailsAgainst = (pack: Record<string, unknown>, eh: Record<string, unknown> = {}) =>
-    differingDetails({ ...ehFormPack, ...pack }, { ...ehRecord, ...eh }, map);
+    differingDetails({ ...mappedInEhForms, ...pack }, { ...ehRecord, ...eh }, map);
   const country = [{ unit: "residentialAddress", label: "Residential address", fields: ["Country"] }];
+  const mobile = [{ unit: "mobilePhone", label: "Mobile", fields: ["Mobile"] }];
+  const bankAccount = (...fields: string[]) => [{ unit: "bankAccount1", label: "Bank account", fields }];
 
   it("doesn't list a country sent as its code when EH holds its name", () => {
     expect(detailsAgainst({ residentialCountry: "AU" })).toEqual([]);
@@ -124,6 +126,24 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "61400000001" })).toEqual([]);
   });
 
+  it("doesn't list a number EH holds as +610…, with the trunk 0 kept", () => {
+    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "+610400000001" })).toEqual([]);
+  });
+
+  it("doesn't list a home phone that differs only in format", () => {
+    expect(detailsAgainst({ homePhone: "+61390000000" }, { homePhone: "(03) 9000 0000" })).toEqual([]);
+  });
+
+  it("leaves out an overseas number against a local form, which has no country to compare", () => {
+    expect(detailsAgainst({ mobilePhone: "+64 21 123 4567" }, { mobilePhone: "021 123 4567" })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+64 21 123 4567" }, { mobilePhone: "+61 400 000 001" })).toEqual(mobile);
+  });
+
+  it("leaves out 13, 1300 and 1800 numbers, which phoneAu can't read", () => {
+    expect(detailsAgainst({ mobilePhone: "1300 000 000" }, { mobilePhone: "1800 000 000" })).toEqual([]);
+    expect(detailsAgainst({ homePhone: "13 00 00" }, { homePhone: "131 000" })).toEqual([]);
+  });
+
   it("doesn't list a number typed with (0), on either side", () => {
     expect(detailsAgainst({ emergencyContact1_ContactNumber: "+61 (0)400 000 002" })).toEqual([]);
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "+61 (0)400 000 001" })).toEqual([]);
@@ -140,13 +160,7 @@ describe("differingDetails against EH's real formats (#232)", () => {
   });
 
   it("still lists a number where EH holds none", () => {
-    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: null })).toEqual([
-      { unit: "mobilePhone", label: "Mobile", fields: ["Mobile"] },
-    ]);
-  });
-
-  it("doesn't list a mobile typed with (0) in Connecteam, as the field map sends it", () => {
-    expect(detailsAgainst({ mobilePhone: phoneAu("+61 (0)400 000 001") })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: null })).toEqual(mobile);
   });
 
   it("doesn't list an overseas number that differs only in spacing", () => {
@@ -155,12 +169,8 @@ describe("differingDetails against EH's real formats (#232)", () => {
 
   it("doesn't list an account number EH returns as a number", () => {
     expect(detailsAgainst({ bankAccount1_AccountNumber: "00123456" }, { bankAccount1_AccountNumber: 123456 })).toEqual([]);
-    expect(detailsAgainst({ bankAccount1_AccountNumber: "00123457" }, { bankAccount1_AccountNumber: 123456 })).toEqual([
-      { unit: "bankAccount1", label: "Bank account", fields: ["Account number"] },
-    ]);
-    expect(detailsAgainst({ bankAccount1_AccountNumber: null }, { bankAccount1_AccountNumber: 0 })).toEqual([
-      { unit: "bankAccount1", label: "Bank account", fields: ["Account number"] },
-    ]);
+    expect(detailsAgainst({ bankAccount1_AccountNumber: "00123457" }, { bankAccount1_AccountNumber: 123456 })).toEqual(bankAccount("Account number"));
+    expect(detailsAgainst({ bankAccount1_AccountNumber: null }, { bankAccount1_AccountNumber: 0 })).toEqual(bankAccount("Account number"));
   });
 
   it("doesn't list a BSB that lost its leading zeros, as a number or as text", () => {
@@ -168,7 +178,7 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ bankAccount1_BSB: "012-345" }, { bankAccount1_BSB: "12345" })).toEqual([]);
   });
 
-  it("leaves out a value that isn't text, an object or a list, on either side", () => {
+  it("leaves out a value that isn't text (an object or a list), on either side", () => {
     expect(detailsAgainst({ jobTitle: { name: "Barista" } })).toEqual([]);
     expect(detailsAgainst({ jobTitle: ["Barista"] })).toEqual([]);
     expect(detailsAgainst({}, { jobTitle: { name: "Chef" } })).toEqual([]);
@@ -199,7 +209,7 @@ describe("differingDetails against EH's real formats (#232)", () => {
   });
 
   it("still lists a BSB that is different", () => {
-    expect(detailsAgainst({ bankAccount1_BSB: "000-002" })).toEqual([{ unit: "bankAccount1", label: "Bank account", fields: ["BSB"] }]);
+    expect(detailsAgainst({ bankAccount1_BSB: "000-002" })).toEqual(bankAccount("BSB"));
   });
 
   it("doesn't list an email or street address that differs only in case", () => {
@@ -226,6 +236,6 @@ describe("differingDetails against EH's real formats (#232)", () => {
   });
 
   it("still lists a phone number that is different", () => {
-    expect(detailsAgainst({ mobilePhone: "+61400000009" })).toEqual([{ unit: "mobilePhone", label: "Mobile", fields: ["Mobile"] }]);
+    expect(detailsAgainst({ mobilePhone: "+61400000009" })).toEqual(mobile);
   });
 });
