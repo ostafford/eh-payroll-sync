@@ -105,7 +105,8 @@ type ReadPhone = { kind: "read"; e164: string; origin: "au" | "overseas" | "loca
  * unreadable by `phoneAu`, so it's left out rather than compared with its
  * trunk 0 kept (`(+64) 021 …`). Another country's `(0)` is kept, as Italy
  * dials it. Unreadable when `phoneAu` doesn't take it (13, 1300 and 1800
- * numbers, and a `00…` number that isn't a dial-out prefix, among them).
+ * numbers, a `00…` number that isn't a dial-out prefix, and any other `+0…`
+ * or `0011 0…`, as no country code starts with 0 (#238), among them).
  */
 function readPhone(v: unknown): ReadPhone {
   let read: PhoneReading;
