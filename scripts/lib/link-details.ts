@@ -16,7 +16,7 @@
 import { UNIT, unitsOf } from "../../src/sync/baseline.js";
 import { fieldLabel, groupLabel } from "../../src/sync/labels.js";
 import type { FieldMap } from "../../src/mapping/schema.js";
-import { phoneAu } from "../../src/mapping/transforms.js";
+import { readPhoneAu, type PhoneReading } from "../../src/mapping/transforms.js";
 
 export interface DifferingDetail {
   /** The unit the choice is for: a group's name, or the EH field's own. */
@@ -91,38 +91,31 @@ const countryDiffers: Comparer = (ct, eh) => {
 
 /**
  * A phone number as `phoneAu` reads it, and where its country came from:
- * written as `+61` / `61` (`au`), as another `+` code (`overseas`), or not
+ * written as `+61` / `61` or Australia's dial-out prefix before it (`au`), as
+ * another `+` code or a dial-out prefix before one (`overseas`), or not
  * written at all (`local`, read as Australian).
  */
 type ReadPhone = { kind: "read"; e164: string; origin: "au" | "overseas" | "local" } | { kind: "unreadable" };
 
 /**
- * A non-blank phone number in the form the field map sends one in,
- * `phoneAu`'s E.164, so both mean the same by "the same number". The forms
- * `phoneAu` doesn't settle are put right here, for comparing only (what's
- * sent is unchanged): Australia's international dial-out prefixes (`0011`,
- * and `0014`/`15`/`18`/`19` through a chosen carrier) and `0061` (spaced or
- * not), Australia's code typed in brackets (`(+61)`, `(61)`), and its trunk
- * 0 after `+61`, typed as `(0)` or not. Another country's code in brackets
- * is left as typed: `phoneAu` can't read it, so it's left out rather than
- * compared with its trunk 0 kept (`(+64) 021 …`). Another country's
- * `(0)` is kept, as Italy dials it. Unreadable when `phoneAu` doesn't take
- * it (13, 1300 and 1800 numbers among them).
+ * A non-blank phone number exactly as the field map sends one,
+ * `phoneAu`'s E.164, so both mean the same by "the same number"
+ * (dial-out prefixes, `0061`, Australia's code in brackets and its trunk 0
+ * are all read there, #235). Another country's code in brackets is left
+ * unreadable by `phoneAu`, so it's left out rather than compared with its
+ * trunk 0 kept (`(+64) 021 …`). Another country's `(0)` is kept, as Italy
+ * dials it. Unreadable when `phoneAu` doesn't take it (13, 1300 and 1800
+ * numbers, and a `00…` number that isn't a dial-out prefix, among them).
  */
 function readPhone(v: unknown): ReadPhone {
-  const written = comparable(v)
-    .replace(/^001[14589][\s-]*/, "+")
-    .replace(/^00[\s-]*61/, "+61")
-    .replace(/^\(\+?61\)/, "+61")
-    .replace(/^\+61[\s-]*\(0\)/, "+61");
-  let e164: string;
+  let read: PhoneReading;
   try {
-    e164 = phoneAu(written).replace(/^\+610(?=\d{9}$)/, "+61");
+    read = readPhoneAu(comparable(v));
   } catch {
     return { kind: "unreadable" };
   }
-  const local = !written.startsWith("+") && !/^61/.test(written);
-  return { kind: "read", e164, origin: local ? "local" : e164.startsWith("+61") ? "au" : "overseas" };
+  const origin = read.local ? "local" : read.e164.startsWith("+61") ? "au" : "overseas";
+  return { kind: "read", e164: read.e164, origin };
 }
 
 /**

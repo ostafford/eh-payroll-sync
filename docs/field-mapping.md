@@ -37,7 +37,7 @@ fills them in but nothing reads them.
 | Birthday | 25145118 | `dateOfBirth` | DD/MM/YYYY → ISO |
 | Gender | 25145119 | `gender` | Male/Female → EH enum; Other → `Indeterminate`, which EH stores as **blank** (see below) |
 | `email` (top-level) | — | `emailAddress` | |
-| `phoneNumber` (top-level) | — | `mobilePhone` | already E.164 (`+61…`) |
+| `phoneNumber` (top-level) | — | `mobilePhone` | `phoneAu` → E.164: a local `0…` gets `+61`; Australia's code in brackets (`(+61)`, `(61)`) reads as `+61`; its trunk 0 after `+61` (`(0)` or not) is dropped; `0011` / `0014`/`15`/`18`/`19` and `0061` read as `+` (#235). Another country's `(0)` is kept (Italy dials it). A 13/1300/1800 number, or a `00…` that isn't one of those prefixes, is a mapping issue, not sent |
 | Street Address | 25145120 | `residentialStreetAddress` | `.address` up to first comma; fragile — candidate for a dedicated "line 1" field |
 | Suburb | 42920715 | `residentialSuburb` | |
 | State | 42920838 | `residentialState` | direct; INTERNATIONAL → hold + correction message |

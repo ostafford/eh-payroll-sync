@@ -196,6 +196,12 @@ describe("differingDetails against EH's real formats (#232)", () => {
     expect(detailsAgainst({ mobilePhone: "+61400000001" }, { mobilePhone: "(0)400 000 001" })).toEqual([]);
   });
 
+  it("reads a dial-out prefix in brackets as overseas, so a different overseas number is listed (#235)", () => {
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "(0011) 44 20 7946 0000" })).toEqual([]);
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0009" }, { mobilePhone: "(0011) 44 20 7946 0000" })).toEqual(mobile);
+    expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "00 (61) 400 000 001" })).toEqual(mobile);
+  });
+
   it("doesn't list a number EH holds with Australia's 0011 international prefix", () => {
     expect(detailsAgainst({ mobilePhone: "+44 20 7946 0000" }, { mobilePhone: "0011 44 20 7946 0000" })).toEqual([]);
   });
